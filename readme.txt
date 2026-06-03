@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 6.6
 Requires PHP: 8.1
-Stable tag: 0.1.0
+Stable tag: 0.1.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -69,6 +69,11 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 0.1.1 =
+
+* Remote command queue: hourly draining of pending manager commands (opt-in `remote_commands_enabled`).
+* Shared `CommandExecutor` between the REST endpoint and the cron poller.
 
 = 0.1.0 =
 
