@@ -1,0 +1,66 @@
+name: Auto-tag
+
+# Détecte les commits dont le sujet commence par `version: x.y.z`
+# (convention française du monorepo G2RD WP Manager) et crée le tag git
+# correspondant qui déclenche release.yml.
+#
+# Cf docs/quality.md du monorepo manager pour la convention complète.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    name: Create tag from version commit
+    runs-on: ubuntu-latest
+    if: startsWith(github.event.head_commit.message, 'version:')
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Extract version
+        id: extract
+        run: |
+          subject=$(git log -1 --pretty=%s)
+          version=$(echo "$subject" | grep -oP '^version:\s*\K[0-9]+\.[0-9]+\.[0-9]+')
+          if [ -z "$version" ]; then
+            echo "::error::No version x.y.z found in commit subject: $subject"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Plugin Header matches
+        run: |
+          header_version=$(grep -m1 -oP 'Version:\s*\K[0-9]+\.[0-9]+\.[0-9]+' g2rd-connector.php)
+          if [ "$header_version" != "${{ steps.extract.outputs.version }}" ]; then
+            echo "::error::Header ($header_version) != commit version (${{ steps.extract.outputs.version }})"
+            exit 1
+          fi
+
+      - name: Verify readme.txt Stable tag matches
+        run: |
+          stable=$(grep -m1 -oP 'Stable tag:\s*\K[0-9]+\.[0-9]+\.[0-9]+' readme.txt)
+          if [ "$stable" != "${{ steps.extract.outputs.version }}" ]; then
+            echo "::error::readme.txt Stable tag ($stable) != commit version (${{ steps.extract.outputs.version }})"
+            exit 1
+          fi
+
+      - name: Verify tag does not exist yet
+        run: |
+          if git rev-parse "v${{ steps.extract.outputs.version }}" >/dev/null 2>&1; then
+            echo "::error::Tag v${{ steps.extract.outputs.version }} already exists"
+            exit 1
+          fi
+
+      - name: Create and push tag
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git tag -a "v${{ steps.extract.outputs.version }}" -m "Release v${{ steps.extract.outputs.version }}"
+          git push origin "v${{ steps.extract.outputs.version }}"

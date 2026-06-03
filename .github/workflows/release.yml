@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-zip:
+    name: Build wp.org-compatible ZIP
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Plugin Header version matches tag
+        run: |
+          header_version=$(grep -m1 -oP 'Version:\s*\K[0-9]+\.[0-9]+\.[0-9]+' g2rd-connector.php)
+          tag_version="${{ steps.version.outputs.version }}"
+          if [ "$header_version" != "$tag_version" ]; then
+            echo "::error::Plugin header version ($header_version) != tag version ($tag_version)"
+            exit 1
+          fi
+
+      - name: Setup PHP 8.4
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          tools: composer:v2
+          coverage: none
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install PHP deps (no-dev)
+        run: composer install --no-interaction --no-progress --prefer-dist --no-dev --optimize-autoloader
+
+      - name: Install + build JS
+        run: |
+          npm ci
+          npm run build
+
+      - name: Stage plugin folder
+        run: |
+          mkdir -p staging/g2rd-connector
+          rsync -av \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='node_modules' \
+            --exclude='vendor/bin' \
+            --exclude='vendor/squizlabs' \
+            --exclude='vendor/phpstan' \
+            --exclude='vendor/wp-coding-standards' \
+            --exclude='vendor/szepeviktor' \
+            --exclude='vendor/dealerdirect' \
+            --exclude='.phpcs.cache' \
+            --exclude='.phpstan.cache' \
+            --exclude='.phpunit.cache' \
+            --exclude='staging' \
+            --exclude='*.zip' \
+            --exclude='build-zip.ps1' \
+            ./ staging/g2rd-connector/
+
+      - name: Generate language template (.pot)
+        run: |
+          # WP-CLI install
+          curl -sSL https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -o wp-cli.phar
+          chmod +x wp-cli.phar
+          mkdir -p staging/g2rd-connector/languages
+          ./wp-cli.phar i18n make-pot staging/g2rd-connector staging/g2rd-connector/languages/g2rd-connector.pot --slug=g2rd-connector --allow-root || echo "::warning::pot generation skipped"
+
+      - name: Generate SHA-256 checksums
+        run: |
+          cd staging
+          zip -r g2rd-connector-${{ steps.version.outputs.version }}.zip g2rd-connector
+          sha256sum g2rd-connector-${{ steps.version.outputs.version }}.zip > g2rd-connector-${{ steps.version.outputs.version }}.zip.sha256
+
+      - name: Generate SBOM (CycloneDX)
+        run: |
+          composer global require cyclonedx/cyclonedx-php-composer || true
+          composer cyclonedx:make-sbom --output-format=JSON --output-file=staging/sbom.json || echo "::warning::SBOM skipped"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: 'v${{ steps.version.outputs.version }}'
+          body: |
+            ## G2RD Connector v${{ steps.version.outputs.version }}
+
+            Plugin WordPress qui relie un site au tableau de bord [G2RD WP Manager](https://wp-manager.g2rd.fr).
+
+            ### Installation
+
+            1. Télécharger `g2rd-connector-${{ steps.version.outputs.version }}.zip` ci-dessous
+            2. Plugins → Add new → Upload Plugin → activer
+            3. Réglages → G2RD Connector → URL manager + token d'invitation
+
+            ### Checksums
+
+            Cf `g2rd-connector-${{ steps.version.outputs.version }}.zip.sha256` ci-dessous.
+
+            ### Changelog
+
+            Voir [`readme.txt`](https://github.com/SebG2RD/g2rd-connector/blob/main/readme.txt#changelog) section Changelog.
+          files: |
+            staging/g2rd-connector-${{ steps.version.outputs.version }}.zip
+            staging/g2rd-connector-${{ steps.version.outputs.version }}.zip.sha256
+            staging/sbom.json
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
