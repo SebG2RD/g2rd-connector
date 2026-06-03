@@ -18,30 +18,30 @@ use WP_REST_Request;
 
 final class Auth {
 
-    /**
-     * Permission callback à brancher sur tous les endpoints sécurisés.
-     *
-     * @return true|WP_Error
-     */
-    public static function require_site_token( WP_REST_Request $request ): bool|WP_Error {
-        $header = (string) $request->get_header( 'authorization' );
-        if ( '' === $header || stripos( $header, 'Bearer ' ) !== 0 ) {
-            return new WP_Error(
-                'g2rd_connector_missing_token',
-                __( 'Authorization Bearer token requis.', 'g2rd-connector' ),
-                [ 'status' => 401 ]
-            );
-        }
+	/**
+	 * Permission callback à brancher sur tous les endpoints sécurisés.
+	 *
+	 * @return true|WP_Error
+	 */
+	public static function require_site_token( WP_REST_Request $request ): bool|WP_Error {
+		$header = (string) $request->get_header( 'authorization' );
+		if ( '' === $header || stripos( $header, 'Bearer ' ) !== 0 ) {
+			return new WP_Error(
+				'g2rd_connector_missing_token',
+				__( 'Authorization Bearer token requis.', 'g2rd-connector' ),
+				[ 'status' => 401 ]
+			);
+		}
 
-        $token = trim( substr( $header, 7 ) );
-        if ( ! Settings::token_matches( $token ) ) {
-            return new WP_Error(
-                'g2rd_connector_invalid_token',
-                __( 'Token site invalide.', 'g2rd-connector' ),
-                [ 'status' => 403 ]
-            );
-        }
+		$token = trim( substr( $header, 7 ) );
+		if ( ! Settings::token_matches( $token ) ) {
+			return new WP_Error(
+				'g2rd_connector_invalid_token',
+				__( 'Token site invalide.', 'g2rd-connector' ),
+				[ 'status' => 403 ]
+			);
+		}
 
-        return true;
-    }
+		return true;
+	}
 }

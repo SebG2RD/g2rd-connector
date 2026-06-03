@@ -1,0 +1,118 @@
+name: PHPCS WordPress + Security Audit
+
+# Standards WordPress + SAST OWASP + PHPCompatibility.
+# Adapté du workflow homonyme du G2RD-theme : outillage installé en global pour
+# rester indépendant du composer.json du plugin, rapports non bloquants annotés
+# dans la PR via cs2pr.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  phpcs:
+    name: PHPCS WordPress Standards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          ini-values: memory_limit=1G
+          coverage: none
+          tools: cs2pr, composer
+
+      - name: Autoriser le plugin Composer PHPCS
+        run: composer global config allow-plugins.dealerdirect/phpcodesniffer-composer-installer true
+
+      - name: Installer PHPCS + WordPress Standards + Security Audit
+        run: |
+          composer global require --dev \
+            squizlabs/php_codesniffer \
+            wp-coding-standards/wpcs \
+            phpcompatibility/phpcompatibility-wp \
+            phpcsstandards/phpcsextra \
+            pheromone/phpcs-security-audit \
+            dealerdirect/phpcodesniffer-composer-installer
+
+      - name: Vérifier les standards installés
+        run: composer global exec -- phpcs -i
+
+      # WordPress Coding Standards — utilise phpcs.xml.dist du projet.
+      - name: PHPCS WordPress
+        id: phpcs-wp
+        continue-on-error: true
+        run: |
+          composer global exec -- phpcs \
+            --standard=phpcs.xml.dist \
+            --report-full \
+            --report-checkstyle=./phpcs-wp-report.xml \
+            --colors -p
+
+      - name: Annotations WordPress
+        if: ${{ always() && steps.phpcs-wp.outcome == 'failure' }}
+        run: cs2pr ./phpcs-wp-report.xml
+
+      # Security Audit OWASP (SAST) — ruleset phpcs-security.xml du projet.
+      - name: PHPCS Security Audit
+        id: phpcs-sec
+        continue-on-error: true
+        run: |
+          composer global exec -- phpcs \
+            --standard=phpcs-security.xml \
+            --extensions=php \
+            --ignore=vendor/*,node_modules/*,assets/admin/build/*,tools/* \
+            --report-full \
+            --report-checkstyle=./phpcs-security-report.xml \
+            --runtime-set ParanoiaMode 0 \
+            --colors -p .
+
+      - name: Annotations Security
+        if: ${{ always() && steps.phpcs-sec.outcome == 'failure' }}
+        run: cs2pr ./phpcs-security-report.xml
+
+      # PHPCompatibility (PHP 8.1+ — cf. Requires PHP du plugin).
+      - name: PHPCompatibility
+        id: phpcompat
+        continue-on-error: true
+        run: |
+          composer global exec -- phpcs \
+            --standard=PHPCompatibilityWP \
+            --extensions=php \
+            --ignore=vendor/*,node_modules/*,assets/admin/build/* \
+            --runtime-set testVersion 8.1- \
+            --report-full \
+            --report-checkstyle=./phpcompat-report.xml \
+            --colors -p \
+            g2rd-connector.php includes uninstall.php
+
+      - name: Annotations PHPCompatibility
+        if: ${{ always() && steps.phpcompat.outcome == 'failure' }}
+        run: cs2pr ./phpcompat-report.xml
+
+      - name: Résumé des résultats
+        if: always()
+        run: |
+          echo "## Résultats PHPCS" >> "$GITHUB_STEP_SUMMARY"
+          echo "- WordPress Standards : ${{ steps.phpcs-wp.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Security Audit : ${{ steps.phpcs-sec.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- PHPCompatibility : ${{ steps.phpcompat.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phpcs-reports
+          path: |
+            phpcs-wp-report.xml
+            phpcs-security-report.xml
+            phpcompat-report.xml
+          retention-days: 30

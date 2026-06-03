@@ -1,11 +1,14 @@
 name: Auto-tag
 
 # Détecte les commits dont le sujet commence par `version: x.y.z`
-# (convention française du monorepo G2RD WP Manager) et crée le tag git
-# correspondant qui déclenche release.yml.
+# (convention française du G2RD WP Manager, équivalent du `release:` EN) et crée
+# le tag git vX.Y.Z correspondant.
 #
-# Cf docs/quality.md du monorepo manager pour la convention complète.
-
+# IMPORTANT : le tag est poussé avec un PAT (secret GH_PAT) et NON le GITHUB_TOKEN
+# par défaut. Un tag poussé par le GITHUB_TOKEN ne re-déclenche aucun workflow
+# (garde-fou anti-récursion de GitHub) — release.yml ne partirait jamais.
+# Crée un PAT (scope `repo`/`contents:write`) et place-le dans
+# Settings → Secrets and variables → Actions → GH_PAT.
 on:
   push:
     branches: [main]
@@ -17,44 +20,34 @@ jobs:
   tag:
     name: Create tag from version commit
     runs-on: ubuntu-latest
+    # startsWith garantit que seul un commit dont le SUJET commence par `version:`
+    # déclenche le tag (pas un commit qui mentionne `version:` dans son corps).
     if: startsWith(github.event.head_commit.message, 'version:')
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GH_PAT }}
 
-      - name: Extract version
+      - name: Extract version from commit subject
         id: extract
         run: |
           subject=$(git log -1 --pretty=%s)
           version=$(echo "$subject" | grep -oP '^version:\s*\K[0-9]+\.[0-9]+\.[0-9]+')
           if [ -z "$version" ]; then
-            echo "::error::No version x.y.z found in commit subject: $subject"
+            echo "::error::Aucune version x.y.z trouvée dans le sujet du commit : $subject"
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Verify Plugin Header matches
-        run: |
-          header_version=$(grep -m1 -oP 'Version:\s*\K[0-9]+\.[0-9]+\.[0-9]+' g2rd-connector.php)
-          if [ "$header_version" != "${{ steps.extract.outputs.version }}" ]; then
-            echo "::error::Header ($header_version) != commit version (${{ steps.extract.outputs.version }})"
-            exit 1
-          fi
-
-      - name: Verify readme.txt Stable tag matches
-        run: |
-          stable=$(grep -m1 -oP 'Stable tag:\s*\K[0-9]+\.[0-9]+\.[0-9]+' readme.txt)
-          if [ "$stable" != "${{ steps.extract.outputs.version }}" ]; then
-            echo "::error::readme.txt Stable tag ($stable) != commit version (${{ steps.extract.outputs.version }})"
-            exit 1
-          fi
+      - name: Verify version alignment across all sources
+        run: bash tools/verify-release-version.sh "${{ steps.extract.outputs.version }}"
 
       - name: Verify tag does not exist yet
         run: |
           if git rev-parse "v${{ steps.extract.outputs.version }}" >/dev/null 2>&1; then
-            echo "::error::Tag v${{ steps.extract.outputs.version }} already exists"
+            echo "::error::Le tag v${{ steps.extract.outputs.version }} existe déjà. Bumpe la version avant un commit version:."
             exit 1
           fi
 

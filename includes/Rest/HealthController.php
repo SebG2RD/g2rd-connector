@@ -18,25 +18,28 @@ use WP_REST_Server;
 
 final class HealthController {
 
-    public function register(): void {
-        register_rest_route(
-            G2RD_CONNECTOR_REST_NS,
-            '/health',
-            [
-                'methods'             => WP_REST_Server::READABLE,
-                'callback'            => [ $this, 'handle' ],
-                'permission_callback' => '__return_true',
-            ]
-        );
-    }
+	public function register(): void {
+		register_rest_route(
+			G2RD_CONNECTOR_REST_NS,
+			'/health',
+			[
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => [ $this, 'handle' ],
+				'permission_callback' => '__return_true',
+			]
+		);
+	}
 
-    public function handle(): WP_REST_Response {
-        return new WP_REST_Response( [
-            'ok'                => true,
-            'connector_version' => G2RD_CONNECTOR_VERSION,
-            'enrolled'          => Settings::is_enrolled(),
-            'wp_version'        => (string) get_bloginfo( 'version' ),
-            'php_version'       => PHP_VERSION,
-        ], 200 );
-    }
+	public function handle(): WP_REST_Response {
+		return new WP_REST_Response(
+			[
+				'ok'                => true,
+				'connector_version' => G2RD_CONNECTOR_VERSION,
+				'enrolled'          => Settings::is_enrolled(),
+				'wp_version'        => (string) get_bloginfo( 'version' ),
+				'php_version'       => PHP_VERSION,
+			],
+			200
+		);
+	}
 }

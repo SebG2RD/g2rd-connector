@@ -17,29 +17,29 @@ use G2RD\Connector\Settings;
 
 final class HeartbeatJob {
 
-    public const HOOK = 'g2rd_connector_heartbeat';
+	public const HOOK = 'g2rd_connector_heartbeat';
 
-    public function register(): void {
-        add_action( self::HOOK, [ $this, 'run' ] );
-    }
+	public function register(): void {
+		add_action( self::HOOK, [ $this, 'run' ] );
+	}
 
-    public function run(): void {
-        if ( ! Settings::get( 'heartbeat_enabled' ) || ! Settings::is_enrolled() ) {
-            return;
-        }
-        ( new ManagerClient() )->heartbeat();
-    }
+	public function run(): void {
+		if ( ! Settings::get( 'heartbeat_enabled' ) || ! Settings::is_enrolled() ) {
+			return;
+		}
+		( new ManagerClient() )->heartbeat();
+	}
 
-    public static function schedule(): void {
-        if ( ! wp_next_scheduled( self::HOOK ) ) {
-            wp_schedule_event( time() + 60, 'hourly', self::HOOK );
-        }
-    }
+	public static function schedule(): void {
+		if ( ! wp_next_scheduled( self::HOOK ) ) {
+			wp_schedule_event( time() + 60, 'hourly', self::HOOK );
+		}
+	}
 
-    public static function unschedule(): void {
-        $timestamp = wp_next_scheduled( self::HOOK );
-        if ( $timestamp ) {
-            wp_unschedule_event( $timestamp, self::HOOK );
-        }
-    }
+	public static function unschedule(): void {
+		$timestamp = wp_next_scheduled( self::HOOK );
+		if ( $timestamp ) {
+			wp_unschedule_event( $timestamp, self::HOOK );
+		}
+	}
 }

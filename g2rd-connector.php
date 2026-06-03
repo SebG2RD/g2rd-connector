@@ -19,7 +19,7 @@
 declare(strict_types=1);
 
 if ( ! defined( 'ABSPATH' ) ) {
-    exit;
+	exit;
 }
 
 define( 'G2RD_CONNECTOR_VERSION', '0.1.0' );
@@ -33,6 +33,9 @@ require_once G2RD_CONNECTOR_DIR . 'includes/autoload.php';
 register_activation_hook( __FILE__, [ \G2RD\Connector\Plugin::class, 'activate' ] );
 register_deactivation_hook( __FILE__, [ \G2RD\Connector\Plugin::class, 'deactivate' ] );
 
-add_action( 'plugins_loaded', static function (): void {
-    \G2RD\Connector\Plugin::instance()->boot();
-} );
+add_action(
+	'plugins_loaded',
+	static function (): void {
+		\G2RD\Connector\Plugin::instance()->boot();
+	}
+);

@@ -7,17 +7,19 @@
 
 declare(strict_types=1);
 
-spl_autoload_register( static function ( string $class ): void {
-    $prefix = 'G2RD\\Connector\\';
-    if ( strncmp( $class, $prefix, strlen( $prefix ) ) !== 0 ) {
-        return;
-    }
+spl_autoload_register(
+	static function ( string $class_name ): void {
+		$prefix = 'G2RD\\Connector\\';
+		if ( strncmp( $class_name, $prefix, strlen( $prefix ) ) !== 0 ) {
+			return;
+		}
 
-    $relative = substr( $class, strlen( $prefix ) );
-    $relative = str_replace( '\\', DIRECTORY_SEPARATOR, $relative );
-    $file     = G2RD_CONNECTOR_DIR . 'includes' . DIRECTORY_SEPARATOR . $relative . '.php';
+		$relative = substr( $class_name, strlen( $prefix ) );
+		$relative = str_replace( '\\', DIRECTORY_SEPARATOR, $relative );
+		$file     = G2RD_CONNECTOR_DIR . 'includes' . DIRECTORY_SEPARATOR . $relative . '.php';
 
-    if ( is_readable( $file ) ) {
-        require_once $file;
-    }
-} );
+		if ( is_readable( $file ) ) {
+			require_once $file;
+		}
+	}
+);

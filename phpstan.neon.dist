@@ -1,10 +1,15 @@
+includes:
+    # Charge les stubs WordPress + les règles spécifiques WP (échappement, hooks…).
+    - vendor/szepeviktor/phpstan-wordpress/extension.neon
+
 parameters:
     level: 6
+    bootstrapFiles:
+        # Déclare les constantes G2RD_CONNECTOR_* définies à l'exécution dans le fichier principal.
+        - tools/phpstan-bootstrap.php
     paths:
         - g2rd-connector.php
         - includes
-    bootstrapFiles:
-        - vendor/szepeviktor/phpstan-wordpress/bootstrap.php
     excludePaths:
         - vendor
         - assets/admin/build

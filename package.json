@@ -5,12 +5,13 @@
     "license": "GPL-2.0-or-later",
     "private": true,
     "scripts": {
-        "build": "wp-scripts build --source-path=assets/admin/src --output-path=assets/admin/build",
-        "start": "wp-scripts start --source-path=assets/admin/src --output-path=assets/admin/build",
+        "build": "wp-scripts build --webpack-src-dir=assets/admin/src --output-path=assets/admin/build",
+        "start": "wp-scripts start --webpack-src-dir=assets/admin/src --output-path=assets/admin/build",
         "lint:js": "wp-scripts lint-js assets/admin/src",
         "format": "wp-scripts format assets/admin/src"
     },
     "devDependencies": {
+        "@babel/runtime": "^7.29.7",
         "@wordpress/scripts": "^28.0.0"
     }
 }

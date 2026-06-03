@@ -1,123 +1,241 @@
 name: Release
 
+# Déclenché par un tag vX.Y.Z (créé par auto-tag.yml) ou manuellement.
+# Construit le ZIP wp.org-compatible, le valide, teste l'activation réelle dans
+# WordPress (WP-CLI), publie la GitHub Release, puis notifie g2rd.fr (best-effort).
 on:
   push:
     tags:
       - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version à publier (ex. 0.1.0, doit matcher les fichiers du plugin)'
+        required: true
+        type: string
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  build-zip:
-    name: Build wp.org-compatible ZIP
+  release:
+    name: Build & Release
     runs-on: ubuntu-latest
 
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: wp_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Extract version from tag
+      - name: Déterminer la version
         id: version
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
-
-      - name: Verify Plugin Header version matches tag
         run: |
-          header_version=$(grep -m1 -oP 'Version:\s*\K[0-9]+\.[0-9]+\.[0-9]+' g2rd-connector.php)
-          tag_version="${{ steps.version.outputs.version }}"
-          if [ "$header_version" != "$tag_version" ]; then
-            echo "::error::Plugin header version ($header_version) != tag version ($tag_version)"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Vérifier l'alignement des versions (en-tête, constante, readme.txt, package.json)
+        run: bash tools/verify-release-version.sh "${{ steps.version.outputs.version }}"
+
+      - name: Vérifier cohérence tag Git ↔ version (push tag uniquement)
+        if: github.event_name == 'push'
+        run: |
+          if [ "${GITHUB_REF_NAME}" != "${{ steps.version.outputs.tag }}" ]; then
+            echo "::error::Tag poussé (${GITHUB_REF_NAME}) ≠ version dérivée (${{ steps.version.outputs.tag }})"
             exit 1
           fi
 
-      - name: Setup PHP 8.4
+      - name: Setup PHP 8.2
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.4'
+          php-version: '8.2'
           tools: composer:v2
           coverage: none
 
+      - name: Composer validate + audit
+        run: |
+          composer validate --strict --no-check-publish
+          composer install --no-interaction --no-progress --prefer-dist
+          composer audit --no-interaction || echo "::warning::composer audit a remonté des advisories"
+
       - name: Setup Node 22
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
 
-      - name: Install PHP deps (no-dev)
-        run: composer install --no-interaction --no-progress --prefer-dist --no-dev --optimize-autoloader
-
-      - name: Install + build JS
+      - name: Installer les dépendances npm + audit + build
         run: |
-          npm ci
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+          npm audit --omit=dev --audit-level=high || echo "::warning::npm audit a remonté des advisories"
           npm run build
 
-      - name: Stage plugin folder
+      - name: Générer le template de traduction (.pot)
         run: |
-          mkdir -p staging/g2rd-connector
-          rsync -av \
+          curl -sSL https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -o wp-cli.phar
+          chmod +x wp-cli.phar
+          mkdir -p languages
+          ./wp-cli.phar i18n make-pot . languages/g2rd-connector.pot --slug=g2rd-connector --allow-root \
+            || echo "::warning::génération du .pot ignorée"
+
+      - name: Créer le ZIP wp.org (dossier racine unique g2rd-connector/)
+        run: |
+          mkdir -p dist/g2rd-connector
+          # Le plugin charge ses classes via includes/autoload.php (pas vendor/),
+          # donc on N'EMBARQUE PAS vendor/ ni les sources/outils de dev.
+          rsync -a \
             --exclude='.git' \
             --exclude='.github' \
+            --exclude='.claude' \
             --exclude='node_modules' \
-            --exclude='vendor/bin' \
-            --exclude='vendor/squizlabs' \
-            --exclude='vendor/phpstan' \
-            --exclude='vendor/wp-coding-standards' \
-            --exclude='vendor/szepeviktor' \
-            --exclude='vendor/dealerdirect' \
+            --exclude='vendor' \
+            --exclude='dist' \
+            --exclude='tools' \
+            --exclude='assets/admin/src' \
+            --exclude='assets/admin/node_modules' \
             --exclude='.phpcs.cache' \
             --exclude='.phpstan.cache' \
             --exclude='.phpunit.cache' \
-            --exclude='staging' \
             --exclude='*.zip' \
-            --exclude='build-zip.ps1' \
-            ./ staging/g2rd-connector/
+            --exclude='*.log' \
+            --exclude='*.ps1' \
+            --exclude='phpcs*.xml*' \
+            --exclude='phpstan*.neon*' \
+            --exclude='composer.json' \
+            --exclude='composer.lock' \
+            --exclude='package.json' \
+            --exclude='package-lock.json' \
+            --exclude='.gitignore' \
+            --exclude='.gitattributes' \
+            --exclude='wp-cli.phar' \
+            ./ dist/g2rd-connector/
+          cd dist
+          zip -rq "g2rd-connector-${{ steps.version.outputs.version }}.zip" g2rd-connector
+          sha256sum "g2rd-connector-${{ steps.version.outputs.version }}.zip" \
+            > "g2rd-connector-${{ steps.version.outputs.version }}.zip.sha256"
+          echo "Taille ZIP : $(du -sh g2rd-connector-${{ steps.version.outputs.version }}.zip | cut -f1)"
 
-      - name: Generate language template (.pot)
+      - name: Valider le ZIP (intégrité + fichiers requis + exclusions)
+        run: bash tools/verify-plugin-zip.sh "dist/g2rd-connector-${{ steps.version.outputs.version }}.zip"
+
+      - name: Test installation WordPress (activation du plugin depuis le ZIP)
         run: |
-          # WP-CLI install
-          curl -sSL https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -o wp-cli.phar
-          chmod +x wp-cli.phar
-          mkdir -p staging/g2rd-connector/languages
-          ./wp-cli.phar i18n make-pot staging/g2rd-connector staging/g2rd-connector/languages/g2rd-connector.pot --slug=g2rd-connector --allow-root || echo "::warning::pot generation skipped"
+          set -euo pipefail
+          ROOT="$(pwd)"
+          mkdir -p "$ROOT/_wp-e2e"
+          cd "$ROOT/_wp-e2e"
+          cp "$ROOT/wp-cli.phar" .
 
-      - name: Generate SHA-256 checksums
-        run: |
-          cd staging
-          zip -r g2rd-connector-${{ steps.version.outputs.version }}.zip g2rd-connector
-          sha256sum g2rd-connector-${{ steps.version.outputs.version }}.zip > g2rd-connector-${{ steps.version.outputs.version }}.zip.sha256
+          for i in $(seq 1 60); do
+            if mysql -h 127.0.0.1 -uroot -proot -e "SELECT 1" >/dev/null 2>&1; then
+              echo "MySQL prêt."; break
+            fi
+            [ "$i" -eq 60 ] && { echo "::error::MySQL indisponible"; exit 1; }
+            sleep 2
+          done
 
-      - name: Generate SBOM (CycloneDX)
-        run: |
-          composer global require cyclonedx/cyclonedx-php-composer || true
-          composer cyclonedx:make-sbom --output-format=JSON --output-file=staging/sbom.json || echo "::warning::SBOM skipped"
+          ./wp-cli.phar core download --force
+          ./wp-cli.phar config create --dbname=wp_test --dbuser=root --dbpass=root --dbhost=127.0.0.1 --skip-check
+          ./wp-cli.phar core install \
+            --url=http://example.test --title="G2RD Connector release test" \
+            --admin_user=admin --admin_password='AdminPass!2026' \
+            --admin_email=admin@example.test --skip-email
 
-      - name: Create GitHub Release
+          unzip -q "$ROOT/dist/g2rd-connector-${{ steps.version.outputs.version }}.zip" -d wp-content/plugins/
+          ./wp-cli.phar plugin activate g2rd-connector
+          ACTIVE="$(./wp-cli.phar plugin list --status=active --field=name)"
+          echo "Plugins actifs: $ACTIVE"
+          echo "$ACTIVE" | grep -qx g2rd-connector
+          echo "OK : plugin g2rd-connector activé dans WordPress"
+
+      - name: Créer la release GitHub
+        id: github_release
         uses: softprops/action-gh-release@v2
         with:
-          name: 'v${{ steps.version.outputs.version }}'
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: 'G2RD Connector v${{ steps.version.outputs.version }}'
+          generate_release_notes: true
+          draft: false
+          prerelease: false
           body: |
             ## G2RD Connector v${{ steps.version.outputs.version }}
 
             Plugin WordPress qui relie un site au tableau de bord [G2RD WP Manager](https://wp-manager.g2rd.fr).
 
             ### Installation
-
             1. Télécharger `g2rd-connector-${{ steps.version.outputs.version }}.zip` ci-dessous
-            2. Plugins → Add new → Upload Plugin → activer
+            2. Extensions → Ajouter → Téléverser une extension → activer
             3. Réglages → G2RD Connector → URL manager + token d'invitation
 
-            ### Checksums
-
-            Cf `g2rd-connector-${{ steps.version.outputs.version }}.zip.sha256` ci-dessous.
+            ### Intégrité
+            Checksum SHA-256 dans `g2rd-connector-${{ steps.version.outputs.version }}.zip.sha256`.
 
             ### Changelog
-
-            Voir [`readme.txt`](https://github.com/SebG2RD/g2rd-connector/blob/main/readme.txt#changelog) section Changelog.
+            Voir la section Changelog de [`readme.txt`](https://github.com/SebG2RD/g2rd-connector/blob/main/readme.txt).
           files: |
-            staging/g2rd-connector-${{ steps.version.outputs.version }}.zip
-            staging/g2rd-connector-${{ steps.version.outputs.version }}.zip.sha256
-            staging/sbom.json
-          generate_release_notes: true
+            dist/g2rd-connector-${{ steps.version.outputs.version }}.zip
+            dist/g2rd-connector-${{ steps.version.outputs.version }}.zip.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notifier g2rd.fr de la nouvelle release (best-effort)
+        if: success()
+        env:
+          WEBHOOK_SECRET: ${{ secrets.G2RD_WEBHOOK_SECRET }}
+        run: |
+          if [ -z "${WEBHOOK_SECRET:-}" ]; then
+            echo "::notice::G2RD_WEBHOOK_SECRET non configuré — notification webhook ignorée."
+            exit 0
+          fi
+          VERSION="${{ steps.version.outputs.version }}"
+          DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/g2rd-connector-${VERSION}.zip"
+
+          RELEASE_BODY=$(curl -s \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ steps.version.outputs.tag }}" \
+            | jq -r '.body // ""')
+
+          PAYLOAD=$(jq -n \
+            --arg version "$VERSION" \
+            --arg download_url "$DOWNLOAD_URL" \
+            --arg changelog "$RELEASE_BODY" \
+            '{version: $version, download_url: $download_url, changelog: $changelog}')
+
+          SIGNATURE="sha256=$(echo -n "${PAYLOAD}" | openssl dgst -sha256 -hmac "${WEBHOOK_SECRET}" | awk '{print $2}')"
+
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time 30 --connect-timeout 10 \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-G2RD-Signature: ${SIGNATURE}" \
+            -d "${PAYLOAD}" \
+            "https://g2rd.fr/wp-json/g2rd-license/v1/release-webhook") || HTTP_STATUS="000"
+
+          echo "HTTP Status: ${HTTP_STATUS}"
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "::warning::Webhook g2rd.fr a retourné HTTP ${HTTP_STATUS} — à vérifier manuellement."
+            exit 0
+          fi
+          echo "g2rd.fr notifié de la release v${VERSION}."

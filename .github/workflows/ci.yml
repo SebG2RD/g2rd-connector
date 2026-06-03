@@ -1,70 +1,139 @@
 name: CI
 
+# Lint + analyse statique + build, sur push et PR.
+# Adapté du CI du G2RD WP Manager (job detect-changes + jobs par stack),
+# resserré aux deux stacks du plugin : PHP (includes/) et l'app admin React/TS (assets/).
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
+  detect-changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      php: ${{ steps.filter.outputs.php }}
+      js: ${{ steps.filter.outputs.js }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Détection inline (même approche que le manager : pas de dépendance à
+      # dorny/paths-filter, sujet à des flakes réseau transitoires).
+      - id: filter
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+            HEAD="${{ github.sha }}"
+            if [ "$BASE" = "0000000000000000000000000000000000000000" ] || [ -z "$BASE" ]; then
+              BASE="${HEAD}^"
+            fi
+          fi
+          echo "Comparing $BASE..$HEAD"
+          CHANGED="$(git diff --name-only "$BASE" "$HEAD" || true)"
+          echo "$CHANGED"
+          # PHP : code du plugin + config qualité PHP + ce workflow.
+          if echo "$CHANGED" | grep -qE '^(includes/|g2rd-connector\.php|uninstall\.php|composer\.(json|lock)|phpcs\.xml\.dist|phpstan\.neon\.dist|\.github/workflows/ci\.yml$)'; then
+            echo "php=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "php=false" >> "$GITHUB_OUTPUT"
+          fi
+          # JS : app admin React/TS + manifeste npm + ce workflow.
+          if echo "$CHANGED" | grep -qE '^(assets/|package(-lock)?\.json|\.github/workflows/ci\.yml$)'; then
+            echo "js=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "js=false" >> "$GITHUB_OUTPUT"
+          fi
+
   php:
     name: PHP ${{ matrix.php }}
+    needs: detect-changes
+    if: needs.detect-changes.outputs.php == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
+        # Le plugin requiert PHP 8.1+ (composer.json / en-tête Requires PHP : 8.1).
         php: ['8.1', '8.2', '8.3', '8.4']
-
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          tools: composer:v2, cs2pr
+          ini-values: memory_limit=1G
           coverage: none
+          tools: composer:v2
 
-      - name: Cache composer dependencies
+      - name: Validate composer.json
+        run: composer validate --strict --no-check-publish
+
+      - name: Cache Composer
         uses: actions/cache@v4
         with:
-          path: ~/.composer/cache
-          key: composer-${{ matrix.php }}-${{ hashFiles('composer.json') }}
+          path: vendor
+          key: composer-${{ matrix.php }}-${{ hashFiles('composer.json', 'composer.lock') }}
           restore-keys: composer-${{ matrix.php }}-
 
-      - name: Install composer deps
-        run: composer install --no-interaction --no-progress --prefer-dist
+      - name: Install dependencies
+        run: composer install --no-progress --prefer-dist
 
-      - name: Lint (PHPCS WordPress Standards)
-        run: composer run lint -- -q --report=checkstyle | cs2pr
+      - name: PHPCS (WordPress Coding Standards)
+        run: composer run lint
 
-      - name: Static analysis (PHPStan)
-        run: composer run analyse -- --no-progress
+      - name: PHPStan
+        run: composer run analyse
 
-  node:
-    name: Build JS
+      - name: Composer audit
+        run: composer audit --abandoned=report
+        continue-on-error: true
+
+  js:
+    name: Admin app (Node ${{ matrix.node }})
+    needs: detect-changes
+    if: needs.detect-changes.outputs.js == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         node: ['20', '22']
-
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
 
-      - name: Setup Node ${{ matrix.node }}
-        uses: actions/setup-node@v5
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-          cache: npm
 
-      - name: Install npm deps
-        run: npm ci
+      - name: Install dependencies
+        # npm ci si un lockfile existe, sinon npm install (package-lock.json
+        # n'est pas encore committé sur ce plugin jeune).
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install --no-audit --no-fund
+          fi
 
-      - name: Build React admin
+      - name: Lint JS/TS (wp-scripts)
+        run: npm run lint:js
+
+      - name: Build admin bundle (wp-scripts)
         run: npm run build
 
       - name: Upload build artifact
@@ -74,3 +143,7 @@ jobs:
           name: admin-build
           path: assets/admin/build/
           retention-days: 7
+
+      - name: npm audit
+        run: npm audit --omit=dev --audit-level=high
+        continue-on-error: true
