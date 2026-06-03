@@ -35,7 +35,11 @@ final class CommandController {
                     'command' => [
                         'required'          => true,
                         'type'              => 'string',
+                        'enum'              => self::ALLOWED_COMMANDS,
                         'sanitize_callback' => 'sanitize_key',
+                        'validate_callback' => static function ( $value ): bool {
+                            return is_string( $value ) && in_array( $value, self::ALLOWED_COMMANDS, true );
+                        },
                     ],
                 ],
             ]

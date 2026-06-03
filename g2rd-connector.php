@@ -8,8 +8,8 @@
  * Requires PHP:      8.1
  * Author:            G2RD Web Agency
  * Author URI:        https://g2rd.fr
- * License:           EUPL-1.2
- * License URI:       https://joinup.ec.europa.eu/collection/eupl
+ * License:           GPL-2.0-or-later
+ * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain:       g2rd-connector
  * Domain Path:       /languages
  *
@@ -17,8 +17,6 @@
  */
 
 declare(strict_types=1);
-
-namespace G2RD\Connector;
 
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
@@ -32,9 +30,9 @@ define( 'G2RD_CONNECTOR_REST_NS', 'g2rd/v1' );
 
 require_once G2RD_CONNECTOR_DIR . 'includes/autoload.php';
 
-register_activation_hook( __FILE__, [ Plugin::class, 'activate' ] );
-register_deactivation_hook( __FILE__, [ Plugin::class, 'deactivate' ] );
+register_activation_hook( __FILE__, [ \G2RD\Connector\Plugin::class, 'activate' ] );
+register_deactivation_hook( __FILE__, [ \G2RD\Connector\Plugin::class, 'deactivate' ] );
 
 add_action( 'plugins_loaded', static function (): void {
-    Plugin::instance()->boot();
+    \G2RD\Connector\Plugin::instance()->boot();
 } );

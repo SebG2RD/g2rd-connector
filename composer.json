@@ -2,7 +2,7 @@
     "name": "g2rd/connector",
     "description": "Plugin WordPress qui connecte un site au tableau de bord G2RD WP Manager.",
     "type": "wordpress-plugin",
-    "license": "EUPL-1.2",
+    "license": "GPL-2.0-or-later",
     "authors": [
         { "name": "Sebastien Gerard", "email": "contact@g2rd.fr", "homepage": "https://g2rd.fr" }
     ],

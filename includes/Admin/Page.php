@@ -194,8 +194,10 @@ final class Page {
         }
         check_admin_referer( 'g2rd_connector_save', 'g2rd_connector_nonce' );
 
-        $action = (string) $_POST['g2rd_connector_action'];
-        $url    = isset( $_POST['g2rd_manager_url'] ) ? esc_url_raw( wp_unslash( (string) $_POST['g2rd_manager_url'] ) ) : '';
+        $action = sanitize_key( wp_unslash( (string) $_POST['g2rd_connector_action'] ) );
+        $url    = isset( $_POST['g2rd_manager_url'] )
+            ? esc_url_raw( wp_unslash( (string) $_POST['g2rd_manager_url'] ) )
+            : '';
 
         Settings::update( [
             'manager_url'             => $url,
@@ -205,18 +207,38 @@ final class Page {
         ] );
 
         if ( 'enroll' === $action ) {
-            $token = isset( $_POST['g2rd_invitation_token'] ) ? sanitize_text_field( wp_unslash( (string) $_POST['g2rd_invitation_token'] ) ) : '';
+            $token  = isset( $_POST['g2rd_invitation_token'] )
+                ? sanitize_text_field( wp_unslash( (string) $_POST['g2rd_invitation_token'] ) )
+                : '';
             $result = ( new ManagerClient() )->enroll( $token, $url );
             if ( is_wp_error( $result ) ) {
-                add_settings_error( 'g2rd_connector', 'enroll_failed', $result->get_error_message(), 'error' );
+                add_settings_error(
+                    'g2rd_connector',
+                    'enroll_failed',
+                    esc_html( $result->get_error_message() ),
+                    'error'
+                );
             } else {
-                add_settings_error( 'g2rd_connector', 'enrolled', __( 'Site enrôlé avec succès.', 'g2rd-connector' ), 'success' );
+                // Enrollment réussi → on planifie le cron heartbeat (opt-in consenti).
+                \G2RD\Connector\Cron\HeartbeatJob::schedule();
+                add_settings_error(
+                    'g2rd_connector',
+                    'enrolled',
+                    esc_html__( 'Site enrôlé avec succès.', 'g2rd-connector' ),
+                    'success'
+                );
             }
         }
 
         if ( 'unenroll' === $action ) {
             Settings::update( [ 'site_id' => null, 'site_token' => '', 'enrolled_at' => null ] );
-            add_settings_error( 'g2rd_connector', 'unenrolled', __( 'Site déconnecté du manager.', 'g2rd-connector' ), 'success' );
+            \G2RD\Connector\Cron\HeartbeatJob::unschedule();
+            add_settings_error(
+                'g2rd_connector',
+                'unenrolled',
+                esc_html__( 'Site déconnecté du manager.', 'g2rd-connector' ),
+                'success'
+            );
         }
 
         settings_errors( 'g2rd_connector' );

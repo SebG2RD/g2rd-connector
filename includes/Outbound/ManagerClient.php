@@ -95,11 +95,13 @@ final class ManagerClient {
             return new WP_Error( 'g2rd_connector_not_enrolled', 'Site non enrôlé.' );
         }
 
+        $disk_free = function_exists( 'disk_free_space' ) ? disk_free_space( ABSPATH ) : false;
+
         $payload = [
             'wp_version'        => (string) get_bloginfo( 'version' ),
             'php_version'       => PHP_VERSION,
             'connector_version' => G2RD_CONNECTOR_VERSION,
-            'disk_free_bytes'   => @disk_free_space( ABSPATH ) ?: null,
+            'disk_free_bytes'   => false !== $disk_free ? (int) $disk_free : null,
             'active_plugins'    => count( (array) get_option( 'active_plugins', [] ) ),
             'users_count'       => (int) count_users()['total_users'],
             'at'                => gmdate( 'c' ),

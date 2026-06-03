@@ -2,9 +2,9 @@
 
 > Plugin WordPress qui relie un site à la console centralisée **[G2RD WP Manager](https://wp-manager.g2rd.fr)**.
 
-[![WordPress ≥ 6.4](https://img.shields.io/badge/WordPress-%E2%89%A56.4-blue)]()
-[![PHP ≥ 8.1](https://img.shields.io/badge/PHP-%E2%89%A58.1-777BB4)]()
-[![License: EUPL-1.2](https://img.shields.io/badge/License-EUPL--1.2-green)]()
+![WordPress ≥ 6.4](https://img.shields.io/badge/WordPress-%E2%89%A56.4-blue)
+![PHP ≥ 8.1](https://img.shields.io/badge/PHP-%E2%89%A58.1-777BB4)
+![License: GPL-2.0-or-later](https://img.shields.io/badge/License-GPL--2.0--or--later-green)
 
 ## Ce que fait le plugin
 
@@ -18,7 +18,7 @@
 
 ## Architecture
 
-```
+```text
 g2rd-connector/
 ├── g2rd-connector.php          Plugin header + bootstrap
 ├── includes/
@@ -70,7 +70,7 @@ wp plugin activate g2rd-connector
 
 | Méthode | Path | Auth | Description |
 | --- | --- | --- | --- |
-| GET | `/wp-json/g2rd/v1/health` | — | Ping public |
+| GET | `/wp-json/g2rd/v1/health` | none | Ping public |
 | GET | `/wp-json/g2rd/v1/snapshot` | Bearer SiteToken | Inventaire complet |
 | POST | `/wp-json/g2rd/v1/command` | Bearer SiteToken | Exécute commande |
 
@@ -85,4 +85,4 @@ npm ci && npm run start   # @wordpress/scripts en watch mode
 
 ## License
 
-EUPL-1.2 — voir [LICENSE](LICENSE).
+GPL-2.0-or-later — voir [LICENSE](LICENSE).

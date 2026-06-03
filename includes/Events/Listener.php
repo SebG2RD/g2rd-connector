@@ -102,10 +102,14 @@ final class Listener {
     private function client_ip(): string {
         $candidates = [ 'HTTP_X_FORWARDED_FOR', 'HTTP_CLIENT_IP', 'REMOTE_ADDR' ];
         foreach ( $candidates as $key ) {
-            if ( ! empty( $_SERVER[ $key ] ) ) {
-                $ip = (string) $_SERVER[ $key ];
-                $ip = explode( ',', $ip )[0];
-                return trim( $ip );
+            if ( empty( $_SERVER[ $key ] ) ) {
+                continue;
+            }
+            $raw = sanitize_text_field( wp_unslash( (string) $_SERVER[ $key ] ) );
+            $ip  = trim( explode( ',', $raw )[0] );
+            $ip  = filter_var( $ip, FILTER_VALIDATE_IP );
+            if ( false !== $ip ) {
+                return $ip;
             }
         }
         return '';

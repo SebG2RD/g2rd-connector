@@ -27,26 +27,42 @@ final class Plugin {
     private function __construct() {}
 
     public function boot(): void {
-        // REST API (consommée par le manager).
-        add_action( 'rest_api_init', [ new SnapshotController(), 'register' ] );
+        // Health endpoint (public) — toujours actif pour permettre le ping initial.
         add_action( 'rest_api_init', [ new HealthController(), 'register' ] );
-        add_action( 'rest_api_init', [ new CommandController(), 'register' ] );
 
         // Admin (page d'options, tab dans Options G2RD ou menu top-level).
         if ( is_admin() ) {
             ( new Page() )->register();
         }
 
-        // Cron (heartbeat horaire).
-        ( new HeartbeatJob() )->register();
+        // ── Gate "site enrôlé" : RIEN n'est exposé / envoyé tant que l'utilisateur
+        //    n'a pas explicitement enrôlé le site via la page admin. Conforme
+        //    Plugin Directory Guideline 7 (no phoning home without explicit consent).
+        if ( ! Settings::is_enrolled() ) {
+            return;
+        }
 
-        // Listeners événements WP (login, plugin install, update fail, etc.).
-        ( new Listener() )->register();
+        // Endpoints REST sécurisés Bearer SiteToken (consommés par le manager).
+        add_action( 'rest_api_init', [ new SnapshotController(), 'register' ] );
+        if ( Settings::get( 'remote_commands_enabled' ) ) {
+            add_action( 'rest_api_init', [ new CommandController(), 'register' ] );
+        }
+
+        // Outbound : cron heartbeat (opt-in via Settings).
+        if ( Settings::get( 'heartbeat_enabled' ) ) {
+            ( new HeartbeatJob() )->register();
+        }
+
+        // Outbound : events temps réel (opt-in via Settings).
+        if ( Settings::get( 'events_enabled' ) ) {
+            ( new Listener() )->register();
+        }
     }
 
     public static function activate(): void {
         Settings::ensure_defaults();
-        HeartbeatJob::schedule();
+        // Le cron est planifié seulement à l'enrollment, pas à l'activation —
+        // conforme guideline "no phoning home without consent".
         flush_rewrite_rules();
     }
 
