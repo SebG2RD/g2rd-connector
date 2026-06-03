@@ -1,0 +1,29 @@
+.g2rd-connector-panel {
+    max-width: 720px;
+    margin: 1.5rem 0;
+}
+
+.g2rd-connector-panel .components-card__header h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+
+.g2rd-connector-version {
+    color: #757575;
+    font-size: 0.85rem;
+    font-family: ui-monospace, monospace;
+}
+
+.g2rd-connector-actions {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 1.5rem;
+}
+
+.g2rd-connector-test-result {
+    color: #1e1e1e;
+    font-family: ui-monospace, monospace;
+    font-size: 0.85rem;
+}

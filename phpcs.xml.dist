@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<ruleset name="G2RD Connector">
+    <description>WordPress Coding Standards for G2RD Connector plugin.</description>
+
+    <file>./g2rd-connector.php</file>
+    <file>./includes</file>
+
+    <arg name="extensions" value="php"/>
+    <arg name="colors"/>
+    <arg value="ps"/>
+
+    <rule ref="WordPress-Core"/>
+    <rule ref="WordPress-Docs"/>
+
+    <config name="testVersion" value="8.1-"/>
+    <config name="minimum_supported_wp_version" value="6.4"/>
+</ruleset>

@@ -1,0 +1,11 @@
+/vendor/
+/node_modules/
+/assets/admin/build/
+/.phpunit.cache/
+/.phpcs.cache
+/.phpstan.cache
+*.log
+.DS_Store
+.idea/
+.vscode/
+*.zip

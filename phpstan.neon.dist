@@ -1,0 +1,10 @@
+parameters:
+    level: 6
+    paths:
+        - g2rd-connector.php
+        - includes
+    bootstrapFiles:
+        - vendor/szepeviktor/phpstan-wordpress/bootstrap.php
+    excludePaths:
+        - vendor
+        - assets/admin/build

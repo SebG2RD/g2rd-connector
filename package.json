@@ -1,0 +1,16 @@
+{
+    "name": "g2rd-connector",
+    "version": "0.1.0",
+    "description": "Admin React app for the G2RD Connector WordPress plugin.",
+    "license": "EUPL-1.2",
+    "private": true,
+    "scripts": {
+        "build": "wp-scripts build --source-path=assets/admin/src --output-path=assets/admin/build",
+        "start": "wp-scripts start --source-path=assets/admin/src --output-path=assets/admin/build",
+        "lint:js": "wp-scripts lint-js assets/admin/src",
+        "format": "wp-scripts format assets/admin/src"
+    },
+    "devDependencies": {
+        "@wordpress/scripts": "^28.0.0"
+    }
+}
