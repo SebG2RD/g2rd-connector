@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 6.6
 Requires PHP: 8.1
-Stable tag: 0.1.2
+Stable tag: 0.1.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -69,6 +69,19 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 0.1.3 =
+
+* GitHub Updater: every site running this plugin now receives automatic update
+  notifications when a new release is published on
+  https://github.com/SebG2RD/g2rd-connector/releases. WordPress detects the
+  release in **Plugins → Updates** and lets the admin install it with one click,
+  exactly like a plugin from the official directory. Mirrors the pattern already
+  in use for the companion theme `g2rd-theme`.
+* Hooks: `pre_set_site_transient_update_plugins`, `plugins_api`,
+  `upgrader_source_selection`. Falls back gracefully if api.github.com is
+  unreachable. Normalizes the extracted ZIP folder to `g2rd-connector/`
+  regardless of GitHub's auto-generated zipball naming.
 
 = 0.1.2 =
 

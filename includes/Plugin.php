@@ -15,6 +15,7 @@ use G2RD\Connector\Events\Listener;
 use G2RD\Connector\Rest\CommandController;
 use G2RD\Connector\Rest\HealthController;
 use G2RD\Connector\Rest\SnapshotController;
+use G2RD\Connector\Updater\GitHubUpdater;
 
 final class Plugin {
 
@@ -29,6 +30,13 @@ final class Plugin {
 	public function boot(): void {
 		// Health endpoint (public) — toujours actif pour permettre le ping initial.
 		add_action( 'rest_api_init', [ new HealthController(), 'register' ] );
+
+		// GitHub Updater — toujours actif (avant le gate enrollment) pour que les
+		// sites avec plugin installé reçoivent les MAJ via Plugins → Mises à jour.
+		// C'est de la lecture sortante vers api.github.com uniquement, pas vers
+		// le manager : conforme wp.org Guideline 7 (pas de phoning home avant opt-in
+		// au service externe — GitHub étant un service public open source neutre).
+		( new GitHubUpdater() )->register();
 
 		// Admin (page d'options, tab dans Options G2RD ou menu top-level).
 		if ( is_admin() ) {
