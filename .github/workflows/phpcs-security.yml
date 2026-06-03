@@ -59,6 +59,9 @@ jobs:
 
       - name: Annotations WordPress
         if: ${{ always() && steps.phpcs-wp.outcome == 'failure' }}
+        # cs2pr renvoie un code non-zéro quand le rapport contient des erreurs ;
+        # on garde le job non bloquant (audit informatif → annotations + artifact).
+        continue-on-error: true
         run: cs2pr ./phpcs-wp-report.xml
 
       # Security Audit OWASP (SAST) — ruleset phpcs-security.xml du projet.
@@ -77,6 +80,7 @@ jobs:
 
       - name: Annotations Security
         if: ${{ always() && steps.phpcs-sec.outcome == 'failure' }}
+        continue-on-error: true
         run: cs2pr ./phpcs-security-report.xml
 
       # PHPCompatibility (PHP 8.1+ — cf. Requires PHP du plugin).
@@ -96,6 +100,7 @@ jobs:
 
       - name: Annotations PHPCompatibility
         if: ${{ always() && steps.phpcompat.outcome == 'failure' }}
+        continue-on-error: true
         run: cs2pr ./phpcompat-report.xml
 
       - name: Résumé des résultats
