@@ -86,3 +86,4 @@ npm ci && npm run start   # @wordpress/scripts en watch mode
 ## License
 
 GPL-2.0-or-later — voir [LICENSE](LICENSE).
+# g2rd-connector
