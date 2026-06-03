@@ -145,6 +145,74 @@ final class ManagerClient {
 	}
 
 	/**
+	 * Polling des commandes en attente côté manager.
+	 * Le manager claim atomiquement (PENDING → RUNNING) les commandes retournées.
+	 *
+	 * Les entrées proviennent de json_decode (données externes non fiables) :
+	 * chaque commande est validée par l'appelant (présence id/kind).
+	 *
+	 * @return list<array<string, mixed>>|WP_Error
+	 */
+	public function poll_commands(): array|WP_Error {
+		if ( ! Settings::is_enrolled() ) {
+			return new WP_Error( 'g2rd_connector_not_enrolled', 'Site non enrôlé.' );
+		}
+		if ( ! Settings::get( 'remote_commands_enabled' ) ) {
+			return [];
+		}
+
+		$base    = (string) Settings::get( 'manager_url' );
+		$site_id = (int) Settings::get( 'site_id' );
+		$token   = (string) Settings::get( 'site_token' );
+		$url     = sprintf( '%s/api/agent/sites/%d/commands', rtrim( $base, '/' ), $site_id );
+
+		$resp = wp_remote_get(
+			$url,
+			[
+				'timeout' => self::TIMEOUT,
+				'headers' => [
+					'Accept'        => 'application/json',
+					'Authorization' => 'Bearer ' . $token,
+				],
+			]
+		);
+
+		if ( is_wp_error( $resp ) ) {
+			return $resp;
+		}
+		$code = (int) wp_remote_retrieve_response_code( $resp );
+		if ( $code >= 400 ) {
+			return new WP_Error( 'g2rd_connector_manager_error', sprintf( 'HTTP %d', $code ) );
+		}
+
+		$body     = json_decode( (string) wp_remote_retrieve_body( $resp ), true );
+		$commands = is_array( $body ) && isset( $body['commands'] ) ? $body['commands'] : [];
+		return is_array( $commands ) ? $commands : [];
+	}
+
+	/**
+	 * Notifie le manager du résultat d'une commande exécutée.
+	 *
+	 * @param array<string, mixed>|null $result_payload
+	 */
+	public function send_command_result( int $command_id, string $status, ?array $result_payload = null, ?string $error_message = null ): bool|WP_Error {
+		if ( ! Settings::is_enrolled() ) {
+			return new WP_Error( 'g2rd_connector_not_enrolled', 'Site non enrôlé.' );
+		}
+
+		$body = [ 'status' => $status ];
+		if ( null !== $result_payload ) {
+			$body['result'] = $result_payload;
+		}
+		if ( null !== $error_message ) {
+			$body['error'] = $error_message;
+		}
+
+		$resp = $this->post( '/commands/' . $command_id . '/result', $body );
+		return is_wp_error( $resp ) ? $resp : true;
+	}
+
+	/**
 	 * @param array<string, mixed> $payload
 	 * @return array<string, mixed>|WP_Error
 	 */
@@ -152,7 +220,7 @@ final class ManagerClient {
 		$base    = (string) Settings::get( 'manager_url' );
 		$site_id = (int) Settings::get( 'site_id' );
 		$token   = (string) Settings::get( 'site_token' );
-		$url     = sprintf( '%s/api/sites/%d%s', rtrim( $base, '/' ), $site_id, $relative_path );
+		$url     = sprintf( '%s/api/agent/sites/%d%s', rtrim( $base, '/' ), $site_id, $relative_path );
 
 		$resp = wp_remote_post(
 			$url,
