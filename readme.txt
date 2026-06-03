@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 6.6
 Requires PHP: 8.1
-Stable tag: 0.1.1
+Stable tag: 0.1.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -69,6 +69,19 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 0.1.2 =
+
+* Fix "phantom update" bug: snapshot endpoint now forces refresh of WordPress
+  caches (`wp_clean_themes_cache`, `wp_clean_plugins_cache`, `wp_update_themes`,
+  `wp_update_plugins`, `wp_version_check`) before reading inventory. Without
+  this, a theme or plugin updated via a custom updater (GitHub updater, FTP,
+  WP-CLI) could keep reporting "update available" in the manager dashboard
+  even after the actual update was applied.
+* Strict `version_compare` sanity check on every `has_update` flag: only
+  reports an update when the candidate version is strictly newer than the
+  installed one. Defends against stale `update_themes` / `update_plugins`
+  transients.
 
 = 0.1.1 =
 

@@ -34,6 +34,30 @@ final class SnapshotController {
 	public function handle(): WP_REST_Response {
 		Settings::update( [ 'last_heartbeat_at' => gmdate( 'c' ) ] );
 
+		// Force le rafraîchissement des caches WP AVANT toute lecture. Sans ça,
+		// une MAJ récente effectuée hors du flow standard (GitHub updater custom,
+		// FTP, WP-CLI, etc.) laisse des données obsolètes dans :
+		//  - le cache d'objet `wp_get_themes()` / `get_plugins()`
+		//  - les transients `update_themes`, `update_plugins`, `update_core`
+		// Les helpers ci-dessous reconstruisent ces caches a partir du filesystem
+		// et du wp.org API (coût ~1-3s, acceptable pour un sync manuel).
+		require_once ABSPATH . 'wp-admin/includes/update.php';
+		if ( function_exists( 'wp_clean_themes_cache' ) ) {
+			wp_clean_themes_cache();
+		}
+		if ( function_exists( 'wp_clean_plugins_cache' ) ) {
+			wp_clean_plugins_cache();
+		}
+		if ( function_exists( 'wp_version_check' ) ) {
+			wp_version_check( [], true );
+		}
+		if ( function_exists( 'wp_update_themes' ) ) {
+			wp_update_themes();
+		}
+		if ( function_exists( 'wp_update_plugins' ) ) {
+			wp_update_plugins();
+		}
+
 		return new WP_REST_Response(
 			[
 				'site'    => $this->site_info(),
@@ -73,8 +97,17 @@ final class SnapshotController {
 		$has_update = false;
 
 		if ( is_array( $updates ) && isset( $updates[0]->current ) ) {
-			$latest     = (string) $updates[0]->current;
-			$has_update = isset( $updates[0]->response ) && 'upgrade' === $updates[0]->response;
+			$candidate          = (string) $updates[0]->current;
+			$transient_says_yes = isset( $updates[0]->response ) && 'upgrade' === $updates[0]->response;
+			// Sanity check : on ne signale une MAJ que si elle est strictement
+			// superieure a la version installee. Defend contre les transients
+			// obsoletes apres une MAJ manuelle (cf docs/plugin-wordpress.md).
+			if ( $transient_says_yes && version_compare( $candidate, $current, '>' ) ) {
+				$latest     = $candidate;
+				$has_update = true;
+			} else {
+				$latest = $current;
+			}
 		}
 
 		return [
@@ -98,11 +131,17 @@ final class SnapshotController {
 
 		$out = [];
 		foreach ( $all as $file => $data ) {
-			$latest     = $data['Version'] ?? '';
+			$installed  = (string) ( $data['Version'] ?? '' );
+			$latest     = $installed;
 			$has_update = false;
 			if ( isset( $updates_response[ $file ]->new_version ) ) {
-				$latest     = (string) $updates_response[ $file ]->new_version;
-				$has_update = true;
+				$candidate = (string) $updates_response[ $file ]->new_version;
+				// Sanity check version_compare : protege contre les transients
+				// update_plugins obsoletes apres une MAJ manuelle.
+				if ( '' !== $installed && version_compare( $candidate, $installed, '>' ) ) {
+					$latest     = $candidate;
+					$has_update = true;
+				}
 			}
 			$slug = isset( $updates_response[ $file ]->slug )
 				? (string) $updates_response[ $file ]->slug
@@ -139,8 +178,14 @@ final class SnapshotController {
 			$latest     = $installed;
 			$has_update = false;
 			if ( isset( $resp[ $stylesheet ]['new_version'] ) ) {
-				$latest     = (string) $resp[ $stylesheet ]['new_version'];
-				$has_update = true;
+				$candidate = (string) $resp[ $stylesheet ]['new_version'];
+				// Sanity check : on ne marque la MAJ comme dispo que si elle
+				// est strictement plus recente que l'installee. Protege contre
+				// les transients update_themes stale apres MAJ via updater custom.
+				if ( '' !== $installed && version_compare( $candidate, $installed, '>' ) ) {
+					$latest     = $candidate;
+					$has_update = true;
+				}
 			}
 
 			$out[] = [
