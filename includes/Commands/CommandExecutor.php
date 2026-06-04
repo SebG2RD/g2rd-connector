@@ -170,7 +170,7 @@ final class CommandExecutor {
 		}
 
 		return [
-			'deleted_count'  => $deleted,
+			'deleted_count'   => $deleted,
 			'total_revisions' => count( (array) $revision_ids ),
 		];
 	}
@@ -200,7 +200,7 @@ final class CommandExecutor {
 
 		// Purge des transients expirés. Les transients WP sont stockés en
 		// 2 options : _transient_X (valeur) + _transient_timeout_X (expiration).
-		$now             = time();
+		$now              = time();
 		$expired_timeouts = (array) $wpdb->get_col(
 			$wpdb->prepare(
 				"SELECT option_name FROM {$wpdb->options}
