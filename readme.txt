@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 1.5.1
+Stable tag: 1.5.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,17 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.5.2 =
+
+* **WordPress.org Plugin Check conformance** (hardening, no behaviour change):
+  * `/snapshot`: `$_SERVER['SERVER_SOFTWARE']` is now unslashed and sanitized.
+  * `register_setting()` now declares a `sanitize_callback` (`Settings::sanitize()`).
+  * `includes/autoload.php` now blocks direct file access (`ABSPATH` guard).
+  * Direct maintenance DB queries (OPTIMIZE TABLE, transient cleanup) annotated.
+  * readme.txt: disclosed the GitHub Releases API as an external service and
+    bumped "Tested up to" to 7.0.
+* CI: added an automated WordPress Plugin Check workflow on every push/PR.
 
 = 1.5.1 =
 
