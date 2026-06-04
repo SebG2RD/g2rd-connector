@@ -97,7 +97,7 @@ final class CommandExecutor {
 		require_once ABSPATH . 'wp-admin/includes/plugin.php';
 		$plugins = get_plugins();
 		if ( ! isset( $plugins[ $file ] ) ) {
-			throw new \RuntimeException( 'plugin not installed: ' . $file );
+			throw new \RuntimeException( esc_html( 'plugin not installed: ' . $file ) );
 		}
 
 		$version_before = isset( $plugins[ $file ]['Version'] ) ? (string) $plugins[ $file ]['Version'] : '';
@@ -118,7 +118,7 @@ final class CommandExecutor {
 		$result   = $upgrader->upgrade( $file );
 
 		if ( is_wp_error( $result ) ) {
-			throw new \RuntimeException( $result->get_error_message() );
+			throw new \RuntimeException( esc_html( $result->get_error_message() ) );
 		}
 
 		// Re-lire la version installée après upgrade.
@@ -151,7 +151,7 @@ final class CommandExecutor {
 
 		$themes = wp_get_themes();
 		if ( ! isset( $themes[ $stylesheet ] ) ) {
-			throw new \RuntimeException( 'theme not installed: ' . $stylesheet );
+			throw new \RuntimeException( esc_html( 'theme not installed: ' . $stylesheet ) );
 		}
 
 		$version_before = (string) $themes[ $stylesheet ]->get( 'Version' );
@@ -171,7 +171,7 @@ final class CommandExecutor {
 		$result   = $upgrader->upgrade( $stylesheet );
 
 		if ( is_wp_error( $result ) ) {
-			throw new \RuntimeException( $result->get_error_message() );
+			throw new \RuntimeException( esc_html( $result->get_error_message() ) );
 		}
 
 		// Re-lire la version installée après upgrade.
