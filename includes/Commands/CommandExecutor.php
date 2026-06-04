@@ -158,6 +158,7 @@ final class CommandExecutor {
 	private static function delete_post_revisions(): array {
 		global $wpdb;
 
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- lecture des revisions pour une commande de maintenance, sans cache pertinent.
 		$revision_ids = $wpdb->get_col(
 			"SELECT ID FROM {$wpdb->posts} WHERE post_type = 'revision'"
 		);
@@ -188,10 +189,12 @@ final class CommandExecutor {
 	private static function optimize_database(): array {
 		global $wpdb;
 
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL -- liste des tables a prefixe WP pour OPTIMIZE, prefixe sur.
 		$tables = $wpdb->get_col( "SHOW TABLES LIKE '{$wpdb->prefix}%'" );
 
 		$optimized = 0;
 		foreach ( (array) $tables as $table ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL -- OPTIMIZE TABLE de maintenance, nom de table echappe via esc_sql.
 			$result = $wpdb->query( 'OPTIMIZE TABLE `' . esc_sql( (string) $table ) . '`' );
 			if ( false !== $result ) {
 				++$optimized;
@@ -201,6 +204,7 @@ final class CommandExecutor {
 		// Purge des transients expirés. Les transients WP sont stockés en
 		// 2 options : _transient_X (valeur) + _transient_timeout_X (expiration).
 		$now              = time();
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- nettoyage des transients expires (requete preparee), sans cache pertinent.
 		$expired_timeouts = (array) $wpdb->get_col(
 			$wpdb->prepare(
 				"SELECT option_name FROM {$wpdb->options}

@@ -2,7 +2,7 @@
 Contributors: sebg2rd
 Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
-Tested up to: 6.6
+Tested up to: 7.0
 Requires PHP: 8.1
 Stable tag: 1.5.1
 License: GPLv2 or later
@@ -37,6 +37,14 @@ This plugin relies on the **G2RD WP Manager** service operated by G2RD Web Agenc
 * On every webhook event (if enabled): event type (e.g. `user.login`, `plugin.activated`) and a small context payload (user id, plugin file name, IP for failed logins).
 
 **Nothing is sent before enrollment.** Enrollment is a manual one-shot action that requires an invitation token obtained from your manager admin.
+
+= External service: GitHub (update checks) =
+
+To provide update notifications, the plugin queries the **public GitHub Releases API** at https://api.github.com/repos/SebG2RD/g2rd-connector during WordPress' normal update checks. This request is read-only and unauthenticated: it sends no site data and only retrieves the latest published version number and its download URL.
+
+* Service: GitHub REST API (https://docs.github.com)
+* Terms of Service: https://docs.github.com/site-policy/github-terms/github-terms-of-service
+* Privacy Policy: https://docs.github.com/site-policy/privacy-policies/github-privacy-statement
 
 == Installation ==
 

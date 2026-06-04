@@ -265,10 +265,16 @@ final class SnapshotController {
 	 */
 	private function server_info(): array {
 		global $wp_version;
+
+		// SERVER_SOFTWARE est une entree superglobale : deslash + assainissement.
+		$server_software = isset( $_SERVER['SERVER_SOFTWARE'] )
+			? sanitize_text_field( wp_unslash( (string) $_SERVER['SERVER_SOFTWARE'] ) )
+			: '';
+
 		return [
 			'php_version'     => PHP_VERSION,
 			'wp_version'      => (string) $wp_version,
-			'server_software' => (string) ( $_SERVER['SERVER_SOFTWARE'] ?? '' ),
+			'server_software' => $server_software,
 			'mysql_version'   => $this->mysql_version(),
 			'memory_limit'    => (string) ini_get( 'memory_limit' ),
 			'max_execution'   => (int) ini_get( 'max_execution_time' ),
@@ -281,6 +287,7 @@ final class SnapshotController {
 		if ( ! $wpdb ) {
 			return '';
 		}
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- lecture triviale de la version MySQL pour le snapshot, sans cache pertinent.
 		$version = $wpdb->get_var( 'SELECT VERSION()' );
 		return is_string( $version ) ? $version : '';
 	}
