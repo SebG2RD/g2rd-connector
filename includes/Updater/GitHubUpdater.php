@@ -90,25 +90,37 @@ final class GitHubUpdater {
 		}
 
 		if ( version_compare( $current_version, $latest_version, '<' ) ) {
-			$update                              = new stdClass();
-			$update->id                          = self::GITHUB_REPO_URL;
-			$update->slug                        = self::PLUGIN_SLUG;
-			$update->plugin                      = $plugin_file;
-			$update->new_version                 = $latest_version;
-			$update->url                         = self::GITHUB_REPO_URL;
-			$update->package                     = $this->get_download_url( $release );
-			$update->requires                    = self::REQUIRES_WP;
-			$update->requires_php                = self::REQUIRES_PHP;
-			$update->tested                      = '6.6';
-			$update->icons                       = [];
-			$update->banners                     = [];
-			$update->banners_rtl                 = [];
-			$update->compatibility               = new stdClass();
-			$transient->response[ $plugin_file ] = $update;
+			$update                = new stdClass();
+			$update->id            = self::GITHUB_REPO_URL;
+			$update->slug          = self::PLUGIN_SLUG;
+			$update->plugin        = $plugin_file;
+			$update->new_version   = $latest_version;
+			$update->url           = self::GITHUB_REPO_URL;
+			$update->package       = $this->get_download_url( $release );
+			$update->requires      = self::REQUIRES_WP;
+			$update->requires_php  = self::REQUIRES_PHP;
+			$update->tested        = '6.6';
+			$update->icons         = [];
+			$update->banners       = [];
+			$update->banners_rtl   = [];
+			$update->compatibility = new stdClass();
+
+			// PHPStan ne connait pas la structure dynamique du transient update_plugins
+			// de WordPress (object sans schema). Guard explicite : on garantit que
+			// response existe en tant qu'array avant d'y écrire / lire.
+			$response = isset( $transient->response ) && is_array( $transient->response )
+				? $transient->response
+				: [];
+			$response[ $plugin_file ] = $update;
+			$transient->response      = $response;
 		} else {
-			// Version installée == ou > release GitHub : pas de notif. On nettoie
-			// au cas où une entrée stale traînerait dans `response`.
-			unset( $transient->response[ $plugin_file ] );
+			// Version installée >= release GitHub : pas de notif. On nettoie au cas
+			// où une entrée stale traînerait dans `response`.
+			$response = isset( $transient->response ) && is_array( $transient->response )
+				? $transient->response
+				: [];
+			unset( $response[ $plugin_file ] );
+			$transient->response = $response;
 		}
 
 		return $transient;

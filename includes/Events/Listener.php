@@ -100,7 +100,7 @@ final class Listener {
 			];
 		}
 		$user = wp_get_current_user();
-		if ( ! $user || 0 === (int) $user->ID ) {
+		if ( 0 === (int) $user->ID ) {
 			return [
 				'type' => 'unknown',
 			];
