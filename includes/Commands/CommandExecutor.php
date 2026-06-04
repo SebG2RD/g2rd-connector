@@ -18,7 +18,10 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Commands;
 
+use Automatic_Upgrader_Skin;
 use Core_Upgrader;
+use Plugin_Upgrader;
+use Theme_Upgrader;
 
 final class CommandExecutor {
 
@@ -29,6 +32,8 @@ final class CommandExecutor {
 		'delete_spam_comments',
 		'delete_post_revisions',
 		'optimize_database',
+		'update_plugin',
+		'update_theme',
 	];
 
 	/**
@@ -37,9 +42,14 @@ final class CommandExecutor {
 	 *   - [ 'status' => 'failed', 'error' => string ]
 	 *   - null si la commande est inconnue.
 	 *
+	 * Le `$payload` est optionnel pour les commandes legacy (clear_cache,
+	 * update_core, etc.) ; il est requis pour update_plugin (clé `file`) et
+	 * update_theme (clé `stylesheet`).
+	 *
+	 * @param array<string, mixed>|null $payload
 	 * @return array{status:string,result?:array<string,mixed>,error?:string}|null
 	 */
-	public static function run( string $command ): ?array {
+	public static function run( string $command, ?array $payload = null ): ?array {
 		if ( ! in_array( $command, self::ALLOWED, true ) ) {
 			return null;
 		}
@@ -52,6 +62,8 @@ final class CommandExecutor {
 				'delete_spam_comments'  => self::delete_spam_comments(),
 				'delete_post_revisions' => self::delete_post_revisions(),
 				'optimize_database'     => self::optimize_database(),
+				'update_plugin'         => self::update_plugin( (array) ( $payload ?? [] ) ),
+				'update_theme'          => self::update_theme( (array) ( $payload ?? [] ) ),
 			};
 			return [
 				'status' => 'done',
@@ -63,6 +75,116 @@ final class CommandExecutor {
 				'error'  => $e->getMessage(),
 			];
 		}
+	}
+
+	/**
+	 * Met à jour un plugin spécifique vers la dernière version disponible.
+	 *
+	 * Whitelist défensive via get_plugins() pour interdire toute injection de
+	 * chemin arbitraire (ex: ../../wp-config.php). Seuls les plugins déjà
+	 * installés peuvent être ciblés. L'install d'un plugin nouveau passe par
+	 * un autre flow (hors-scope V1).
+	 *
+	 * @param array<string, mixed> $payload Doit contenir la clé `file` (ex: "akismet/akismet.php").
+	 * @return array<string, mixed>
+	 */
+	private static function update_plugin( array $payload ): array {
+		$file = isset( $payload['file'] ) && is_string( $payload['file'] ) ? $payload['file'] : '';
+		if ( '' === $file ) {
+			throw new \RuntimeException( 'payload.file required' );
+		}
+
+		require_once ABSPATH . 'wp-admin/includes/plugin.php';
+		$plugins = get_plugins();
+		if ( ! isset( $plugins[ $file ] ) ) {
+			throw new \RuntimeException( 'plugin not installed: ' . $file );
+		}
+
+		$version_before = isset( $plugins[ $file ]['Version'] ) ? (string) $plugins[ $file ]['Version'] : '';
+
+		require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
+		require_once ABSPATH . 'wp-admin/includes/file.php';
+		require_once ABSPATH . 'wp-admin/includes/misc.php';
+
+		// Force le refresh du transient update_plugins avant l'upgrade pour
+		// garantir que Plugin_Upgrader voit la dernière release dispo.
+		delete_site_transient( 'update_plugins' );
+		if ( function_exists( 'wp_update_plugins' ) ) {
+			wp_update_plugins();
+		}
+
+		// Automatic_Upgrader_Skin = skin sans output, adapté à un contexte REST/cron.
+		$upgrader = new Plugin_Upgrader( new Automatic_Upgrader_Skin() );
+		$result   = $upgrader->upgrade( $file );
+
+		if ( is_wp_error( $result ) ) {
+			throw new \RuntimeException( $result->get_error_message() );
+		}
+
+		// Re-lire la version installée après upgrade.
+		wp_clean_plugins_cache();
+		$plugins_after = get_plugins();
+		$version_after = isset( $plugins_after[ $file ]['Version'] ) ? (string) $plugins_after[ $file ]['Version'] : $version_before;
+
+		return [
+			'updated'        => true === $result,
+			'file'           => $file,
+			'version_before' => $version_before,
+			'version_after'  => $version_after,
+		];
+	}
+
+	/**
+	 * Met à jour un thème spécifique vers la dernière version disponible.
+	 *
+	 * Whitelist défensive via wp_get_themes(). Idem update_plugin pour le reste
+	 * du fonctionnement.
+	 *
+	 * @param array<string, mixed> $payload Doit contenir la clé `stylesheet` (ex: "twentytwentyfour").
+	 * @return array<string, mixed>
+	 */
+	private static function update_theme( array $payload ): array {
+		$stylesheet = isset( $payload['stylesheet'] ) && is_string( $payload['stylesheet'] ) ? $payload['stylesheet'] : '';
+		if ( '' === $stylesheet ) {
+			throw new \RuntimeException( 'payload.stylesheet required' );
+		}
+
+		$themes = wp_get_themes();
+		if ( ! isset( $themes[ $stylesheet ] ) ) {
+			throw new \RuntimeException( 'theme not installed: ' . $stylesheet );
+		}
+
+		$version_before = (string) $themes[ $stylesheet ]->get( 'Version' );
+
+		require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
+		require_once ABSPATH . 'wp-admin/includes/file.php';
+		require_once ABSPATH . 'wp-admin/includes/misc.php';
+
+		// Force refresh transient update_themes pour ré-évaluer les GitHub
+		// Updaters tiers (cf SnapshotController::handle()).
+		delete_site_transient( 'update_themes' );
+		if ( function_exists( 'wp_update_themes' ) ) {
+			wp_update_themes();
+		}
+
+		$upgrader = new Theme_Upgrader( new Automatic_Upgrader_Skin() );
+		$result   = $upgrader->upgrade( $stylesheet );
+
+		if ( is_wp_error( $result ) ) {
+			throw new \RuntimeException( $result->get_error_message() );
+		}
+
+		// Re-lire la version installée après upgrade.
+		wp_clean_themes_cache();
+		$themes_after  = wp_get_themes();
+		$version_after = isset( $themes_after[ $stylesheet ] ) ? (string) $themes_after[ $stylesheet ]->get( 'Version' ) : $version_before;
+
+		return [
+			'updated'        => true === $result,
+			'stylesheet'     => $stylesheet,
+			'version_before' => $version_before,
+			'version_after'  => $version_after,
+		];
 	}
 
 	/**

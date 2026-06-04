@@ -45,7 +45,11 @@ final class HeartbeatJob {
 					if ( ! isset( $cmd['id'], $cmd['kind'] ) ) {
 						continue;
 					}
-					$outcome = CommandExecutor::run( (string) $cmd['kind'] );
+					// Le manager envoie un payload JSON pour les commandes qui
+					// en ont besoin (update_plugin, update_theme). Les autres
+					// commandes l'ignorent silencieusement (rétro-compat).
+					$payload = isset( $cmd['payload'] ) && is_array( $cmd['payload'] ) ? $cmd['payload'] : null;
+					$outcome = CommandExecutor::run( (string) $cmd['kind'], $payload );
 					if ( null === $outcome ) {
 						$client->send_command_result(
 							(int) $cmd['id'],

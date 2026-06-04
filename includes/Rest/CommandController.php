@@ -43,6 +43,16 @@ final class CommandController {
 							return is_string( $value ) && in_array( $value, CommandExecutor::ALLOWED, true );
 						},
 					],
+					// `payload` est optionnel et propre à chaque commande :
+					//   - update_plugin : { file: 'akismet/akismet.php' }
+					//   - update_theme  : { stylesheet: 'twentytwentyfour' }
+					//   - autres        : ignoré
+					// Validation détaillée déléguée au CommandExecutor (whitelist
+					// défensive via get_plugins() / wp_get_themes()).
+					'payload' => [
+						'required' => false,
+						'type'     => 'object',
+					],
 				],
 			]
 		);
@@ -50,8 +60,10 @@ final class CommandController {
 
 	public function handle( WP_REST_Request $request ): WP_REST_Response|WP_Error {
 		$command = (string) $request->get_param( 'command' );
+		$payload = $request->get_param( 'payload' );
+		$payload = is_array( $payload ) ? $payload : null;
 
-		$outcome = CommandExecutor::run( $command );
+		$outcome = CommandExecutor::run( $command, $payload );
 		if ( null === $outcome ) {
 			return new WP_Error(
 				'g2rd_connector_unknown_command',

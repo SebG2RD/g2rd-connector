@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 1.5.2
+Stable tag: 1.6.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,33 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.6.0 =
+
+* **2 new commands : `update_plugin` and `update_theme`**. The manager can
+  now trigger a real WordPress update on a specific plugin or theme via
+  `POST /wp-json/g2rd/v1/command` with a `payload` carrying the file path
+  (`{file: "akismet/akismet.php"}`) or stylesheet
+  (`{stylesheet: "twentytwentyfour"}`). Backed by `Plugin_Upgrader` and
+  `Theme_Upgrader` with an `Automatic_Upgrader_Skin` (no output).
+* **Defensive whitelist**: both commands check that the target is
+  actually installed via `get_plugins()` / `wp_get_themes()` before
+  invoking the upgrader. Arbitrary path injection (e.g.
+  `../../wp-config.php`) is rejected with a clear error message.
+* **Forced transient refresh before upgrade**: `delete_site_transient()`
+  on `update_plugins` / `update_themes` is called inside the upgrade
+  command itself, so custom GitHub Updaters re-evaluate against their
+  remote API right before the upgrade fires.
+* **`payload` parameter on `POST /command`**: the REST endpoint now
+  accepts an optional `payload` object alongside `command`. Legacy
+  commands (clear_cache, update_core, etc.) ignore it silently.
+* **HeartbeatJob drains payloads too**: when the manager queues an
+  `update_plugin` / `update_theme` command, the cron drain reads the
+  `payload` from the response and passes it to
+  `CommandExecutor::run()`.
+* **`CommandExecutor::run()` signature extended** with an optional
+  second `$payload` parameter. Backwards compatible with v1.5.x
+  callers that only pass the command name.
 
 = 1.5.2 =
 
