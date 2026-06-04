@@ -1,0 +1,53 @@
+name: Plugin Check
+
+# Lance le Plugin Check officiel de WordPress.org (action wordpress/plugin-check-action)
+# sur le plugin a chaque push sur main et chaque PR. Donne le rapport automatise de
+# conformite au repertoire wp.org : securite (escaping, sanitization, nonces), i18n,
+# validite du readme.txt, en-tetes, requetes DB, scripts enqueued, etc.
+#
+# Cf https://github.com/WordPress/plugin-check-action
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write   # permet les commentaires inline sur les PR
+
+concurrency:
+  group: plugin-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plugin-check:
+    name: WordPress Plugin Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Plugin Check
+        uses: wordpress/plugin-check-action@v1
+        with:
+          build-dir: './'
+          slug: g2rd-connector
+          wp-version: latest
+          # Exclut le code de dev / outillage NON livre dans le ZIP wp.org
+          # (cf les excludes rsync de release.yml). Le plugin charge ses classes
+          # en PSR-4 via includes/autoload.php, donc vendor/ n'est pas embarque.
+          exclude-directories: |
+            vendor
+            node_modules
+            tools
+            dist
+            tests
+            assets/admin/src
+            assets/admin/build
+            .github
+            .claude
+          # Phase initiale : on gate sur les ERREURS. Les warnings sont rapportes
+          # dans le log mais ne cassent pas le build (a durcir une fois le code
+          # stabilise). NOTE: le self-updater GitHub peut generer des findings
+          # propres a la distribution hors wp.org — a arbitrer ensuite.
+          ignore-warnings: true
