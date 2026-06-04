@@ -17,6 +17,13 @@
         <!-- Code PHP 8.1 moderne : on autorise la syntaxe courte des tableaux ([] plutôt que array()). -->
         <exclude name="Universal.Arrays.DisallowShortArraySyntax"/>
         <exclude name="Generic.Arrays.DisallowShortArraySyntax"/>
+        <!-- Règles d'alignement automatique (double arrow, equals sign) désactivées :
+             elles produisent du churn à chaque ajout/renommage de variable (la ligne
+             la plus longue dicte l'alignement des autres, donc toute nouvelle clé
+             modifie tout le bloc). Cosmétique sans valeur ajoutée, friction CI réelle.
+             Pattern adopté par de nombreux projets WP modernes (Yoast, ACF, etc.). -->
+        <exclude name="WordPress.Arrays.MultipleStatementAlignment"/>
+        <exclude name="Generic.Formatting.MultipleStatementAlignment"/>
     </rule>
 
     <!-- WordPress-Docs (docblocks de classes/fonctions obligatoires) est désactivé
