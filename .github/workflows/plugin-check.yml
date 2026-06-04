@@ -1,11 +1,15 @@
 name: Plugin Check
 
-# Lance le Plugin Check officiel de WordPress.org (action wordpress/plugin-check-action)
-# sur le plugin a chaque push sur main et chaque PR. Donne le rapport automatise de
-# conformite au repertoire wp.org : securite (escaping, sanitization, nonces), i18n,
-# validite du readme.txt, en-tetes, requetes DB, scripts enqueued, etc.
+# Lance le Plugin Check officiel de WordPress.org sur le plugin a chaque push/PR.
 #
-# Cf https://github.com/WordPress/plugin-check-action
+# Approche explicite WP-CLI (calquee sur release.yml) plutot que l'action
+# wordpress/plugin-check-action : celle-ci s'appuie sur wp-env (Docker) et echoue
+# de maniere opaque ("Environment not initialized"). Ici on maitrise chaque etape :
+# MySQL + WP-CLI + install du plugin (layout wp.org propre) + `wp plugin check`.
+#
+# On gate sur les ERREURS (les warnings sont affiches mais n'echouent pas le build,
+# a durcir plus tard). Le self-updater GitHub peut generer des findings propres a
+# la distribution hors wp.org — a arbitrer ensuite.
 on:
   push:
     branches: [main]
@@ -13,7 +17,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write   # permet les commentaires inline sur les PR
 
 concurrency:
   group: plugin-check-${{ github.ref }}
@@ -24,30 +27,125 @@ jobs:
     name: WordPress Plugin Check
     runs-on: ubuntu-latest
 
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: wp_pc
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run Plugin Check
-        uses: wordpress/plugin-check-action@v1
+      - name: Setup PHP 8.2 + WP-CLI
+        uses: shivammathur/setup-php@v2
         with:
-          build-dir: './'
-          slug: g2rd-connector
-          wp-version: latest
-          # Exclut le code de dev / outillage NON livre dans le ZIP wp.org
-          # (cf les excludes rsync de release.yml). Le plugin charge ses classes
-          # en PSR-4 via includes/autoload.php, donc vendor/ n'est pas embarque.
-          exclude-directories: |
-            vendor
-            node_modules
-            tools
-            dist
-            tests
-            assets/admin/src
-            assets/admin/build
-            .github
-            .claude
-          # Phase initiale : on gate sur les ERREURS. Les warnings sont rapportes
-          # dans le log mais ne cassent pas le build (a durcir une fois le code
-          # stabilise). NOTE: le self-updater GitHub peut generer des findings
-          # propres a la distribution hors wp.org — a arbitrer ensuite.
-          ignore-warnings: true
+          php-version: '8.2'
+          tools: wp-cli
+          coverage: none
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build admin assets
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+          npm run build
+
+      - name: Build clean plugin directory (wp.org layout)
+        run: |
+          set -euo pipefail
+          mkdir -p dist/g2rd-connector
+          # Memes exclusions que le ZIP de release.yml : on ne livre ni vendor/
+          # (PSR-4 via includes/autoload.php), ni l'outillage de dev.
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.claude' \
+            --exclude='node_modules' \
+            --exclude='vendor' \
+            --exclude='dist' \
+            --exclude='tools' \
+            --exclude='tests' \
+            --exclude='assets/admin/src' \
+            --exclude='*.zip' \
+            --exclude='*.log' \
+            --exclude='*.ps1' \
+            --exclude='phpcs*.xml*' \
+            --exclude='phpstan*.neon*' \
+            --exclude='composer.json' \
+            --exclude='composer.lock' \
+            --exclude='package.json' \
+            --exclude='package-lock.json' \
+            --exclude='.gitignore' \
+            --exclude='.gitattributes' \
+            ./ dist/g2rd-connector/
+
+      - name: Install WordPress (latest)
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            mysql -h 127.0.0.1 -uroot -proot -e "SELECT 1" >/dev/null 2>&1 && { echo "MySQL pret."; break; }
+            [ "$i" -eq 30 ] && { echo "::error::MySQL indisponible"; exit 1; }
+            sleep 2
+          done
+          wp core download --path=wp --version=latest
+          wp config create --path=wp --dbname=wp_pc --dbuser=root --dbpass=root --dbhost=127.0.0.1 --skip-check
+          wp core install --path=wp \
+            --url=http://example.test --title="Plugin Check" \
+            --admin_user=admin --admin_password='AdminPass!2026' \
+            --admin_email=admin@example.test --skip-email
+          cp -r dist/g2rd-connector wp/wp-content/plugins/g2rd-connector
+
+      - name: Install Plugin Check tool + activate plugin
+        run: |
+          set -euo pipefail
+          wp plugin install plugin-check --activate --path=wp
+          wp plugin activate g2rd-connector --path=wp
+          wp --path=wp plugin list
+
+      - name: Run Plugin Check (gate sur les erreurs)
+        run: |
+          set -uo pipefail
+          echo "::group::Rapport Plugin Check (table, warnings ignores)"
+          wp plugin check g2rd-connector --path=wp --ignore-warnings --format=table || true
+          echo "::endgroup::"
+
+          wp plugin check g2rd-connector --path=wp --ignore-warnings --format=json > pc.json 2> pc.err || true
+          echo "----- JSON brut -----"
+          cat pc.json || true
+          echo
+          echo "----- stderr -----"
+          cat pc.err || true
+
+          ERR=$(php -r '
+            $c = trim((string) @file_get_contents("pc.json"));
+            if ($c === "" || $c === "[]") { echo 0; exit; }
+            $j = json_decode($c, true);
+            if (!is_array($j)) { echo -1; exit; }
+            $n = 0;
+            array_walk_recursive($j, function ($v, $k) use (&$n) {
+              if ($k === "type" && strtoupper((string) $v) === "ERROR") { $n++; }
+            });
+            echo $n;
+          ')
+          echo "Erreurs Plugin Check : ${ERR}"
+
+          if [ "${ERR}" = "-1" ]; then
+            echo "::error::Sortie Plugin Check illisible — le run a probablement echoue (voir stderr)."
+            exit 1
+          fi
+          if [ "${ERR:-0}" -gt 0 ]; then
+            echo "::error::Plugin Check a trouve ${ERR} erreur(s) — voir le tableau ci-dessus."
+            exit 1
+          fi
+          echo "✅ Aucune erreur Plugin Check (warnings ignores pour l'instant)."
