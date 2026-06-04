@@ -8,8 +8,8 @@ name: Plugin Check
 # MySQL + WP-CLI + install du plugin (layout wp.org propre) + `wp plugin check`.
 #
 # On gate sur les ERREURS (les warnings sont affiches mais n'echouent pas le build,
-# a durcir plus tard). Le self-updater GitHub peut generer des findings propres a
-# la distribution hors wp.org — a arbitrer ensuite.
+# a durcir plus tard). Le code 'plugin_updater_detected' est ignore VOLONTAIREMENT :
+# le self-updater GitHub est requis pour la distribution hors wp.org.
 on:
   push:
     branches: [main]
@@ -116,36 +116,52 @@ jobs:
       - name: Run Plugin Check (gate sur les erreurs)
         run: |
           set -uo pipefail
-          echo "::group::Rapport Plugin Check (table, warnings ignores)"
-          wp plugin check g2rd-connector --path=wp --ignore-warnings --format=table || true
+
+          echo "::group::Rapport Plugin Check complet (table, warnings inclus)"
+          wp plugin check g2rd-connector --path=wp --format=table || true
           echo "::endgroup::"
 
-          wp plugin check g2rd-connector --path=wp --ignore-warnings --format=json > pc.json 2> pc.err || true
-          echo "----- JSON brut -----"
-          cat pc.json || true
-          echo
-          echo "----- stderr -----"
-          cat pc.err || true
+          set +e
+          wp plugin check g2rd-connector --path=wp --ignore-warnings --format=json > pc.json 2> pc.err
+          CHECK_RC=$?
+          set -e
+          echo "wp plugin check exit code : ${CHECK_RC}"
+          echo "----- JSON brut -----"; cat pc.json || true
+          echo; echo "----- stderr -----"; cat pc.err || true
 
-          ERR=$(php -r '
-            $c = trim((string) @file_get_contents("pc.json"));
-            if ($c === "" || $c === "[]") { echo 0; exit; }
-            $j = json_decode($c, true);
-            if (!is_array($j)) { echo -1; exit; }
-            $n = 0;
-            array_walk_recursive($j, function ($v, $k) use (&$n) {
-              if ($k === "type" && strtoupper((string) $v) === "ERROR") { $n++; }
-            });
-            echo $n;
+          # plugin-check --format=json sort un bloc "FILE: <path>" PUIS un tableau
+          # JSON par fichier (pas un JSON global) : on parse ligne a ligne les
+          # tableaux. On ignore VOLONTAIREMENT 'plugin_updater_detected' : le
+          # self-updater GitHub est requis pour la distribution hors wp.org
+          # (a arbitrer si soumission au repertoire wp.org).
+          RESULT=$(php -r '
+            $ignored = ["plugin_updater_detected"];
+            $errors = 0; $ign = 0;
+            foreach ((@file("pc.json", FILE_IGNORE_NEW_LINES) ?: []) as $l) {
+              $l = trim($l);
+              if ($l === "" || $l[0] !== "[") { continue; }
+              $arr = json_decode($l, true);
+              if (!is_array($arr)) { continue; }
+              foreach ($arr as $f) {
+                if (($f["type"] ?? "") !== "ERROR") { continue; }
+                if (in_array($f["code"] ?? "", $ignored, true)) { $ign++; continue; }
+                $errors++;
+              }
+            }
+            echo $errors . " " . $ign;
           ')
-          echo "Erreurs Plugin Check : ${ERR}"
+          ERRORS=$(echo "$RESULT" | awk '{print $1}')
+          IGNORED=$(echo "$RESULT" | awk '{print $2}')
+          echo "Erreurs bloquantes : ${ERRORS:-0} | ignorees (self-updater) : ${IGNORED:-0}"
 
-          if [ "${ERR}" = "-1" ]; then
-            echo "::error::Sortie Plugin Check illisible — le run a probablement echoue (voir stderr)."
+          # Garde-fou : commande en echec ET rien de parsable -> vrai echec d'infra.
+          if [ "${CHECK_RC}" -ne 0 ] && [ "${ERRORS:-0}" -eq 0 ] && [ "${IGNORED:-0}" -eq 0 ] && ! grep -q '^\[' pc.json; then
+            echo "::error::wp plugin check a echoue sans findings exploitables (voir stderr)."
             exit 1
           fi
-          if [ "${ERR:-0}" -gt 0 ]; then
-            echo "::error::Plugin Check a trouve ${ERR} erreur(s) — voir le tableau ci-dessus."
+
+          if [ "${ERRORS:-0}" -gt 0 ]; then
+            echo "::error::Plugin Check : ${ERRORS} erreur(s) bloquante(s) — voir le tableau ci-dessus."
             exit 1
           fi
-          echo "✅ Aucune erreur Plugin Check (warnings ignores pour l'instant)."
+          echo "✅ Aucune erreur bloquante Plugin Check (warnings + self-updater ignores)."

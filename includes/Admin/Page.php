@@ -51,7 +51,16 @@ final class Page {
 	}
 
 	public function register_settings(): void {
-		register_setting( 'g2rd_connector', Settings::OPTION_KEY );
+		register_setting(
+			'g2rd_connector',
+			Settings::OPTION_KEY,
+			[
+				'type'              => 'array',
+				'sanitize_callback' => [ Settings::class, 'sanitize' ],
+				'default'           => Settings::defaults(),
+				'show_in_rest'      => false,
+			]
+		);
 	}
 
 	/**

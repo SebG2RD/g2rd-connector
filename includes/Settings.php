@@ -35,6 +35,42 @@ final class Settings {
 	}
 
 	/**
+	 * Sanitize callback pour register_setting() : nettoie chaque champ selon
+	 * son type avant stockage. Les cles non soumises conservent leur valeur
+	 * courante (merge sur self::all()).
+	 *
+	 * @param mixed $value Valeur brute soumise via l'API Settings.
+	 * @return array<string, mixed>
+	 */
+	public static function sanitize( mixed $value ): array {
+		if ( ! is_array( $value ) ) {
+			return self::all();
+		}
+
+		$clean = [];
+		if ( isset( $value['manager_url'] ) ) {
+			$clean['manager_url'] = esc_url_raw( (string) $value['manager_url'] );
+		}
+		if ( array_key_exists( 'site_id', $value ) ) {
+			$clean['site_id'] = ( null === $value['site_id'] || '' === $value['site_id'] )
+				? null
+				: absint( $value['site_id'] );
+		}
+		foreach ( [ 'site_token', 'enrolled_at', 'last_heartbeat_at' ] as $text_key ) {
+			if ( isset( $value[ $text_key ] ) ) {
+				$clean[ $text_key ] = sanitize_text_field( (string) $value[ $text_key ] );
+			}
+		}
+		foreach ( [ 'heartbeat_enabled', 'events_enabled', 'remote_commands_enabled' ] as $flag ) {
+			if ( isset( $value[ $flag ] ) ) {
+				$clean[ $flag ] = (bool) $value[ $flag ];
+			}
+		}
+
+		return array_replace_recursive( self::all(), $clean );
+	}
+
+	/**
 	 * @return array<string, mixed>
 	 */
 	public static function all(): array {
