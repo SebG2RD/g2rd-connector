@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 1.6.0
+Stable tag: 1.6.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,12 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.6.1 =
+
+* **Plugin Check conformance**: exception messages in the `update_plugin` /
+  `update_theme` commands are now escaped with `esc_html()`
+  (`WordPress.Security.EscapeOutput.ExceptionNotEscaped`). No behaviour change.
 
 = 1.6.0 =
 
