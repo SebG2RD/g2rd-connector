@@ -66,6 +66,9 @@ final class GitHubUpdater {
 		if ( ! is_object( $transient ) ) {
 			return $transient;
 		}
+		// WordPress passe un stdClass dont la structure (`checked`, `response`) est
+		// dynamique : on l'indique à PHPStan pour autoriser l'écriture de `response`.
+		/** @var stdClass $transient */
 		// WordPress n'a pas encore initialisé le transient (premier check) — on ne
 		// touche pas, sinon on perdrait `checked` qui doit être rempli par WP avant.
 		if ( empty( $transient->checked ) ) {

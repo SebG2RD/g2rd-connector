@@ -34,21 +34,40 @@ final class SnapshotController {
 	public function handle(): WP_REST_Response {
 		Settings::update( [ 'last_heartbeat_at' => gmdate( 'c' ) ] );
 
-		// Force le rafraîchissement des caches WP AVANT toute lecture. Sans ça,
-		// une MAJ récente effectuée hors du flow standard (GitHub updater custom,
-		// FTP, WP-CLI, etc.) laisse des données obsolètes dans :
-		//  - le cache d'objet `wp_get_themes()` / `get_plugins()`
-		//  - les transients `update_themes`, `update_plugins`, `update_core`
-		// Les helpers ci-dessous reconstruisent ces caches a partir du filesystem
-		// et du wp.org API (coût ~1-3s, acceptable pour un sync manuel).
 		require_once ABSPATH . 'wp-admin/includes/update.php';
 		require_once ABSPATH . 'wp-admin/includes/translation-install.php';
+
+		// Force un rafraîchissement TOTAL des caches WP avant lecture du snapshot.
+		//
+		// Deux niveaux de cache sont en jeu :
+		//
+		// 1. Cache d'objet `wp_get_themes()` / `get_plugins()` — lié au filesystem.
+		//    Nettoyé par wp_clean_themes_cache / wp_clean_plugins_cache.
+		//
+		// 2. Transients `update_themes`, `update_plugins`, `update_core` — lectures
+		//    des updates dispo. Crucial : wp_update_themes() / wp_update_plugins()
+		//    / wp_version_check() utilisent un "minimum_period" (12h) qui les fait
+		//    SKIP silencieusement si le transient a été touché récemment.
+		//
+		//    Conséquence : si un GitHub Updater tiers (ex : g2rd-theme via
+		//    class-github-updater.php) a injecté son entrée puis qu'une nouvelle
+		//    release est publiée, le transient reste figé jusqu'au prochain cron
+		//    WP. Le manager reçoit alors un snapshot incorrect ("tout est à jour"
+		//    alors qu'une release plus récente existe, ou inversement).
+		//
+		//    On supprime explicitement les transients pour forcer WordPress à
+		//    re-dispatcher les hooks `pre_set_site_transient_update_*`, ce qui
+		//    permet aux updaters custom de ré-évaluer leur état contre l'API
+		//    distante (wp.org / GitHub). Coût : ~1-3s par sync, acceptable.
 		if ( function_exists( 'wp_clean_themes_cache' ) ) {
 			wp_clean_themes_cache();
 		}
 		if ( function_exists( 'wp_clean_plugins_cache' ) ) {
 			wp_clean_plugins_cache();
 		}
+		delete_site_transient( 'update_core' );
+		delete_site_transient( 'update_themes' );
+		delete_site_transient( 'update_plugins' );
 		if ( function_exists( 'wp_version_check' ) ) {
 			wp_version_check( [], true );
 		}
