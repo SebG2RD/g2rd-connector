@@ -42,6 +42,7 @@ final class SnapshotController {
 		// Les helpers ci-dessous reconstruisent ces caches a partir du filesystem
 		// et du wp.org API (coût ~1-3s, acceptable pour un sync manuel).
 		require_once ABSPATH . 'wp-admin/includes/update.php';
+		require_once ABSPATH . 'wp-admin/includes/translation-install.php';
 		if ( function_exists( 'wp_clean_themes_cache' ) ) {
 			wp_clean_themes_cache();
 		}
@@ -60,11 +61,12 @@ final class SnapshotController {
 
 		return new WP_REST_Response(
 			[
-				'site'    => $this->site_info(),
-				'wp_core' => $this->wp_core(),
-				'plugins' => $this->plugins(),
-				'themes'  => $this->themes(),
-				'server'  => $this->server_info(),
+				'site'         => $this->site_info(),
+				'wp_core'      => $this->wp_core(),
+				'plugins'      => $this->plugins(),
+				'themes'       => $this->themes(),
+				'translations' => $this->translations(),
+				'server'       => $this->server_info(),
 			],
 			200
 		);
@@ -201,6 +203,42 @@ final class SnapshotController {
 		}
 
 		return $out;
+	}
+
+	/**
+	 * Inventaire des traductions installées + MAJ disponibles.
+	 *
+	 * Lecture du transient `update_core` qui contient les translation updates
+	 * détectés par wp_version_check([], true). Pour chaque entrée, on retourne
+	 * le locale, le type (core/plugin/theme), l'identifiant (slug) et la version.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function translations(): array {
+		$available_updates = function_exists( 'wp_get_translation_updates' ) ? wp_get_translation_updates() : [];
+
+		$updates = [];
+		foreach ( (array) $available_updates as $update ) {
+			if ( ! is_object( $update ) ) {
+				continue;
+			}
+			$updates[] = [
+				'type'     => (string) ( $update->type ?? '' ),       // core | plugin | theme
+				'slug'     => (string) ( $update->slug ?? '' ),       // ex: g2rd-theme, akismet, default (core)
+				'language' => (string) ( $update->language ?? '' ),    // ex: fr_FR
+				'version'  => (string) ( $update->version ?? '' ),     // version cible
+				'updated'  => (string) ( $update->updated ?? '' ),     // ISO8601
+			];
+		}
+
+		$installed_languages = function_exists( 'get_available_languages' ) ? get_available_languages() : [];
+
+		return [
+			'installed_languages' => array_values( (array) $installed_languages ),
+			'site_language'       => (string) get_locale(),
+			'updates_available'   => $updates,
+			'updates_count'       => count( $updates ),
+		];
 	}
 
 	/**

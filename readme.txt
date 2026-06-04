@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 6.6
 Requires PHP: 8.1
-Stable tag: 0.1.3
+Stable tag: 0.1.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -69,6 +69,27 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 0.1.4 =
+
+* **3 new maintenance commands** the manager can trigger remotely (extends the
+  Phase 3 command queue):
+  * `delete_spam_comments` — purge all comments marked as spam in one batch
+    via `wp_delete_comment(force_delete=true)`. Returns deleted count.
+  * `delete_post_revisions` — drop all rows of `post_type='revision'` to
+    reclaim DB space. Uses `wp_delete_post_revision()` (no trash bin).
+  * `optimize_database` — `OPTIMIZE TABLE` on every wp-prefixed table,
+    purge of expired transients (`_transient_timeout_*` < now), and cleanup
+    of orphaned transient timeout options.
+* **Upgrade events now include actor**: `Events\Listener::on_upgrader_complete()`
+  now captures the WP user that triggered a core/plugin/theme/translation
+  update (`wp_get_current_user()`). If the event comes from the WP cron auto-
+  update, actor is `cron`. Sent to the manager for proper audit attribution.
+* **Translations inventory in the snapshot**: new `translations` section in
+  `GET /wp-json/g2rd/v1/snapshot` payload listing installed languages,
+  current locale, and available `.mo`/`.po` updates (with type/slug/language/
+  version). The manager can now display and act on translation updates the
+  same way it handles plugin/theme updates.
 
 = 0.1.3 =
 

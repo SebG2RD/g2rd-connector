@@ -203,7 +203,7 @@ final class GitHubUpdater {
 		// nommé (asset release.yml), il suffit d'aligner le dossier sur le slug.
 		if ( $wp_filesystem->is_file( $source . self::PLUGIN_SLUG . '.php' ) ) {
 			$source_dir = basename( untrailingslashit( $source ) );
-			if ( $source_dir === self::PLUGIN_SLUG ) {
+			if ( self::PLUGIN_SLUG === $source_dir ) {
 				return $source;
 			}
 			return $this->move_to_slug( $source, $wp_filesystem );
@@ -219,7 +219,7 @@ final class GitHubUpdater {
 				}
 				$inner = trailingslashit( $source . $name );
 				if ( $wp_filesystem->is_file( $inner . self::PLUGIN_SLUG . '.php' ) ) {
-					if ( $name === self::PLUGIN_SLUG ) {
+					if ( self::PLUGIN_SLUG === $name ) {
 						return $inner;
 					}
 					return $this->move_to_slug( $inner, $wp_filesystem );

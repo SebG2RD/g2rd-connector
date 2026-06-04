@@ -60,21 +60,58 @@ final class Listener {
 	}
 
 	/**
+	 * Hook upgrader_process_complete : capture le type de MAJ + items + acteur.
+	 *
+	 * v0.1.4 : on inclut désormais l'utilisateur WP qui a déclenché la MAJ
+	 * (wp_get_current_user()). Si l'upgrade vient du cron WP auto-update, le
+	 * user current est anonyme — on stocke alors 'cron' comme acteur.
+	 *
 	 * @param array<string, mixed> $hook_extra
 	 */
 	public function on_upgrader_complete( \WP_Upgrader $upgrader, array $hook_extra ): void {
+		unset( $upgrader ); // param impose par le filter, non utilise
+
 		$type   = (string) ( $hook_extra['type'] ?? '' );
 		$action = (string) ( $hook_extra['action'] ?? '' );
 		if ( '' === $type || 'update' !== $action ) {
 			return;
 		}
+
 		$this->dispatch(
 			$type . '.updated',
 			[
 				'type'  => $type,
 				'items' => $hook_extra[ $type . 's' ] ?? ( $hook_extra[ $type ] ?? null ),
+				'actor' => $this->current_actor(),
 			]
 		);
+	}
+
+	/**
+	 * Identifie l'utilisateur WP qui a declenche l'action en cours, ou 'cron'
+	 * si l'action vient du planificateur automatique.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function current_actor(): array {
+		if ( wp_doing_cron() ) {
+			return [
+				'type' => 'cron',
+			];
+		}
+		$user = wp_get_current_user();
+		if ( ! $user || 0 === (int) $user->ID ) {
+			return [
+				'type' => 'unknown',
+			];
+		}
+		return [
+			'type'       => 'user',
+			'user_id'    => (int) $user->ID,
+			'user_login' => (string) $user->user_login,
+			'user_email' => (string) $user->user_email,
+			'roles'      => array_values( (array) $user->roles ),
+		];
 	}
 
 	/**
