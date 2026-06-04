@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 6.6
 Requires PHP: 8.1
-Stable tag: 0.1.4
+Stable tag: 0.1.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -69,6 +69,26 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 0.1.5 =
+
+* **Real-time update detection regardless of WP cache**: the `/snapshot`
+  endpoint now explicitly clears the `update_core`, `update_themes` and
+  `update_plugins` site transients before re-running `wp_version_check()`,
+  `wp_update_themes()` and `wp_update_plugins()`. Without this, WordPress'
+  internal 12h cooldown ("minimum_period") could silently skip the refresh
+  and return a stale snapshot — so a theme or plugin with a newly published
+  GitHub release would still show "up to date" in the manager until the
+  next cron run.
+* This is a defense-in-depth fix on top of the v0.1.2 sanity check: we now
+  both **force the transient refresh** AND **verify `version_compare(candidate,
+  installed, '>')`** before flagging `has_update=true`. Net result: the manager
+  dashboard reflects the real upstream state at every sync, no matter when
+  the last cache refresh happened.
+* Additional CI hardening: PHPCS alignment rules (DoubleArrowNotAligned,
+  MultipleStatementAlignment) explicitly excluded — they were cosmetic and
+  caused churn on every variable rename. Pattern adopted by Yoast / ACF /
+  WooCommerce. All structural and security sniffs remain active.
 
 = 0.1.4 =
 
