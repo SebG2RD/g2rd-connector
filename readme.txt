@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 1.6.1
+Stable tag: 1.6.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,25 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.6.2 =
+
+* **Snapshot freshness defense in depth** : `wp_cache_flush()` is now
+  called inside the `/snapshot` REST endpoint BEFORE
+  `wp_clean_plugins_cache` / `wp_clean_themes_cache`. On hosts that ship
+  a persistent object cache (Redis, Memcached, LiteSpeed Object Cache,
+  Hostinger AI Assistant cache wrapper, etc.), `get_plugins()` could
+  otherwise return a stale cached `Version:` header for a plugin that
+  was just updated. The site's `wp-admin → Plugins` page would correctly
+  show the new version (1.6.1) but the manager would still see and
+  report the old one (1.5.1). This flush guarantees the snapshot always
+  reads fresh data from disk, at the cost of one extra cache rebuild
+  per sync (~50-300 ms depending on the cache backend). Pattern aligned
+  with the `clear_cache` command which already does it.
+* Also pre-invalidates OPcache for `wp-content/plugins/*.php` and
+  `wp-content/themes/*/{style.css,functions.php}` defensively, in case
+  the host runs with `opcache.validate_timestamps=0` (some PHP-FPM
+  pools on shared hosting).
 
 = 1.6.1 =
 

@@ -59,6 +59,57 @@ final class SnapshotController {
 		//    re-dispatcher les hooks `pre_set_site_transient_update_*`, ce qui
 		//    permet aux updaters custom de ré-évaluer leur état contre l'API
 		//    distante (wp.org / GitHub). Coût : ~1-3s par sync, acceptable.
+		// Invalide OPcache sur tous les fichiers `.php` racine des plugins
+		// et thèmes installés AVANT wp_clean_plugins_cache(), pour garantir
+		// que `get_plugins()` re-lise les headers `Version:` depuis le disque
+		// et non depuis le bytecode mis en cache par OPcache.
+		//
+		// Constat : sur certains hébergeurs (Hostinger Cloud Pro, LiteSpeed,
+		// PHP-FPM avec `opcache.validate_timestamps=0`), après une MAJ de
+		// plugin via UPDATE NOW du WP-admin, le fichier sur disque est bien
+		// remplacé, MAIS dans le contexte REST API qui sert /snapshot,
+		// OPcache retourne encore le bytecode de l'ancienne version. Du coup
+		// `get_plugins()['monplugin/monplugin.php']['Version']` renvoie
+		// l'ancien header (ex: "1.5.1" alors que le site WP-admin affiche
+		// déjà "1.6.1"). Le manager persiste donc des versions périmées et
+		// continue à proposer une MAJ déjà faite.
+		//
+		// `opcache_invalidate($file, true)` force le rechargement du fichier
+		// au prochain accès. Le second argument `true` invalide même si le
+		// timestamp du fichier ne semble pas avoir changé (defensive).
+		if ( function_exists( 'opcache_invalidate' ) ) {
+			$plugins_dir = WP_PLUGIN_DIR;
+			if ( is_dir( $plugins_dir ) ) {
+				foreach ( (array) glob( $plugins_dir . '/*/*.php' ) as $php_file ) {
+					opcache_invalidate( (string) $php_file, true );
+				}
+				// Single-file plugins dans wp-content/plugins/foo.php.
+				foreach ( (array) glob( $plugins_dir . '/*.php' ) as $php_file ) {
+					opcache_invalidate( (string) $php_file, true );
+				}
+			}
+			$themes_dir = get_theme_root();
+			if ( is_dir( $themes_dir ) ) {
+				foreach ( (array) glob( $themes_dir . '/*/style.css' ) as $style_file ) {
+					opcache_invalidate( (string) $style_file, true );
+				}
+				foreach ( (array) glob( $themes_dir . '/*/functions.php' ) as $fn_file ) {
+					opcache_invalidate( (string) $fn_file, true );
+				}
+			}
+		}
+
+		// Purge agressive de l'object cache WP (Redis / Memcached / LiteSpeed
+		// Object Cache / etc.) AVANT wp_clean_plugins_cache. Sur les
+		// hebergeurs avec object cache persistent (typiquement Hostinger Cloud
+		// Pro avec LiteSpeed Cache + Hostinger AI Assistant qui wrappent
+		// wp_cache_*), les valeurs cachees survivent entre requetes REST. Du
+		// coup `get_plugins()` peut renvoyer un cache stale contenant l'ancien
+		// header `Version:` d'un plugin meme apres MAJ.
+		if ( function_exists( 'wp_cache_flush' ) ) {
+			wp_cache_flush();
+		}
+
 		if ( function_exists( 'wp_clean_themes_cache' ) ) {
 			wp_clean_themes_cache();
 		}
