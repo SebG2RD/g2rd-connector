@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 1.6.2
+Stable tag: 1.6.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,15 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.6.3 =
+
+* **Fix: an active plugin is no longer deactivated by `update_plugin`**.
+  `Plugin_Upgrader::upgrade()` silently deactivates an active plugin before the
+  file swap (core's `deactivate_plugin_before_upgrade`) and does not reactivate
+  it in a REST/cron context. The command now records the activation state before
+  the upgrade and silently reactivates the plugin afterwards (network-aware).
+  The command response gains `was_active` and `reactivated` booleans.
 
 = 1.6.2 =
 

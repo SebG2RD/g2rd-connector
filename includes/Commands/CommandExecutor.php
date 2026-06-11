@@ -102,6 +102,13 @@ final class CommandExecutor {
 
 		$version_before = isset( $plugins[ $file ]['Version'] ) ? (string) $plugins[ $file ]['Version'] : '';
 
+		// État d'activation AVANT l'upgrade : Plugin_Upgrader::upgrade() désactive
+		// silencieusement un plugin actif (hook deactivate_plugin_before_upgrade du
+		// coeur) et ne le RÉACTIVE PAS dans ce contexte REST/cron. On mémorise donc
+		// l'état pour le rétablir après l'upgrade — un plugin actif doit le rester.
+		$was_active         = is_plugin_active( $file );
+		$was_network_active = is_multisite() && is_plugin_active_for_network( $file );
+
 		require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
 		require_once ABSPATH . 'wp-admin/includes/file.php';
 		require_once ABSPATH . 'wp-admin/includes/misc.php';
@@ -121,6 +128,16 @@ final class CommandExecutor {
 			throw new \RuntimeException( esc_html( $result->get_error_message() ) );
 		}
 
+		// Réactivation : si le plugin était actif et que l'upgrade l'a désactivé, on
+		// le réactive. Mode silencieux ($silent = true) = symétrique de la
+		// désactivation silencieuse du coeur (ne relance pas les hooks d'activation,
+		// le plugin ayant déjà été activé auparavant).
+		$reactivated = $was_active;
+		if ( $was_active && ! is_plugin_active( $file ) ) {
+			$activated   = activate_plugin( $file, '', $was_network_active, true );
+			$reactivated = ! is_wp_error( $activated );
+		}
+
 		// Re-lire la version installée après upgrade.
 		wp_clean_plugins_cache();
 		$plugins_after = get_plugins();
@@ -131,6 +148,8 @@ final class CommandExecutor {
 			'file'           => $file,
 			'version_before' => $version_before,
 			'version_after'  => $version_after,
+			'was_active'     => $was_active,
+			'reactivated'    => $reactivated,
 		];
 	}
 
