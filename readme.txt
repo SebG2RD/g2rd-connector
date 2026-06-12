@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 1.6.3
+Stable tag: 1.6.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,22 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.6.4 =
+
+* **Fix: a plugin/theme that is already up to date is no longer reported as
+  needing an update**. The `/snapshot` endpoint read `version_installed` from
+  `get_plugins()`, which caches the whole plugin list in the `plugins` object
+  cache group. On hosts with a persistent object cache (LiteSpeed / Redis on
+  Hostinger), that cache could survive `wp_cache_flush()` /
+  `wp_clean_plugins_cache()` between REST requests and return the pre-update
+  `Version:` header (e.g. `2.5.0`) even though `wp-admin → Plugins` and the disk
+  already showed `2.6.0`. The manager then kept proposing an update that was
+  already applied. The `wp_cache_flush()` added in 1.6.2 was not enough on these
+  hosts. The endpoint now reads the installed version **fresh from each file**
+  via `get_plugin_data()` / `get_file_data()` (a direct file read, bypassing the
+  object cache entirely) for both plugins and themes — exactly what the
+  `wp-admin` Plugins screen does.
 
 = 1.6.3 =
 

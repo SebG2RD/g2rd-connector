@@ -203,7 +203,14 @@ final class SnapshotController {
 
 		$out = [];
 		foreach ( $all as $file => $data ) {
-			$installed  = (string) ( $data['Version'] ?? '' );
+			// Version installee lue FRAICHEMENT sur le fichier (cf fresh_plugin_version) :
+			// get_plugins() ci-dessus peut renvoyer un header `Version:` perime servi par
+			// un object cache persistant (LiteSpeed / Redis sur Hostinger) qui survit a
+			// wp_cache_flush() / wp_clean_plugins_cache() dans le contexte REST. D'ou des
+			// MAJ deja faites qui restent proposees (ex: manager 2.5.0 alors que wp-admin
+			// affiche 2.6.0). get_plugin_data() relit le fichier directement (get_file_data,
+			// sans cache d'objet) -> version reelle, comme wp-admin.
+			$installed  = $this->fresh_plugin_version( $file, (string) ( $data['Version'] ?? '' ) );
 			$latest     = $installed;
 			$has_update = false;
 			if ( isset( $updates_response[ $file ]->new_version ) ) {
@@ -223,7 +230,7 @@ final class SnapshotController {
 				'file'              => $file,
 				'slug'              => $slug,
 				'name'              => (string) ( $data['Name'] ?? $file ),
-				'version_installed' => (string) ( $data['Version'] ?? '' ),
+				'version_installed' => $installed,
 				'version_latest'    => $latest,
 				'is_active'         => in_array( $file, $active, true ),
 				'has_update'        => $has_update,
@@ -233,6 +240,49 @@ final class SnapshotController {
 		}
 
 		return $out;
+	}
+
+	/**
+	 * Version installee d'un plugin lue FRAICHEMENT depuis son fichier (header
+	 * `Version:`), sans passer par le cache d'objet 'plugins' de get_plugins().
+	 *
+	 * Sur les hebergeurs a object cache persistant, ce cache peut survivre a
+	 * wp_cache_flush() / wp_clean_plugins_cache() entre deux requetes REST et
+	 * renvoyer le header d'AVANT une MAJ -> le manager continue de proposer une
+	 * MAJ deja faite. get_plugin_data() s'appuie sur get_file_data() (lecture
+	 * directe du fichier, sans cache), exactement comme la page wp-admin Extensions.
+	 *
+	 * Fallback sur la valeur (potentiellement perimee) de get_plugins() si le
+	 * fichier est introuvable / illisible.
+	 */
+	private function fresh_plugin_version( string $file, string $fallback ): string {
+		require_once ABSPATH . 'wp-admin/includes/plugin.php';
+		$path = WP_PLUGIN_DIR . '/' . $file;
+		if ( ! is_readable( $path ) ) {
+			return $fallback;
+		}
+		// $markup=false, $translate=false : lecture brute du header, sans i18n ni HTML.
+		// get_plugin_data() garantit toujours la cle 'Version' (vide si absente du header).
+		$data    = get_plugin_data( $path, false, false );
+		$version = (string) $data['Version'];
+
+		return '' !== $version ? $version : $fallback;
+	}
+
+	/**
+	 * Pendant theme de fresh_plugin_version() : version lue directement depuis le
+	 * `style.css` du theme (get_file_data, sans cache), pour contourner le cache
+	 * d'objet de WP_Theme qui peut rester perime apres une MAJ de theme.
+	 */
+	private function fresh_theme_version( \WP_Theme $theme, string $fallback ): string {
+		$style = $theme->get_stylesheet_directory() . '/style.css';
+		if ( ! is_readable( $style ) ) {
+			return $fallback;
+		}
+		$data    = get_file_data( $style, [ 'Version' => 'Version' ] );
+		$version = isset( $data['Version'] ) ? (string) $data['Version'] : '';
+
+		return '' !== $version ? $version : $fallback;
 	}
 
 	/**
@@ -246,7 +296,9 @@ final class SnapshotController {
 
 		$out = [];
 		foreach ( $all as $stylesheet => $theme ) {
-			$installed  = (string) $theme->get( 'Version' );
+			// Version installee lue FRAICHEMENT depuis style.css (cf fresh_theme_version),
+			// pour contourner le cache d'objet de WP_Theme, comme pour les plugins.
+			$installed  = $this->fresh_theme_version( $theme, (string) $theme->get( 'Version' ) );
 			$latest     = $installed;
 			$has_update = false;
 			if ( isset( $resp[ $stylesheet ]['new_version'] ) ) {
