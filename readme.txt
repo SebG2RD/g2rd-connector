@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 1.6.4
+Stable tag: 1.6.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,28 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.6.5 =
+
+* **Fix: a plugin/theme updated through the manager (or auto-updated) is no
+  longer reported as still needing that update**. Follow-up to 1.6.4, which
+  fixed the *object cache* layer but left a second one untouched: the
+  per-worker **realpath/stat cache**. When a plugin is updated its directory is
+  replaced (new inode); a long-lived PHP-FPM/lsphp worker can keep the old inode
+  cached, so `get_plugin_data()` re-reads the pre-update `Version:` header (e.g.
+  `3.1.0`) for a file that is already `3.1.5` on disk — a phantom "update
+  available" that survived every resync. Reproduced on Hostinger with FluentCRM
+  Pro (`fluentcampaign-pro`). The `/snapshot` endpoint now calls
+  `clearstatcache( true )` before reading plugin/theme versions, plus a targeted
+  `clearstatcache( true, $path )` per file (the `true` flag also flushes the
+  realpath cache — the no-argument form does not).
+* **Hardening: the connector now invalidates its own compiled bytecode too**.
+  The defensive OPcache pre-invalidation only globbed `wp-content/plugins/*/*.php`,
+  which covers a plugin's root file but not nested classes
+  (`includes/Rest/…`, `includes/Commands/…`). Under
+  `opcache.validate_timestamps=0` a stale compiled `SnapshotController` could keep
+  running after the connector itself was updated. It now recursively invalidates
+  `G2RD_CONNECTOR_DIR/includes` and the main plugin file.
 
 = 1.6.4 =
 

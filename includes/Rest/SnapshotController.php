@@ -97,6 +97,26 @@ final class SnapshotController {
 					opcache_invalidate( (string) $fn_file, true );
 				}
 			}
+
+			// Invalide AUSSI les propres classes du connecteur. Le glob
+			// WP_PLUGIN_DIR/*/*.php ci-dessus ne couvre que le fichier racine d'un
+			// plugin, pas ses classes imbriquees (includes/Rest, includes/Commands…).
+			// Sous opcache.validate_timestamps=0, une version compilee perimee de
+			// SnapshotController pourrait sinon continuer a tourner apres une MAJ du
+			// connecteur lui-meme (et reservir une lecture de version perimee).
+			if ( defined( 'G2RD_CONNECTOR_DIR' ) && is_dir( G2RD_CONNECTOR_DIR . 'includes' ) ) {
+				$connector_src = new \RecursiveIteratorIterator(
+					new \RecursiveDirectoryIterator( G2RD_CONNECTOR_DIR . 'includes', \FilesystemIterator::SKIP_DOTS )
+				);
+				foreach ( $connector_src as $entry ) {
+					if ( $entry instanceof \SplFileInfo && 'php' === $entry->getExtension() ) {
+						opcache_invalidate( $entry->getPathname(), true );
+					}
+				}
+			}
+			if ( defined( 'G2RD_CONNECTOR_FILE' ) ) {
+				opcache_invalidate( (string) G2RD_CONNECTOR_FILE, true );
+			}
 		}
 
 		// Purge agressive de l'object cache WP (Redis / Memcached / LiteSpeed
@@ -196,6 +216,14 @@ final class SnapshotController {
 		require_once ABSPATH . 'wp-admin/includes/plugin.php';
 		require_once ABSPATH . 'wp-admin/includes/update.php';
 
+		// Purge le cache realpath/stat de ce worker FPM AVANT toute lecture.
+		// Quand un plugin est mis a jour, son dossier est remplace (nouvel
+		// inode). Un worker lsphp longue-duree garde l'ancien inode en cache
+		// realpath -> get_plugin_data()/fopen relit le vieux header `Version:`
+		// (faux "MAJ dispo" qui survit au resync). clearstatcache( true )
+		// vide AUSSI le cache realpath (la forme sans argument ne le fait pas).
+		clearstatcache( true );
+
 		$all              = get_plugins();
 		$active           = (array) get_option( 'active_plugins', [] );
 		$updates          = get_site_transient( 'update_plugins' );
@@ -258,6 +286,10 @@ final class SnapshotController {
 	private function fresh_plugin_version( string $file, string $fallback ): string {
 		require_once ABSPATH . 'wp-admin/includes/plugin.php';
 		$path = WP_PLUGIN_DIR . '/' . $file;
+		// Invalide le cache realpath/stat de CE fichier precis avant la lecture :
+		// le dossier du plugin a pu etre remplace (nouvel inode) depuis le scan
+		// de get_plugins(), notamment apres le wp_update_plugins() de handle().
+		clearstatcache( true, $path );
 		if ( ! is_readable( $path ) ) {
 			return $fallback;
 		}
@@ -276,6 +308,8 @@ final class SnapshotController {
 	 */
 	private function fresh_theme_version( \WP_Theme $theme, string $fallback ): string {
 		$style = $theme->get_stylesheet_directory() . '/style.css';
+		// Cf. fresh_plugin_version() : invalide le cache realpath/stat du fichier.
+		clearstatcache( true, $style );
 		if ( ! is_readable( $style ) ) {
 			return $fallback;
 		}
@@ -289,6 +323,9 @@ final class SnapshotController {
 	 * @return list<array<string, mixed>>
 	 */
 	private function themes(): array {
+		// Cf. plugins() : purge realpath/stat cache avant lecture des versions.
+		clearstatcache( true );
+
 		$all     = wp_get_themes();
 		$current = wp_get_theme();
 		$updates = get_site_transient( 'update_themes' );
