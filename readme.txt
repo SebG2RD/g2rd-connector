@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 1.6.5
+Stable tag: 1.6.6
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,22 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.6.6 =
+
+* **Fix (root cause): the `/snapshot` REST response is no longer cached by
+  LiteSpeed / LSCWP**. The endpoint is authenticated with a Bearer SiteToken, so
+  to a page cache it looks like a cacheable anonymous GET. LiteSpeed was serving
+  a **frozen** snapshot to the manager — the connector PHP (and all its internal
+  cache-busting, including the 1.6.4/1.6.5 fixes) never even ran on a cache HIT,
+  so updated plugins kept showing as "update available" no matter how many times
+  the manager resynced (`x-litespeed-cache: hit` on `/snapshot`). The connector
+  now opts every `g2rd/v1` REST response out of caching via the official
+  `litespeed_control_set_nocache` action plus `X-LiteSpeed-Cache-Control` /
+  `Cache-Control: no-cache` headers (hooked on `rest_pre_dispatch`). This is the
+  real fix for the recurring phantom-update reports; 1.6.4/1.6.5 addressed the
+  object-cache and realpath/stat-cache layers, which only mattered on cache
+  MISSes.
 
 = 1.6.5 =
 

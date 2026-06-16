@@ -31,6 +31,11 @@ final class Plugin {
 		// Health endpoint (public) — toujours actif pour permettre le ping initial.
 		add_action( 'rest_api_init', [ new HealthController(), 'register' ] );
 
+		// Empêche tout cache de page (LiteSpeed / LSCWP) de mettre en cache nos
+		// réponses REST. Cf. prevent_rest_cache() : sinon le manager reçoit un
+		// inventaire FIGÉ → « mises à jour fantômes » survivant aux resyncs.
+		add_filter( 'rest_pre_dispatch', [ $this, 'prevent_rest_cache' ], 10, 3 );
+
 		// GitHub Updater — toujours actif (avant le gate enrollment) pour que les
 		// sites avec plugin installé reçoivent les MAJ via Plugins → Mises à jour.
 		// C'est de la lecture sortante vers api.github.com uniquement, pas vers
@@ -65,6 +70,37 @@ final class Plugin {
 		if ( Settings::get( 'events_enabled' ) ) {
 			( new Listener() )->register();
 		}
+	}
+
+	/**
+	 * Désactive la mise en cache des réponses REST du connecteur par LiteSpeed
+	 * (LSCWP) et les caches de page serveur.
+	 *
+	 * Les endpoints `g2rd/v1` sont authentifiés par Bearer SiteToken : aux yeux
+	 * d'un cache de page, ils ressemblent à des GET anonymes cacheables. LiteSpeed
+	 * sert alors une réponse FIGÉE au manager (inventaire périmé → « mises à jour
+	 * fantômes » qui survivent aux resyncs, car le PHP du connecteur — y compris
+	 * tout son cache-busting interne — ne s'exécute même pas sur un cache HIT).
+	 * On signale donc « ne pas cacher » via l'action officielle LSCWP et l'en-tête
+	 * lu par LiteSpeed Web Server, dès qu'une route du namespace est servie.
+	 *
+	 * @param mixed            $result  Court-circuit éventuel du dispatch (inchangé).
+	 * @param \WP_REST_Server  $server  Serveur REST (non utilisé).
+	 * @param \WP_REST_Request $request Requête REST courante.
+	 * @return mixed
+	 */
+	public function prevent_rest_cache( $result, \WP_REST_Server $server, \WP_REST_Request $request ) {
+		unset( $server );
+		if ( 0 === strpos( (string) $request->get_route(), '/' . G2RD_CONNECTOR_REST_NS ) ) {
+			// API officielle LiteSpeed Cache : opt-out de cette réponse.
+			do_action( 'litespeed_control_set_nocache', 'g2rd-connector dynamic REST response' );
+			// Défense en profondeur : en-têtes lus au niveau LiteSpeed Web Server.
+			if ( ! headers_sent() ) {
+				header( 'X-LiteSpeed-Cache-Control: no-cache' );
+				header( 'Cache-Control: no-cache, no-store, must-revalidate, max-age=0' );
+			}
+		}
+		return $result;
 	}
 
 	public static function activate(): void {
