@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 1.6.6
+Stable tag: 1.6.7
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,20 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.6.7 =
+
+Durcissement suite à l'audit sécurité du 2026-06-21 (3 findings LOW) :
+
+* **`/health` (public) minimal (anti-fingerprinting)** — ne divulgue plus
+  `wp_version` / `php_version` / le statut d'enrôlement à un appelant anonyme ;
+  ne renvoie que `ok` + `connector_version`.
+* **`site_token` chiffré au repos** (AES-256-CBC, clé dérivée des sels WP, hors
+  DB) : un dump SQL seul ne l'expose plus. Migration auto des installs legacy
+  au démarrage.
+* **Vérification SHA-256 des mises à jour** — le `GitHubUpdater` contrôle le
+  hash publié (asset `.sha256`) du ZIP avant installation ; toute divergence
+  avorte l'installation.
 
 = 1.6.6 =
 
