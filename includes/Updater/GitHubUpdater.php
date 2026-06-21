@@ -52,6 +52,8 @@ final class GitHubUpdater {
 		add_filter( 'pre_set_site_transient_update_plugins', [ $this, 'check_for_updates' ] );
 		add_filter( 'plugins_api', [ $this, 'get_plugin_info' ], 10, 3 );
 		add_filter( 'upgrader_source_selection', [ $this, 'normalize_extracted_folder' ], 10, 4 );
+		// Intégrité : vérifie le SHA-256 publié du ZIP avant l'installation.
+		add_filter( 'upgrader_pre_download', [ $this, 'verify_package_download' ], 10, 4 );
 	}
 
 	/**
@@ -323,6 +325,98 @@ final class GitHubUpdater {
 			}
 		}
 		return (string) ( $release['zipball_url'] ?? '' );
+	}
+
+	/**
+	 * Vérifie l'intégrité du paquet téléchargé contre le SHA-256 publié à côté
+	 * du ZIP dans la release GitHub (asset `<zip>.sha256`).
+	 *
+	 * Branché sur `upgrader_pre_download` : ne s'active QUE pour le paquet de CE
+	 * plugin. Si un checksum est publié, on télécharge le ZIP soi-même (TLS
+	 * vérifié), on compare le hash, et on rend le fichier local vérifié ; en cas
+	 * de divergence on AVORTE l'installation (WP_Error). Si aucun `.sha256` n'est
+	 * publié pour cette release, on rend la main à WordPress (download standard).
+	 *
+	 * @param bool|WP_Error        $reply      Court-circuit éventuel (false = WP télécharge).
+	 * @param string               $package    URL du paquet.
+	 * @param mixed                $upgrader   Instance upgrader (non utilisée).
+	 * @param array<string, mixed> $hook_extra Contexte (plugin ciblé).
+	 * @return bool|string|WP_Error
+	 */
+	public function verify_package_download( $reply, $package, $upgrader = null, $hook_extra = [] ) {
+		unset( $upgrader );
+		if ( ! is_string( $package ) || '' === $package ) {
+			return $reply;
+		}
+		$expected_basename = self::PLUGIN_SLUG . '/' . self::PLUGIN_SLUG . '.php';
+		$is_ours           = ( is_array( $hook_extra ) && isset( $hook_extra['plugin'] ) && $hook_extra['plugin'] === $expected_basename )
+			|| str_contains( $package, 'SebG2RD/g2rd-connector' );
+		if ( ! $is_ours ) {
+			return $reply;
+		}
+
+		$expected = $this->expected_sha256( $package );
+		if ( '' === $expected ) {
+			// Pas de checksum publié pour cette release → comportement WP standard.
+			return $reply;
+		}
+
+		if ( ! function_exists( 'download_url' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/file.php';
+		}
+		$tmp = download_url( $package );
+		if ( is_wp_error( $tmp ) ) {
+			return $tmp;
+		}
+
+		$actual = (string) hash_file( 'sha256', (string) $tmp );
+		if ( ! hash_equals( strtolower( $expected ), strtolower( $actual ) ) ) {
+			wp_delete_file( (string) $tmp );
+			return new WP_Error(
+				'g2rd_connector_checksum_mismatch',
+				__( 'Vérification SHA-256 du paquet G2RD Connector échouée — installation annulée.', 'g2rd-connector' )
+			);
+		}
+
+		return (string) $tmp; // Fichier local vérifié : WordPress poursuit l'install avec.
+	}
+
+	/**
+	 * Récupère le SHA-256 attendu pour un paquet donné, depuis l'asset
+	 * `<zip>.sha256` de la dernière release GitHub. Retourne '' si absent.
+	 */
+	private function expected_sha256( string $package ): string {
+		$release = $this->fetch_latest_release();
+		if ( null === $release || empty( $release['assets'] ) || ! is_array( $release['assets'] ) ) {
+			return '';
+		}
+		$parsed_path = wp_parse_url( $package, PHP_URL_PATH );
+		$path        = is_string( $parsed_path ) && '' !== $parsed_path ? $parsed_path : $package;
+		$zip_name    = basename( $path );
+		$sha_url  = '';
+		foreach ( $release['assets'] as $asset ) {
+			if (
+				! empty( $asset['name'] )
+				&& (string) $asset['name'] === $zip_name . '.sha256'
+				&& ! empty( $asset['browser_download_url'] )
+			) {
+				$sha_url = (string) $asset['browser_download_url'];
+				break;
+			}
+		}
+		if ( '' === $sha_url ) {
+			return '';
+		}
+		$resp = wp_remote_get( $sha_url, self::REQUEST_ARGS );
+		if ( is_wp_error( $resp ) || 200 !== (int) wp_remote_retrieve_response_code( $resp ) ) {
+			return '';
+		}
+		$body = (string) wp_remote_retrieve_body( $resp );
+		// Format usuel "<hex>  <filename>" → on extrait le 1er hash hexa 64 chars.
+		if ( preg_match( '/\b([a-f0-9]{64})\b/i', $body, $m ) ) {
+			return $m[1];
+		}
+		return '';
 	}
 
 	/**

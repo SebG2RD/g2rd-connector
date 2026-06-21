@@ -163,7 +163,7 @@ final class ManagerClient {
 
 		$base    = (string) Settings::get( 'manager_url' );
 		$site_id = (int) Settings::get( 'site_id' );
-		$token   = (string) Settings::get( 'site_token' );
+		$token   = Settings::site_token();
 		$url     = sprintf( '%s/api/agent/sites/%d/commands', rtrim( $base, '/' ), $site_id );
 
 		$resp = wp_remote_get(
@@ -219,7 +219,7 @@ final class ManagerClient {
 	private function post( string $relative_path, array $payload ): array|WP_Error {
 		$base    = (string) Settings::get( 'manager_url' );
 		$site_id = (int) Settings::get( 'site_id' );
-		$token   = (string) Settings::get( 'site_token' );
+		$token   = Settings::site_token();
 		$url     = sprintf( '%s/api/agent/sites/%d%s', rtrim( $base, '/' ), $site_id, $relative_path );
 
 		$resp = wp_remote_post(

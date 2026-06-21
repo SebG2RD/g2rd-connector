@@ -48,6 +48,10 @@ final class Plugin {
 			( new Page() )->register();
 		}
 
+		// Migration de sécurité : ré-chiffre un site_token encore stocké en clair
+		// (installations antérieures au chiffrement au repos). No-op une fois fait.
+		Settings::maybe_migrate_token();
+
 		// ── Gate "site enrôlé" : RIEN n'est exposé / envoyé tant que l'utilisateur
 		// n'a pas explicitement enrôlé le site via la page admin. Conforme
 		// Plugin Directory Guideline 7 (no phoning home without explicit consent).

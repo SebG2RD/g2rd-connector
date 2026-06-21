@@ -12,7 +12,6 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Rest;
 
-use G2RD\Connector\Settings;
 use WP_REST_Response;
 use WP_REST_Server;
 
@@ -31,13 +30,15 @@ final class HealthController {
 	}
 
 	public function handle(): WP_REST_Response {
+		// Réponse volontairement minimale : cet endpoint est NON authentifié
+		// (__return_true). On ne divulgue donc PAS wp_version / php_version /
+		// statut d'enrollment à un appelant anonyme (évite le fingerprinting de
+		// versions vulnérables et la reconnaissance des sites managés). Le manager
+		// n'a besoin que de confirmer que le connecteur répond + sa version.
 		return new WP_REST_Response(
 			[
 				'ok'                => true,
 				'connector_version' => G2RD_CONNECTOR_VERSION,
-				'enrolled'          => Settings::is_enrolled(),
-				'wp_version'        => (string) get_bloginfo( 'version' ),
-				'php_version'       => PHP_VERSION,
 			],
 			200
 		);

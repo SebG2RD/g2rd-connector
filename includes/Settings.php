@@ -90,6 +90,13 @@ final class Settings {
 	 * @param array<string, mixed> $partial
 	 */
 	public static function update( array $partial ): void {
+		// Le site_token est chiffré au repos (cf encrypt_token) : on intercepte
+		// toute écriture d'un token EN CLAIR (enrollment) pour ne jamais le
+		// persister tel quel en base. Les autres champs passent inchangés.
+		if ( array_key_exists( 'site_token', $partial ) ) {
+			$token                 = (string) $partial['site_token'];
+			$partial['site_token'] = '' === $token ? '' : self::encrypt_token( $token );
+		}
 		$current = self::all();
 		$merged  = array_replace_recursive( $current, $partial );
 		update_option( self::OPTION_KEY, $merged, false );
@@ -106,10 +113,87 @@ final class Settings {
 	}
 
 	public static function token_matches( string $candidate ): bool {
-		$stored = (string) self::get( 'site_token' );
+		$stored = self::site_token();
 		if ( '' === $stored ) {
 			return false;
 		}
 		return hash_equals( $stored, $candidate );
+	}
+
+	/**
+	 * Renvoie le site_token EN CLAIR (déchiffré). À utiliser pour la comparaison
+	 * d'auth entrante (token_matches) et le Bearer sortant vers le manager.
+	 */
+	public static function site_token(): string {
+		return self::decrypt_token( (string) self::get( 'site_token' ) );
+	}
+
+	/**
+	 * Migration unique : ré-chiffre un site_token legacy encore stocké en clair
+	 * (installations antérieures au chiffrement au repos). Appelée au boot ;
+	 * no-op dès que la valeur est préfixée `enc:v1:` (ou si openssl absent).
+	 */
+	public static function maybe_migrate_token(): void {
+		$stored = (string) self::get( 'site_token' );
+		if ( '' === $stored || 0 === strpos( $stored, 'enc:v1:' ) || ! function_exists( 'openssl_encrypt' ) ) {
+			return;
+		}
+		self::update( [ 'site_token' => $stored ] );
+	}
+
+	/**
+	 * Clé de chiffrement (32 octets) dérivée des sels WordPress, définis dans
+	 * wp-config.php donc HORS base de données : un dump SQL seul ne permet pas
+	 * de déchiffrer le token — il faut aussi wp-config.php.
+	 */
+	private static function enc_key(): string {
+		$material = '';
+		foreach ( [ 'AUTH_KEY', 'SECURE_AUTH_KEY', 'LOGGED_IN_KEY', 'NONCE_KEY' ] as $const ) {
+			if ( defined( $const ) ) {
+				$material .= (string) constant( $const );
+			}
+		}
+		if ( '' === $material ) {
+			$material = 'g2rd-connector-fallback-key-material';
+		}
+		return hash( 'sha256', 'g2rd-connector|' . $material, true );
+	}
+
+	/**
+	 * Chiffre le site_token pour stockage au repos (AES-256-CBC + IV aléatoire),
+	 * préfixé `enc:v1:`. Dégrade en clair si l'extension openssl est absente
+	 * (l'enrollment reste fonctionnel).
+	 */
+	public static function encrypt_token( string $plain ): string {
+		if ( '' === $plain || ! function_exists( 'openssl_encrypt' ) ) {
+			return $plain;
+		}
+		$iv     = random_bytes( 16 );
+		$cipher = openssl_encrypt( $plain, 'aes-256-cbc', self::enc_key(), OPENSSL_RAW_DATA, $iv );
+		if ( false === $cipher ) {
+			return $plain;
+		}
+		return 'enc:v1:' . base64_encode( $iv . $cipher );
+	}
+
+	/**
+	 * Déchiffre un site_token stocké. Rétro-compatible : renvoie tel quel une
+	 * valeur legacy non préfixée (plaintext) ou vide.
+	 */
+	public static function decrypt_token( string $stored ): string {
+		if ( '' === $stored || 0 !== strpos( $stored, 'enc:v1:' ) ) {
+			return $stored;
+		}
+		if ( ! function_exists( 'openssl_decrypt' ) ) {
+			return '';
+		}
+		$raw = base64_decode( substr( $stored, 7 ), true );
+		if ( false === $raw || strlen( $raw ) <= 16 ) {
+			return '';
+		}
+		$iv     = substr( $raw, 0, 16 );
+		$cipher = substr( $raw, 16 );
+		$plain  = openssl_decrypt( $cipher, 'aes-256-cbc', self::enc_key(), OPENSSL_RAW_DATA, $iv );
+		return is_string( $plain ) ? $plain : '';
 	}
 }
