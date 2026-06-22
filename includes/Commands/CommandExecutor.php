@@ -116,6 +116,22 @@ final class CommandExecutor {
 		require_once ABSPATH . 'wp-admin/includes/file.php';
 		require_once ABSPATH . 'wp-admin/includes/misc.php';
 
+		// Filet de sécurité « réactivation quoi qu'il arrive ». Cas critique : le
+		// connecteur se met à jour LUI-MÊME. Si la requête meurt (erreur fatale ou
+		// dépassement de max_execution_time) ENTRE la désactivation silencieuse du
+		// coeur et la réactivation nominale plus bas — ou si l'upgrade renvoie une
+		// WP_Error qui jette avant cette réactivation — le plugin resterait éteint.
+		// Et, étant éteint, plus aucun cron ne tournerait pour le rétablir : le site
+		// deviendrait injoignable par le manager, irrécupérable à distance.
+		// register_shutdown_function s'exécute AUSSI sur arrêt fatal / timeout, ce
+		// qui garantit la réactivation dans tous ces cas. force_reactivate() est
+		// idempotent : si la réactivation nominale a déjà réussi, ce filet ne fait
+		// rien. On ne l'arme que si le plugin était actif (on ne réactive jamais un
+		// plugin que l'admin avait volontairement laissé éteint).
+		if ( $was_active ) {
+			register_shutdown_function( [ self::class, 'force_reactivate' ], $file, $was_network_active );
+		}
+
 		// Force le refresh du transient update_plugins avant l'upgrade pour
 		// garantir que Plugin_Upgrader voit la dernière release dispo.
 		delete_site_transient( 'update_plugins' );
@@ -128,17 +144,18 @@ final class CommandExecutor {
 		$result   = $upgrader->upgrade( $file );
 
 		if ( is_wp_error( $result ) ) {
+			// Le filet shutdown armé plus haut réactivera le plugin (le coeur l'a
+			// peut-être déjà désactivé via deactivate_plugin_before_upgrade avant
+			// d'échouer) — on peut donc jeter sans laisser le site éteint.
 			throw new \RuntimeException( esc_html( $result->get_error_message() ) );
 		}
 
-		// Réactivation : si le plugin était actif et que l'upgrade l'a désactivé, on
-		// le réactive. Mode silencieux ($silent = true) = symétrique de la
-		// désactivation silencieuse du coeur (ne relance pas les hooks d'activation,
-		// le plugin ayant déjà été activé auparavant).
+		// Réactivation nominale (synchrone) : si le plugin était actif, on le
+		// rétablit immédiatement. force_reactivate gère le mode silencieux et un
+		// repli défensif ; le filet shutdown reste armé en cas d'échec du code aval.
 		$reactivated = $was_active;
-		if ( $was_active && ! is_plugin_active( $file ) ) {
-			$activated   = activate_plugin( $file, '', $was_network_active, true );
-			$reactivated = ! is_wp_error( $activated );
+		if ( $was_active ) {
+			$reactivated = self::force_reactivate( $file, $was_network_active );
 		}
 
 		// Re-lire la version installée après upgrade.
@@ -154,6 +171,66 @@ final class CommandExecutor {
 			'was_active'     => $was_active,
 			'reactivated'    => $reactivated,
 		];
+	}
+
+	/**
+	 * Réactive un plugin de façon idempotente et défensive — garantit l'état
+	 * « actif » quoi qu'il arrive après un upgrade (cf. update_plugin()).
+	 *
+	 * Publique + statique pour être passable à register_shutdown_function() : ce
+	 * filet doit fonctionner même appelé en fin de cycle PHP (arrêt fatal /
+	 * timeout), quand le contexte admin a pu être partiellement déchargé — d'où le
+	 * require_once défensif de plugin.php.
+	 *
+	 * Stratégie en deux temps :
+	 *   1. Voie standard : activate_plugin() en mode silencieux ($silent = true),
+	 *      symétrique de la désactivation silencieuse du coeur — ne relance pas les
+	 *      hooks d'activation, le plugin ayant déjà été activé auparavant.
+	 *   2. Dernier recours : si activate_plugin() échoue (ex. validation transitoire
+	 *      juste après le remplacement des fichiers du plugin lors d'un self-update),
+	 *      on écrit DIRECTEMENT l'option active_plugins / active_sitewide_plugins.
+	 *      Si la nouvelle version était réellement cassée, le mode recovery natif de
+	 *      WordPress (>= 5.2) la re-désactivera et préviendra l'admin — on ne risque
+	 *      donc pas de bloquer durablement le site.
+	 *
+	 * @return bool true si le plugin est actif en sortie.
+	 */
+	public static function force_reactivate( string $file, bool $network_wide ): bool {
+		if ( ! function_exists( 'is_plugin_active' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/plugin.php';
+		}
+
+		if ( is_plugin_active( $file ) ) {
+			return true;
+		}
+
+		// 1) Voie standard : activate_plugin silencieux. Un retour non-WP_Error
+		// signifie que le plugin a bien été (re)basculé actif dans l'option.
+		$activated = activate_plugin( $file, '', $network_wide, true );
+		if ( ! is_wp_error( $activated ) ) {
+			return true;
+		}
+
+		// 2) Dernier recours : forcer l'option, en court-circuitant les validations
+		// d'activate_plugin() qui peuvent échouer transitoirement post-swap. On lit
+		// l'état directement dans l'option qu'on vient d'écrire (et non via un nouvel
+		// is_plugin_active(), volontairement, pour rester self-contained).
+		if ( is_multisite() && $network_wide ) {
+			$active = (array) get_site_option( 'active_sitewide_plugins', [] );
+			if ( ! isset( $active[ $file ] ) ) {
+				$active[ $file ] = time();
+				update_site_option( 'active_sitewide_plugins', $active );
+			}
+			return isset( $active[ $file ] );
+		}
+
+		$active = (array) get_option( 'active_plugins', [] );
+		if ( ! in_array( $file, $active, true ) ) {
+			$active[] = $file;
+			sort( $active );
+			update_option( 'active_plugins', $active );
+		}
+		return in_array( $file, $active, true );
 	}
 
 	/**

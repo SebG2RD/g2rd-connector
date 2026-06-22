@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 1.7.0
+Stable tag: 1.7.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,24 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.7.1 =
+
+Correctif critique — réactivation après mise à jour :
+
+* **Le connecteur se réactive désormais « quoi qu'il arrive » après une commande
+  `update_plugin`**, y compris lorsqu'il se met à jour LUI-MÊME. WordPress
+  désactive silencieusement un plugin actif pendant l'upgrade
+  (`deactivate_plugin_before_upgrade`) sans le réactiver en contexte REST/cron.
+  Si la requête mourait (erreur fatale ou dépassement de `max_execution_time`)
+  entre cette désactivation et la réactivation — ou si l'upgrade renvoyait une
+  `WP_Error` qui interrompait le flux avant la réactivation — le plugin restait
+  éteint. Étant éteint, plus aucun cron ne tournait pour le rétablir : le site
+  devenait injoignable par le manager, irrécupérable à distance. La réactivation
+  est désormais (1) protégée par un filet `register_shutdown_function` qui
+  s'exécute aussi en cas d'arrêt anormal, et (2) idempotente, avec écriture
+  directe de l'option `active_plugins` en dernier recours si `activate_plugin()`
+  échoue.
 
 = 1.7.0 =
 
