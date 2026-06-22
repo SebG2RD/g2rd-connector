@@ -20,6 +20,7 @@ namespace G2RD\Connector\Commands;
 
 use Automatic_Upgrader_Skin;
 use Core_Upgrader;
+use Language_Pack_Upgrader;
 use Plugin_Upgrader;
 use Theme_Upgrader;
 
@@ -34,6 +35,7 @@ final class CommandExecutor {
 		'optimize_database',
 		'update_plugin',
 		'update_theme',
+		'update_translations',
 	];
 
 	/**
@@ -64,6 +66,7 @@ final class CommandExecutor {
 				'optimize_database'     => self::optimize_database(),
 				'update_plugin'         => self::update_plugin( (array) ( $payload ?? [] ) ),
 				'update_theme'          => self::update_theme( (array) ( $payload ?? [] ) ),
+				'update_translations'   => self::update_translations(),
 			};
 			return [
 				'status' => 'done',
@@ -203,6 +206,78 @@ final class CommandExecutor {
 			'stylesheet'     => $stylesheet,
 			'version_before' => $version_before,
 			'version_after'  => $version_after,
+		];
+	}
+
+	/**
+	 * Met à jour les packs de traduction (cœur, plugins, thèmes) vers les
+	 * dernières versions disponibles sur translate.wordpress.org.
+	 *
+	 * Rafraîchit d'abord les transients de MAJ (qui portent aussi les packs de
+	 * langue disponibles), puis lance Language_Pack_Upgrader::bulk_upgrade() sur
+	 * l'ensemble détecté par wp_get_translation_updates(). Mode silencieux
+	 * (Automatic_Upgrader_Skin), adapté au contexte REST/cron.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function update_translations(): array {
+		require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
+		require_once ABSPATH . 'wp-admin/includes/file.php';
+		require_once ABSPATH . 'wp-admin/includes/misc.php';
+		require_once ABSPATH . 'wp-admin/includes/update.php';
+
+		// Rafraîchit les transients : wp_get_translation_updates() lit les packs
+		// de langue annoncés par update_core / update_plugins / update_themes.
+		wp_version_check();
+		wp_update_plugins();
+		wp_update_themes();
+
+		$updates = wp_get_translation_updates();
+		if ( empty( $updates ) ) {
+			return [
+				'updated'       => false,
+				'total'         => 0,
+				'updated_count' => 0,
+				'failed_count'  => 0,
+				'reason'        => 'no_updates_available',
+			];
+		}
+
+		$total    = count( $updates );
+		$upgrader = new Language_Pack_Upgrader( new Automatic_Upgrader_Skin() );
+		$results  = $upgrader->bulk_upgrade( $updates );
+
+		if ( is_wp_error( $results ) ) {
+			throw new \RuntimeException( esc_html( $results->get_error_message() ) );
+		}
+
+		// false global = échec d'init du système de fichiers (droits/credentials).
+		if ( false === $results ) {
+			return [
+				'updated'       => false,
+				'total'         => $total,
+				'updated_count' => 0,
+				'failed_count'  => $total,
+			];
+		}
+
+		// Sinon : un résultat par pack (chemin de destination si succès,
+		// false/WP_Error sinon).
+		$updated_count = 0;
+		$failed_count  = 0;
+		foreach ( (array) $results as $result ) {
+			if ( $result && ! is_wp_error( $result ) ) {
+				++$updated_count;
+			} else {
+				++$failed_count;
+			}
+		}
+
+		return [
+			'updated'       => $updated_count > 0,
+			'total'         => $total,
+			'updated_count' => $updated_count,
+			'failed_count'  => $failed_count,
 		];
 	}
 

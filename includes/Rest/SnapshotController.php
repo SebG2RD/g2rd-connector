@@ -173,6 +173,9 @@ final class SnapshotController {
 			'language'          => (string) get_bloginfo( 'language' ),
 			'timezone'          => (string) wp_timezone_string(),
 			'multisite'         => is_multisite(),
+			// Vrai favicon WP (Site Icon réglé dans l'admin), '' si non défini.
+			// Le manager l'affiche dans ses pages de gestion (repli sur l'icône).
+			'site_icon_url'     => (string) get_site_icon_url( 192 ),
 			'connector_version' => G2RD_CONNECTOR_VERSION,
 		];
 	}

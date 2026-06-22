@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 1.6.7
+Stable tag: 1.7.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,17 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.7.0 =
+
+Nouveautés (pilotées par le manager) :
+
+* **Commande `update_translations`** — met à jour les packs de langue du cœur,
+  des plugins et des thèmes via `Language_Pack_Upgrader` (mode silencieux,
+  contexte REST/cron). Renvoie le nombre de packs mis à jour / en échec.
+* **`site_icon_url` dans le snapshot** — expose le vrai favicon (Site Icon réglé
+  dans l'admin WP, via `get_site_icon_url()`) pour que le manager l'affiche dans
+  ses pages de gestion (repli sur l'icône générique si absent).
 
 = 1.6.7 =
 
