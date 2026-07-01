@@ -157,6 +157,7 @@ final class SnapshotController {
 				'themes'       => $this->themes(),
 				'translations' => $this->translations(),
 				'server'       => $this->server_info(),
+				'db_health'    => $this->db_health(),
 			],
 			200
 		);
@@ -433,5 +434,82 @@ final class SnapshotController {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- lecture triviale de la version MySQL pour le snapshot, sans cache pertinent.
 		$version = $wpdb->get_var( 'SELECT VERSION()' );
 		return is_string( $version ) ? $version : '';
+	}
+
+	/**
+	 * Métriques de santé / maintenance de la base (compteurs façon ManageWP).
+	 *
+	 * Lecture seule et bornée : aucun OPTIMIZE ni suppression ici. Le nettoyage
+	 * passe par les commandes delete_spam_comments / delete_post_revisions /
+	 * empty_trashed_posts / delete_expired_transients / optimize_database.
+	 * `autoloaded_options_mb` est purement informatif (pas d'action associée).
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function db_health(): array {
+		global $wpdb;
+
+		// wp_count_comments() renvoie un objet ; cast en tableau pour un accès sûr.
+		$counts        = (array) wp_count_comments();
+		$spam_comments = isset( $counts['spam'] ) ? (int) $counts['spam'] : 0;
+
+		$post_revisions     = 0;
+		$trashed_posts      = 0;
+		$expired_transients = 0;
+		$autoload_bytes     = 0;
+		$overhead_bytes     = 0;
+
+		if ( $wpdb ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL -- comptage de maintenance (lecture seule), sans cache pertinent.
+			$post_revisions = (int) $wpdb->get_var(
+				"SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = 'revision'"
+			);
+
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL -- comptage de maintenance (lecture seule), sans cache pertinent.
+			$trashed_posts = (int) $wpdb->get_var(
+				"SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_status = 'trash'"
+			);
+
+			// Transients expirés : mêmes critères que la purge (cf CommandExecutor::purge_expired_transients).
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- comptage transients expires (requete preparee), sans cache pertinent.
+			$expired_transients = (int) $wpdb->get_var(
+				$wpdb->prepare(
+					"SELECT COUNT(*) FROM {$wpdb->options}
+					 WHERE option_name LIKE %s AND option_value < %d",
+					'_transient_timeout_%',
+					time()
+				)
+			);
+
+			// Taille des options autoloadées (indicateur de perf, informatif). WP 6.6+
+			// a introduit de nouvelles valeurs d'autoload ('on'/'auto'/'auto-on') en
+			// plus de 'yes' — on couvre l'ensemble des valeurs réellement autoloadées.
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL -- somme des tailles autoload (lecture seule), sans cache pertinent.
+			$autoload_bytes = (int) $wpdb->get_var(
+				"SELECT SUM(LENGTH(option_value)) FROM {$wpdb->options}
+				 WHERE autoload IN ( 'yes', 'on', 'auto', 'auto-on' )"
+			);
+
+			// Overhead = espace fragmenté récupérable (SUM Data_free) sur les tables
+			// du préfixe courant. ARRAY_A pour un accès par clé (évite l'accès dynamique
+			// à une propriété d'objet côté PHPStan).
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL -- SHOW TABLE STATUS de maintenance (lecture seule), prefixe sur.
+			$status = (array) $wpdb->get_results( "SHOW TABLE STATUS LIKE '{$wpdb->prefix}%'", ARRAY_A );
+			foreach ( $status as $row ) {
+				if ( is_array( $row ) && isset( $row['Data_free'] ) ) {
+					$overhead_bytes += (int) $row['Data_free'];
+				}
+			}
+		}
+
+		return [
+			'spam_comments'         => $spam_comments,
+			'post_revisions'        => $post_revisions,
+			'trashed_posts'         => $trashed_posts,
+			'expired_transients'    => $expired_transients,
+			'autoloaded_options_mb' => round( $autoload_bytes / 1048576, 2 ),
+			'db_overhead_mb'        => round( $overhead_bytes / 1048576, 2 ),
+			'collected_at'          => gmdate( 'c' ),
+		];
 	}
 }

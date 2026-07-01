@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 1.7.1
+Stable tag: 1.8.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -19,7 +19,7 @@ Connects this WordPress site to the centralized G2RD WP Manager dashboard (https
 * **Inventory snapshot** — secure REST endpoint exposing WordPress core, plugins, themes and server info to the manager.
 * **Optional hourly heartbeat** — light telemetry payload (disk usage, active plugin count, user count) sent to your manager instance via WP-Cron. Disabled until you opt in.
 * **Optional event stream** — push real-time notifications (user logins, login failures, plugin activations, core/plugin/theme updates, auto-update failures) to the manager. Disabled until you opt in.
-* **Optional remote commands** — let the manager trigger `clear_cache`, `check_updates` and `update_core` remotely. Disabled until you opt in.
+* **Optional remote commands** — let the manager trigger cache clearing, update checks, core/plugin/theme updates and database maintenance (delete spam comments, delete post revisions, empty trash, delete expired transients, optimize database) remotely. Disabled until you opt in.
 * **Theme integration** — when the optional companion theme `g2rd-theme` (>= 1.19) is active, the plugin registers itself as a tab in *Appearance → G2RD Options* instead of adding a top-level menu, for a tidy admin UX.
 
 = External service =
@@ -77,6 +77,19 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.8.0 =
+
+Maintenance & santé de la base (façon ManageWP) :
+
+* **Snapshot enrichi** — le point de terminaison `/snapshot` renvoie désormais un
+  bloc `db_health` : compteurs de commentaires indésirables, révisions d'articles,
+  articles à la corbeille, transients expirés, taille des options autoloadées et
+  overhead de la base (Mo). Lecture seule ; le manager affiche ces compteurs.
+* **Deux nouvelles commandes distantes** — `empty_trashed_posts` (vide la
+  corbeille, suppression définitive) et `delete_expired_transients` (purge les
+  transients expirés). La purge des transients d'`optimize_database` a été
+  factorisée et réutilisée.
 
 = 1.7.1 =
 

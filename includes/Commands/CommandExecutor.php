@@ -9,7 +9,8 @@
  * Sépare la logique d'exécution du transport REST pour pouvoir la tester et
  * la réutiliser. Liste des commandes : cf SiteCommandKind côté manager
  * (clear_cache, check_updates, update_core, delete_spam_comments,
- * delete_post_revisions, optimize_database).
+ * delete_post_revisions, empty_trashed_posts, delete_expired_transients,
+ * optimize_database).
  *
  * @package G2RD\Connector
  */
@@ -32,6 +33,8 @@ final class CommandExecutor {
 		'update_core',
 		'delete_spam_comments',
 		'delete_post_revisions',
+		'empty_trashed_posts',
+		'delete_expired_transients',
 		'optimize_database',
 		'update_plugin',
 		'update_theme',
@@ -58,15 +61,17 @@ final class CommandExecutor {
 
 		try {
 			$result = match ( $command ) {
-				'clear_cache'           => self::clear_cache(),
-				'check_updates'         => self::check_updates(),
-				'update_core'           => self::update_core(),
-				'delete_spam_comments'  => self::delete_spam_comments(),
-				'delete_post_revisions' => self::delete_post_revisions(),
-				'optimize_database'     => self::optimize_database(),
-				'update_plugin'         => self::update_plugin( (array) ( $payload ?? [] ) ),
-				'update_theme'          => self::update_theme( (array) ( $payload ?? [] ) ),
-				'update_translations'   => self::update_translations(),
+				'clear_cache'               => self::clear_cache(),
+				'check_updates'             => self::check_updates(),
+				'update_core'               => self::update_core(),
+				'delete_spam_comments'      => self::delete_spam_comments(),
+				'delete_post_revisions'     => self::delete_post_revisions(),
+				'empty_trashed_posts'       => self::empty_trashed_posts(),
+				'delete_expired_transients' => self::delete_expired_transients(),
+				'optimize_database'         => self::optimize_database(),
+				'update_plugin'             => self::update_plugin( (array) ( $payload ?? [] ) ),
+				'update_theme'              => self::update_theme( (array) ( $payload ?? [] ) ),
+				'update_translations'       => self::update_translations(),
 			};
 			return [
 				'status' => 'done',
@@ -494,9 +499,69 @@ final class CommandExecutor {
 			}
 		}
 
-		// Purge des transients expirés. Les transients WP sont stockés en
-		// 2 options : _transient_X (valeur) + _transient_timeout_X (expiration).
-		$now              = time();
+		// Purge des transients expirés (factorisée — cf purge_expired_transients()).
+		$transients_deleted = self::purge_expired_transients();
+
+		return [
+			'tables_optimized'   => $optimized,
+			'tables_total'       => count( (array) $tables ),
+			'transients_deleted' => $transients_deleted,
+		];
+	}
+
+	/**
+	 * Vide la corbeille : suppression définitive des posts en post_status='trash'.
+	 *
+	 * force_delete=true sur wp_delete_post() pour bypasser la corbeille (les posts
+	 * y sont déjà) et supprimer en dur, avec nettoyage des relations (meta,
+	 * commentaires, révisions) géré par le cœur.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function empty_trashed_posts(): array {
+		global $wpdb;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL -- lecture des posts en corbeille pour une commande de maintenance, sans cache pertinent.
+		$trashed_ids = $wpdb->get_col(
+			"SELECT ID FROM {$wpdb->posts} WHERE post_status = 'trash'"
+		);
+
+		$deleted = 0;
+		foreach ( (array) $trashed_ids as $post_id ) {
+			if ( wp_delete_post( (int) $post_id, true ) ) {
+				++$deleted;
+			}
+		}
+
+		return [
+			'deleted_count' => $deleted,
+			'total_trashed' => count( (array) $trashed_ids ),
+		];
+	}
+
+	/**
+	 * Supprime les transients expirés (sans OPTIMIZE, contrairement à
+	 * optimize_database() qui l'englobe).
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function delete_expired_transients(): array {
+		return [
+			'deleted_count' => self::purge_expired_transients(),
+		];
+	}
+
+	/**
+	 * Supprime les transients expirés : options _transient_timeout_* dont la date
+	 * est passée, + leur _transient_* associé. Factorisée pour être réutilisée par
+	 * optimize_database() et la commande delete_expired_transients.
+	 *
+	 * @return int Nombre de transients supprimés.
+	 */
+	private static function purge_expired_transients(): int {
+		global $wpdb;
+
+		$now = time();
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- nettoyage des transients expires (requete preparee), sans cache pertinent.
 		$expired_timeouts = (array) $wpdb->get_col(
 			$wpdb->prepare(
@@ -507,24 +572,20 @@ final class CommandExecutor {
 			)
 		);
 
-		$transients_deleted = 0;
+		$deleted = 0;
 		foreach ( $expired_timeouts as $timeout_option ) {
 			$transient_key = preg_replace( '/^_transient_timeout_/', '', (string) $timeout_option );
 			if ( '' === $transient_key ) {
 				continue;
 			}
 			if ( delete_transient( $transient_key ) ) {
-				++$transients_deleted;
+				++$deleted;
 			}
 			// Suppression défensive du timeout au cas où delete_transient
 			// n'a pas trouvé la value associée (orphelin).
 			delete_option( '_transient_timeout_' . $transient_key );
 		}
 
-		return [
-			'tables_optimized'   => $optimized,
-			'tables_total'       => count( (array) $tables ),
-			'transients_deleted' => $transients_deleted,
-		];
+		return $deleted;
 	}
 }
