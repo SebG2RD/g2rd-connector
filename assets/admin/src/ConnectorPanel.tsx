@@ -2,6 +2,11 @@
  * Panneau principal du plugin G2RD Connector — état + actions.
  *
  * Affiché soit standalone (menu top-level), soit comme tab dans Options G2RD.
+ *
+ * Les actions save / enroll / unenroll appellent les endpoints REST d'admin
+ * locale (namespace g2rd/v1/admin), gardés par capability + nonce. La réponse
+ * de chaque endpoint est le payload boot frais : on rafraîchit l'état local
+ * sans recharger la page.
  */
 
 import { useState } from '@wordpress/element';
@@ -21,10 +26,90 @@ interface Props {
 	data: ConnectorBootData;
 }
 
+type Busy = null | 'save' | 'enroll' | 'unenroll';
+type ActionNotice = { status: 'success' | 'error'; message: string } | null;
+
 export function ConnectorPanel( { data }: Props ): JSX.Element {
 	const [ state, setState ] = useState( data );
+	const [ token, setToken ] = useState( '' );
+	const [ busy, setBusy ] = useState< Busy >( null );
+	const [ notice, setNotice ] = useState< ActionNotice >( null );
 	const [ testing, setTesting ] = useState( false );
 	const [ testResult, setTestResult ] = useState< string | null >( null );
+
+	const settingsPayload = () => ( {
+		manager_url: state.managerUrl,
+		heartbeat_enabled: state.heartbeatEnabled,
+		events_enabled: state.eventsEnabled,
+		remote_commands_enabled: state.remoteCommandsEnabled,
+	} );
+
+	const save = async (): Promise< void > => {
+		setBusy( 'save' );
+		setNotice( null );
+		try {
+			const fresh = await apiFetch< ConnectorBootData >( {
+				path: 'g2rd/v1/admin/save',
+				method: 'POST',
+				data: settingsPayload(),
+			} );
+			setState( fresh );
+			setNotice( {
+				status: 'success',
+				message: 'Réglages enregistrés.',
+			} );
+		} catch ( e ) {
+			setNotice( { status: 'error', message: ( e as Error ).message } );
+		} finally {
+			setBusy( null );
+		}
+	};
+
+	const enroll = async (): Promise< void > => {
+		setBusy( 'enroll' );
+		setNotice( null );
+		try {
+			const fresh = await apiFetch< ConnectorBootData >( {
+				path: 'g2rd/v1/admin/enroll',
+				method: 'POST',
+				data: { ...settingsPayload(), invitation_token: token.trim() },
+			} );
+			setState( fresh );
+			setToken( '' );
+			setNotice( {
+				status: 'success',
+				message: `Site enrôlé avec succès (site #${ fresh.siteId }).`,
+			} );
+		} catch ( e ) {
+			setNotice( { status: 'error', message: ( e as Error ).message } );
+		} finally {
+			setBusy( null );
+		}
+	};
+
+	const unenroll = async (): Promise< void > => {
+		// eslint-disable-next-line no-alert
+		if ( ! window.confirm( 'Déconnecter ce site du manager ?' ) ) {
+			return;
+		}
+		setBusy( 'unenroll' );
+		setNotice( null );
+		try {
+			const fresh = await apiFetch< ConnectorBootData >( {
+				path: 'g2rd/v1/admin/unenroll',
+				method: 'POST',
+			} );
+			setState( fresh );
+			setNotice( {
+				status: 'success',
+				message: 'Site déconnecté du manager.',
+			} );
+		} catch ( e ) {
+			setNotice( { status: 'error', message: ( e as Error ).message } );
+		} finally {
+			setBusy( null );
+		}
+	};
 
 	const testHealth = async (): Promise< void > => {
 		setTesting( true );
@@ -43,6 +128,8 @@ export function ConnectorPanel( { data }: Props ): JSX.Element {
 			setTesting( false );
 		}
 	};
+
+	const anyBusy = busy !== null;
 
 	return (
 		<div className="g2rd-connector-panel">
@@ -73,7 +160,17 @@ export function ConnectorPanel( { data }: Props ): JSX.Element {
 					) : (
 						<Notice status="warning" isDismissible={ false }>
 							Site non enrôlé. Renseignez l&apos;URL du manager et
-							le token d&apos;invitation pour vous connecter.
+							le token d&apos;invitation, puis cliquez « Enrôler
+							le site ».
+						</Notice>
+					) }
+
+					{ notice && (
+						<Notice
+							status={ notice.status }
+							onRemove={ () => setNotice( null ) }
+						>
+							{ notice.message }
 						</Notice>
 					) }
 
@@ -84,7 +181,19 @@ export function ConnectorPanel( { data }: Props ): JSX.Element {
 							setState( { ...state, managerUrl: v } )
 						}
 						help="Ex : https://wp-manager.g2rd.fr"
+						disabled={ anyBusy }
 					/>
+
+					{ ! state.enrolled && (
+						<TextControl
+							label="Token d'invitation"
+							value={ token }
+							onChange={ setToken }
+							help="Généré dans le manager → fiche du site → « Inviter ce site à se connecter » (valide 15 min)."
+							autoComplete="off"
+							disabled={ anyBusy }
+						/>
+					) }
 
 					<ToggleControl
 						label="Heartbeat horaire"
@@ -93,6 +202,7 @@ export function ConnectorPanel( { data }: Props ): JSX.Element {
 						onChange={ ( v ) =>
 							setState( { ...state, heartbeatEnabled: v } )
 						}
+						disabled={ anyBusy }
 					/>
 
 					<ToggleControl
@@ -102,6 +212,7 @@ export function ConnectorPanel( { data }: Props ): JSX.Element {
 						onChange={ ( v ) =>
 							setState( { ...state, eventsEnabled: v } )
 						}
+						disabled={ anyBusy }
 					/>
 
 					<ToggleControl
@@ -109,15 +220,52 @@ export function ConnectorPanel( { data }: Props ): JSX.Element {
 						help="Autoriser le manager à déclencher clear_cache / update_core à distance."
 						checked={ state.remoteCommandsEnabled }
 						onChange={ ( v ) =>
-							setState( { ...state, remoteCommandsEnabled: v } )
+							setState( {
+								...state,
+								remoteCommandsEnabled: v,
+							} )
 						}
+						disabled={ anyBusy }
 					/>
 
 					<div className="g2rd-connector-actions">
+						{ ! state.enrolled && (
+							<Button
+								variant="primary"
+								onClick={ enroll }
+								isBusy={ busy === 'enroll' }
+								disabled={ anyBusy || '' === token.trim() }
+							>
+								Enrôler le site
+							</Button>
+						) }
+
 						<Button
 							variant="secondary"
+							onClick={ save }
+							isBusy={ busy === 'save' }
+							disabled={ anyBusy }
+						>
+							Enregistrer
+						</Button>
+
+						{ state.enrolled && (
+							<Button
+								variant="secondary"
+								isDestructive
+								onClick={ unenroll }
+								isBusy={ busy === 'unenroll' }
+								disabled={ anyBusy }
+							>
+								Déconnecter du manager
+							</Button>
+						) }
+
+						<Button
+							variant="tertiary"
 							onClick={ testHealth }
 							isBusy={ testing }
+							disabled={ anyBusy }
 						>
 							Tester la connectivité
 						</Button>

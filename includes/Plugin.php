@@ -12,6 +12,7 @@ namespace G2RD\Connector;
 use G2RD\Connector\Admin\Page;
 use G2RD\Connector\Cron\HeartbeatJob;
 use G2RD\Connector\Events\Listener;
+use G2RD\Connector\Rest\AdminController;
 use G2RD\Connector\Rest\CommandController;
 use G2RD\Connector\Rest\HealthController;
 use G2RD\Connector\Rest\SnapshotController;
@@ -30,6 +31,12 @@ final class Plugin {
 	public function boot(): void {
 		// Health endpoint (public) — toujours actif pour permettre le ping initial.
 		add_action( 'rest_api_init', [ new HealthController(), 'register' ] );
+
+		// Endpoints d'admin LOCALE (save / enroll / unenroll), gardés par capability
+		// `manage_options` + nonce REST. Enregistrés AVANT le gate d'enrôlement :
+		// l'app React doit pouvoir enrôler un site pas encore enrôlé. Aucune requête
+		// sortante n'est émise sans clic explicite de l'admin.
+		add_action( 'rest_api_init', [ new AdminController(), 'register' ] );
 
 		// Empêche tout cache de page (LiteSpeed / LSCWP) de mettre en cache nos
 		// réponses REST. Cf. prevent_rest_cache() : sinon le manager reçoit un

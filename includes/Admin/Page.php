@@ -262,23 +262,13 @@ final class Page {
 	}
 
 	/**
+	 * Payload boot injecté à l'app React. Délègue à BootData pour partager la
+	 * source de vérité avec Rest\AdminController (réponses save/enroll/unenroll).
+	 *
 	 * @return array<string, mixed>
 	 */
 	private function initial_data(): array {
-		$s = Settings::all();
-		return [
-			'managerUrl'            => $s['manager_url'],
-			'enrolled'              => Settings::is_enrolled(),
-			'siteId'                => $s['site_id'],
-			'enrolledAt'            => $s['enrolled_at'],
-			'lastHeartbeatAt'       => $s['last_heartbeat_at'],
-			'heartbeatEnabled'      => (bool) $s['heartbeat_enabled'],
-			'eventsEnabled'         => (bool) $s['events_enabled'],
-			'remoteCommandsEnabled' => (bool) $s['remote_commands_enabled'],
-			'restUrl'               => rest_url( G2RD_CONNECTOR_REST_NS . '/' ),
-			'nonce'                 => wp_create_nonce( 'wp_rest' ),
-			'connectorVersion'      => G2RD_CONNECTOR_VERSION,
-		];
+		return \G2RD\Connector\BootData::build();
 	}
 
 	public function enqueue_react_tab( string $hook ): void {
