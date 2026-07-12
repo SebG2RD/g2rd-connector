@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 1.8.0
+Stable tag: 1.9.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,19 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.9.0 =
+
+Enrôlement depuis l'onglet « Manager G2RD » :
+
+* **Nouveauté** — l'onglet React « Manager G2RD » (Apparence → Options G2RD)
+  permet désormais d'enrôler le site directement : champ *Token d'invitation* et
+  boutons *Enrôler le site* / *Enregistrer* / *Déconnecter du manager*, via un
+  point de terminaison REST d'administration locale (`g2rd/v1/admin`) gardé par
+  la capacité `manage_options` et un nonce.
+* **Correctif** — l'enrôlement était impossible lorsque le thème G2RD (>= 1.19)
+  était actif : seul l'onglet React s'affichait, sans champ token ni bouton
+  d'enrôlement. Le formulaire PHP autonome reste le repli pour les autres thèmes.
 
 = 1.8.0 =
 
