@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 1.9.0
+Stable tag: 1.9.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,16 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.9.1 =
+
+Fiabilité de l'optimisation de la base de données :
+
+* **Correctif** — `optimize_database` ne lance désormais `OPTIMIZE TABLE` que sur
+  les tables réellement fragmentées (overhead > 0), au lieu de toutes les tables du
+  préfixe WP. La durée de l'opération chute fortement sur les gros sites, ce qui
+  évite de dépasser le délai d'attente du tableau de bord (faux « échec »). Le
+  résultat renvoie l'overhead avant/après et le nombre de tables optimisées.
 
 = 1.9.0 =
 
