@@ -476,24 +476,42 @@ final class CommandExecutor {
 
 	/**
 	 * Optimise la base de données :
-	 *   - OPTIMIZE TABLE sur toutes les tables avec préfixe WP (réduit la
-	 *     fragmentation et libère l'espace disque sur InnoDB/MyISAM)
+	 *   - OPTIMIZE TABLE UNIQUEMENT sur les tables du préfixe WP à overhead réel
+	 *     (Data_free > 0). Optimiser une table déjà compacte ne libère rien et
+	 *     rallonge inutilement l'opération — sur un gros site, cela faisait
+	 *     dépasser l'idle timeout du manager (faux échec). On cible donc la
+	 *     fragmentation récupérable, cohérent avec db_health (SnapshotController).
 	 *   - Suppression des transients expirés (options _transient_timeout_*
 	 *     dans le passé + leurs _transient_* associés)
-	 *   - Suppression des transients orphelins (timeout sans valeur ou vice-versa)
 	 *
 	 * @return array<string, mixed>
 	 */
 	private static function optimize_database(): array {
 		global $wpdb;
 
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL -- liste des tables a prefixe WP pour OPTIMIZE, prefixe sur.
-		$tables = $wpdb->get_col( "SHOW TABLES LIKE '{$wpdb->prefix}%'" );
+		// SHOW TABLE STATUS donne le nom ET l'overhead (Data_free) par table, en une
+		// requête — même source que db_health (SUM Data_free) pour rester cohérent
+		// avec le « N Mo à récupérer » affiché côté manager.
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL -- SHOW TABLE STATUS de maintenance (lecture seule), prefixe sur.
+		$status = (array) $wpdb->get_results( "SHOW TABLE STATUS LIKE '{$wpdb->prefix}%'", ARRAY_A );
+
+		$overhead_before = 0;
+		$tables_to_optimize = [];
+		foreach ( $status as $row ) {
+			if ( ! is_array( $row ) || ! isset( $row['Name'] ) ) {
+				continue;
+			}
+			$data_free        = isset( $row['Data_free'] ) ? (int) $row['Data_free'] : 0;
+			$overhead_before += $data_free;
+			if ( $data_free > 0 ) {
+				$tables_to_optimize[] = (string) $row['Name'];
+			}
+		}
 
 		$optimized = 0;
-		foreach ( (array) $tables as $table ) {
+		foreach ( $tables_to_optimize as $table ) {
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL -- OPTIMIZE TABLE de maintenance, nom de table echappe via esc_sql.
-			$result = $wpdb->query( 'OPTIMIZE TABLE `' . esc_sql( (string) $table ) . '`' );
+			$result = $wpdb->query( 'OPTIMIZE TABLE `' . esc_sql( $table ) . '`' );
 			if ( false !== $result ) {
 				++$optimized;
 			}
@@ -502,9 +520,21 @@ final class CommandExecutor {
 		// Purge des transients expirés (factorisée — cf purge_expired_transients()).
 		$transients_deleted = self::purge_expired_transients();
 
+		// Overhead résiduel après optimisation (re-lecture du statut).
+		$overhead_after = 0;
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL -- SHOW TABLE STATUS de maintenance (lecture seule), prefixe sur.
+		$status_after = (array) $wpdb->get_results( "SHOW TABLE STATUS LIKE '{$wpdb->prefix}%'", ARRAY_A );
+		foreach ( $status_after as $row ) {
+			if ( is_array( $row ) && isset( $row['Data_free'] ) ) {
+				$overhead_after += (int) $row['Data_free'];
+			}
+		}
+
 		return [
 			'tables_optimized'   => $optimized,
-			'tables_total'       => count( (array) $tables ),
+			'tables_total'       => count( $status ),
+			'overhead_before_mb' => round( $overhead_before / 1048576, 2 ),
+			'overhead_after_mb'  => round( $overhead_after / 1048576, 2 ),
 			'transients_deleted' => $transients_deleted,
 		];
 	}
