@@ -386,6 +386,9 @@ final class CommandExecutor {
 	}
 
 	/**
+	 * Met à jour le cœur WordPress + renvoie les versions avant/après (consommées
+	 * par le manager pour tracer la MAJ : « WordPress 6.4 → 6.5 »).
+	 *
 	 * @return array<string, mixed>
 	 */
 	private static function update_core(): array {
@@ -394,20 +397,33 @@ final class CommandExecutor {
 		require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
 		require_once ABSPATH . 'wp-admin/includes/update.php';
 
+		$version_before = (string) get_bloginfo( 'version' );
+
 		$updates = get_core_updates();
 		if ( ! is_array( $updates ) || empty( $updates ) ) {
 			return [
-				'updated' => false,
-				'reason'  => 'no_updates_available',
+				'updated'        => false,
+				'reason'         => 'no_updates_available',
+				'version_before' => $version_before,
+				'version_after'  => $version_before,
 			];
 		}
 
+		// Version cible = celle de la MAJ appliquée (évite de relire $wp_version, qui
+		// reste l'ancienne valeur en mémoire tant que la requête n'est pas rechargée).
+		$target = isset( $updates[0]->version ) && is_string( $updates[0]->version )
+			? $updates[0]->version
+			: $version_before;
+
 		$upgrader = new Core_Upgrader();
 		$result   = $upgrader->upgrade( $updates[0] );
+		$updated  = ! is_wp_error( $result );
 
 		return [
-			'updated' => ! is_wp_error( $result ),
-			'detail'  => is_wp_error( $result ) ? $result->get_error_message() : (string) $result,
+			'updated'        => $updated,
+			'version_before' => $version_before,
+			'version_after'  => $updated ? $target : $version_before,
+			'detail'         => is_wp_error( $result ) ? $result->get_error_message() : (string) $result,
 		];
 	}
 
