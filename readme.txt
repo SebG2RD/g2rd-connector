@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 1.9.2
+Stable tag: 1.9.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,14 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.9.3 =
+
+* **Fix** — `update_plugin` / `update_theme` now report `updated: false` when the installed
+  version did not actually change after the upgrade (e.g. a premium plugin/theme without a
+  valid license "succeeds" in WordPress but stays on the same version). A `reason` field
+  (`version_unchanged` | `upgrade_failed`) is added. Prevents false-positive maintenance
+  records on the manager side.
 
 = 1.9.2 =
 
