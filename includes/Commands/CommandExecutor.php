@@ -168,13 +168,19 @@ final class CommandExecutor {
 		$plugins_after = get_plugins();
 		$version_after = isset( $plugins_after[ $file ]['Version'] ) ? (string) $plugins_after[ $file ]['Version'] : $version_before;
 
+		// `updated` = la version a RÉELLEMENT changé. Un plugin premium sans licence
+		// (ex. ACF Pro) « réussit » l'upgrade côté WP mais la version ne bouge pas : on
+		// ne le compte donc pas comme mis à jour (évite un faux succès côté manager).
+		$changed = ( true === $result ) && ( '' !== $version_after ) && ( $version_after !== $version_before );
+
 		return [
-			'updated'        => true === $result,
+			'updated'        => $changed,
 			'file'           => $file,
 			'version_before' => $version_before,
 			'version_after'  => $version_after,
 			'was_active'     => $was_active,
 			'reactivated'    => $reactivated,
+			'reason'         => $changed ? null : ( true === $result ? 'version_unchanged' : 'upgrade_failed' ),
 		];
 	}
 
@@ -283,11 +289,16 @@ final class CommandExecutor {
 		$themes_after  = wp_get_themes();
 		$version_after = isset( $themes_after[ $stylesheet ] ) ? (string) $themes_after[ $stylesheet ]->get( 'Version' ) : $version_before;
 
+		// `updated` = version réellement changée (cf. update_plugin : thème premium sans
+		// licence « réussit » sans changer de version → faux succès à éviter).
+		$changed = ( true === $result ) && ( '' !== $version_after ) && ( $version_after !== $version_before );
+
 		return [
-			'updated'        => true === $result,
+			'updated'        => $changed,
 			'stylesheet'     => $stylesheet,
 			'version_before' => $version_before,
 			'version_after'  => $version_after,
+			'reason'         => $changed ? null : ( true === $result ? 'version_unchanged' : 'upgrade_failed' ),
 		];
 	}
 
