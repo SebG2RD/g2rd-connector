@@ -24,7 +24,7 @@ Connects this WordPress site to the centralized G2RD WP Manager dashboard (https
 
 = External service =
 
-This plugin relies on the **G2RD WP Manager** service operated by G2RD Web Agency (France). It is not required to install the plugin, but **no feature works without enrolling the site** to a manager instance.
+This plugin relies on the **G2RD WP Manager** service operated by G2RD Agence Web (France). It is not required to install the plugin, but **no feature works without enrolling the site** to a manager instance.
 
 * Service URL: https://wp-manager.g2rd.fr
 * Terms of Service: https://wp-manager.g2rd.fr/cgu

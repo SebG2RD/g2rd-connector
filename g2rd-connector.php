@@ -6,7 +6,7 @@
  * Version:           1.9.3
  * Requires at least: 6.4
  * Requires PHP:      8.1
- * Author:            G2RD Web Agency
+ * Author:            G2RD Agence Web
  * Author URI:        https://g2rd.fr
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html

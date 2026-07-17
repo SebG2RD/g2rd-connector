@@ -162,7 +162,7 @@ final class GitHubUpdater {
 		$info->name           = 'G2RD Connector';
 		$info->slug           = self::PLUGIN_SLUG;
 		$info->version        = $latest_version;
-		$info->author         = '<a href="https://g2rd.fr">G2RD Web Agency</a>';
+		$info->author         = '<a href="https://g2rd.fr">G2RD Agence Web</a>';
 		$info->author_profile = 'https://github.com/SebG2RD';
 		$info->homepage       = self::GITHUB_REPO_URL;
 		$info->requires       = self::REQUIRES_WP;
