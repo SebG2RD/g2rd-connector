@@ -32,6 +32,16 @@ export interface ConnectorBootData {
 	restUrl: string;
 	nonce: string;
 	connectorVersion: string;
+	/**
+	 * Dernière copie des MAJ annoncées par des updaters tiers, prise depuis un
+	 * écran d'administration. Ces MAJ ne sont visibles du manager que grâce à
+	 * elle (cf. PremiumUpdatesBridge côté PHP). null = jamais faite.
+	 */
+	lastUpdatesCapture: {
+		capturedAt: string;
+		plugins: number;
+		themes: number;
+	} | null;
 }
 
 interface ExternalTab {

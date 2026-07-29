@@ -95,8 +95,14 @@ ou « jamais » si `null`. Date formatée avec `wp_date()` (fuseau du site).
 ### Vérification
 
 - `composer run ci` vert.
-- `npm run lint:js` puis `npm run build` verts, `assets/admin/build/` commité
-  (c'est le bundle servi en production).
+- `npm run lint:js` puis `npm run build` verts. `assets/admin/build/` est
+  **gitignoré** : le bundle est construit par `release.yml` et `plugin-check.yml`,
+  il ne se commite pas.
+- ⚠️ Sur un poste Windows, `npm run lint:js` remonte des centaines d'erreurs
+  ``Delete `␍` `` sur des fichiers non modifiés : c'est `core.autocrlf` du
+  checkout local, pas une régression. La CI (Linux, LF) ne les voit pas. Ne
+  **pas** lancer `--fix` pour les faire taire — ça réécrirait les fins de ligne
+  de tout le dossier. Filtrer : `npm run lint:js 2>&1 | grep -v "Delete \`"`.
 - Commit : `ajout(admin): ligne de diagnostic des captures de MAJ tierces`.
 
 ---

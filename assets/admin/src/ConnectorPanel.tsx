@@ -156,6 +156,26 @@ export function ConnectorPanel( { data }: Props ): JSX.Element {
 									.
 								</>
 							) }
+							<br />
+							{ state.lastUpdatesCapture ? (
+								<>
+									Dernière capture des MAJ tierces :{ ' ' }
+									{ new Date(
+										state.lastUpdatesCapture.capturedAt
+									).toLocaleString() }
+									{ ' — ' }
+									{ state.lastUpdatesCapture.plugins }{ ' ' }
+									extension(s),{ ' ' }
+									{ state.lastUpdatesCapture.themes }{ ' ' }
+									thème(s).
+								</>
+							) : (
+								<>
+									Dernière capture des MAJ tierces : jamais.
+									Ouvrez Extensions ou Tableau de bord → Mises
+									à jour pour l&apos;amorcer.
+								</>
+							) }
 						</Notice>
 					) : (
 						<Notice status="warning" isDismissible={ false }>

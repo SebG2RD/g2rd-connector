@@ -17,6 +17,8 @@ declare(strict_types=1);
 
 namespace G2RD\Connector;
 
+use G2RD\Connector\Updates\PremiumUpdatesBridge;
+
 final class BootData {
 
 	/**
@@ -24,6 +26,11 @@ final class BootData {
 	 */
 	public static function build(): array {
 		$s = Settings::all();
+
+		// Diagnostic : dernière copie des MAJ annoncées par des updaters tiers,
+		// prise depuis un écran d'administration. Sans elle, ces MAJ sont
+		// invisibles du manager (cf. PremiumUpdatesBridge). null = jamais faite.
+		$capture = PremiumUpdatesBridge::last_capture();
 
 		return [
 			'managerUrl'            => (string) $s['manager_url'],
@@ -37,6 +44,11 @@ final class BootData {
 			'restUrl'               => rest_url( G2RD_CONNECTOR_REST_NS . '/' ),
 			'nonce'                 => wp_create_nonce( 'wp_rest' ),
 			'connectorVersion'      => G2RD_CONNECTOR_VERSION,
+			'lastUpdatesCapture'    => null === $capture ? null : [
+				'capturedAt' => $capture['captured_at'],
+				'plugins'    => $capture['plugins'],
+				'themes'     => $capture['themes'],
+			],
 		];
 	}
 }

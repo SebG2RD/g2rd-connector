@@ -16,6 +16,7 @@ namespace G2RD\Connector\Admin;
 
 use G2RD\Connector\Outbound\ManagerClient;
 use G2RD\Connector\Settings;
+use G2RD\Connector\Updates\PremiumUpdatesBridge;
 
 final class Page {
 
@@ -118,6 +119,26 @@ final class Page {
 							esc_html( (string) $settings['manager_url'] ),
 							(int) $settings['site_id']
 						);
+						?>
+					</p>
+					<p>
+						<?php
+						// Diagnostic : prouve que la copie des MAJ tierces tourne. Ces
+						// MAJ ne sont visibles du manager que grâce à elle, cf.
+						// PremiumUpdatesBridge.
+						$capture = PremiumUpdatesBridge::last_capture();
+						if ( null === $capture ) {
+							echo esc_html__( 'Dernière capture des MAJ tierces : jamais. Ouvrez Extensions ou Tableau de bord → Mises à jour pour l’amorcer.', 'g2rd-connector' );
+						} else {
+							$captured_ts = strtotime( $capture['captured_at'] );
+							printf(
+								/* translators: 1: date locale de la capture, 2: nombre de plugins, 3: nombre de thèmes */
+								esc_html__( 'Dernière capture des MAJ tierces : %1$s — %2$d extension(s), %3$d thème(s).', 'g2rd-connector' ),
+								esc_html( (string) wp_date( 'j M Y H:i', false === $captured_ts ? null : $captured_ts ) ),
+								(int) $capture['plugins'],
+								(int) $capture['themes']
+							);
+						}
 						?>
 					</p>
 				</div>
