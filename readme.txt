@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 1.9.4
+Stable tag: 1.10.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,26 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.10.0 =
+
+* **Fix** — updates announced by third-party updaters that do not register in the REST
+  context are now detected and reported to the manager. Measured on a production site:
+  `SEOPRESS_Updater::check_update` hooks `pre_set_site_transient_update_plugins` and is
+  active in wp-admin and WP-CLI, but not during a REST request. The snapshot deleted the
+  `update_plugins` transient and rebuilt it without that entry, so the plugin was always
+  reported as up to date. Not all premium plugins were affected — those whose updater
+  registers unconditionally (Elementor Pro, Astra Pro, Fluent*) always worked.
+* **Fix** — such updates can now actually be installed from the manager. `Plugin_Upgrader`
+  reads the same transient to find the `package` URL; without the entry the upgrade
+  "succeeded" without changing the installed version.
+* **New** — update entries are captured from an admin screen (Plugins, Updates, Dashboard)
+  into a 7-day cache, then replayed through the `site_transient_update_plugins` /
+  `site_transient_update_themes` read filters. Replaying through a read filter avoids
+  re-triggering the updaters already present (and their network calls) on every sync, and
+  never writes reconstructed entries to the database.
+* **New** — the settings screen (both the standalone page and the React tab) shows when the
+  last capture happened and how many entries it holds.
 
 = 1.9.4 =
 
