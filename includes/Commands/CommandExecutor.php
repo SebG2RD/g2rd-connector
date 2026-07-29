@@ -21,6 +21,7 @@ namespace G2RD\Connector\Commands;
 
 use Automatic_Upgrader_Skin;
 use Core_Upgrader;
+use G2RD\Connector\Updates\PremiumUpdatesBridge;
 use Language_Pack_Upgrader;
 use Plugin_Upgrader;
 use Theme_Upgrader;
@@ -139,10 +140,13 @@ final class CommandExecutor {
 
 		// Force le refresh du transient update_plugins avant l'upgrade pour
 		// garantir que Plugin_Upgrader voit la dernière release dispo.
-		delete_site_transient( 'update_plugins' );
-		if ( function_exists( 'wp_update_plugins' ) ) {
-			wp_update_plugins();
-		}
+		//
+		// Passe par la passerelle : elle rejoue aussi, via le filtre de lecture,
+		// les entrées des updaters tiers absents de ce contexte. Sans elle,
+		// Plugin_Upgrader::upgrade() ne trouve pas d'entrée pour un plugin comme
+		// SEOPress PRO — donc pas d'URL de `package` — et l'upgrade « réussit »
+		// sans rien changer.
+		PremiumUpdatesBridge::refresh_update_transients();
 
 		// Automatic_Upgrader_Skin = skin sans output, adapté à un contexte REST/cron.
 		$upgrader = new Plugin_Upgrader( new Automatic_Upgrader_Skin() );
@@ -168,9 +172,11 @@ final class CommandExecutor {
 		$plugins_after = get_plugins();
 		$version_after = isset( $plugins_after[ $file ]['Version'] ) ? (string) $plugins_after[ $file ]['Version'] : $version_before;
 
-		// `updated` = la version a RÉELLEMENT changé. Un plugin premium sans licence
-		// (ex. ACF Pro) « réussit » l'upgrade côté WP mais la version ne bouge pas : on
-		// ne le compte donc pas comme mis à jour (évite un faux succès côté manager).
+		// `updated` = la version a RÉELLEMENT changé. Certains upgrades « réussissent »
+		// côté WP sans que la version bouge : licence premium absente ou expirée, ou
+		// entrée de MAJ introuvable dans le transient (cas des updaters tiers absents
+		// du contexte REST — c'est le rôle de PremiumUpdatesBridge de le corriger).
+		// On ne les compte pas comme mis à jour : ça éviterait un faux succès côté manager.
 		$changed = ( true === $result ) && ( '' !== $version_after ) && ( $version_after !== $version_before );
 
 		return [
@@ -271,11 +277,9 @@ final class CommandExecutor {
 		require_once ABSPATH . 'wp-admin/includes/misc.php';
 
 		// Force refresh transient update_themes pour ré-évaluer les GitHub
-		// Updaters tiers (cf SnapshotController::handle()).
-		delete_site_transient( 'update_themes' );
-		if ( function_exists( 'wp_update_themes' ) ) {
-			wp_update_themes();
-		}
+		// Updaters tiers, + rejeu des updaters absents de ce contexte
+		// (cf. PremiumUpdatesBridge et update_plugin() ci-dessus).
+		PremiumUpdatesBridge::refresh_update_transients();
 
 		$upgrader = new Theme_Upgrader( new Automatic_Upgrader_Skin() );
 		$result   = $upgrader->upgrade( $stylesheet );
@@ -380,8 +384,12 @@ final class CommandExecutor {
 	private static function clear_cache(): array {
 		wp_cache_flush();
 		delete_site_transient( 'update_core' );
-		delete_site_transient( 'update_plugins' );
-		delete_site_transient( 'update_themes' );
+		// Purge + REPEUPLEMENT des transients plugins/thèmes. Une purge sèche
+		// aveuglerait la détection des MAJ tierces jusqu'au prochain passage en
+		// administration. Le cache de capture de PremiumUpdatesBridge n'est
+		// volontairement PAS vidé ici : ce n'est pas un cache de contenu, et le
+		// perdre reviendrait à jeter la seule source de ces entrées.
+		PremiumUpdatesBridge::refresh_update_transients();
 		return [ 'cleared' => [ 'object_cache', 'update_transients' ] ];
 	}
 
@@ -391,8 +399,7 @@ final class CommandExecutor {
 	private static function check_updates(): array {
 		require_once ABSPATH . 'wp-admin/includes/update.php';
 		wp_version_check();
-		wp_update_plugins();
-		wp_update_themes();
+		PremiumUpdatesBridge::refresh_update_transients();
 		return [ 'refreshed' => true ];
 	}
 

@@ -17,6 +17,7 @@ use G2RD\Connector\Rest\CommandController;
 use G2RD\Connector\Rest\HealthController;
 use G2RD\Connector\Rest\SnapshotController;
 use G2RD\Connector\Updater\GitHubUpdater;
+use G2RD\Connector\Updates\PremiumUpdatesBridge;
 
 final class Plugin {
 
@@ -64,6 +65,19 @@ final class Plugin {
 		// Plugin Directory Guideline 7 (no phoning home without explicit consent).
 		if ( ! Settings::is_enrolled() ) {
 			return;
+		}
+
+		// Capture des MAJ annoncées par des updaters tiers. Certains ne
+		// s'enregistrent pas dans le contexte REST (mesuré : SEOPRESS_Updater est
+		// actif en wp-admin et en WP-CLI, absent en REST) — leurs entrées sont
+		// donc mémorisées depuis l'administration, puis rejouées par le snapshot
+		// et par les commandes de mise à jour. Cf. PremiumUpdatesBridge.
+		//
+		// Enregistré APRÈS le gate d'enrôlement (aucune écriture avant opt-in
+		// explicite, guideline 7) et sous is_admin() : c'est le seul contexte où
+		// il y a quelque chose à capturer.
+		if ( is_admin() ) {
+			( new PremiumUpdatesBridge() )->register();
 		}
 
 		// Endpoints REST sécurisés Bearer SiteToken (consommés par le manager).

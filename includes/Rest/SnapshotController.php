@@ -14,6 +14,7 @@ declare(strict_types=1);
 namespace G2RD\Connector\Rest;
 
 use G2RD\Connector\Settings;
+use G2RD\Connector\Updates\PremiumUpdatesBridge;
 use WP_REST_Response;
 use WP_REST_Server;
 
@@ -59,6 +60,14 @@ final class SnapshotController {
 		//    re-dispatcher les hooks `pre_set_site_transient_update_*`, ce qui
 		//    permet aux updaters custom de ré-évaluer leur état contre l'API
 		//    distante (wp.org / GitHub). Coût : ~1-3s par sync, acceptable.
+		//
+		//    MAIS tous les updaters tiers ne s'enregistrent pas dans le contexte
+		//    REST (mesuré sur g2rd.fr : `SEOPRESS_Updater::check_update` est actif
+		//    en wp-admin et en WP-CLI, absent ici). Détruire le transient perdait
+		//    donc définitivement leurs entrées. C'est pourquoi les transients
+		//    plugins/thèmes passent désormais par PremiumUpdatesBridge, qui
+		//    détruit + reconstruit PUIS rejoue ce que ce contexte ne sait pas
+		//    produire. Cf. la documentation de cette classe.
 		// Invalide OPcache sur tous les fichiers `.php` racine des plugins
 		// et thèmes installés AVANT wp_clean_plugins_cache(), pour garantir
 		// que `get_plugins()` re-lise les headers `Version:` depuis le disque
@@ -136,18 +145,14 @@ final class SnapshotController {
 		if ( function_exists( 'wp_clean_plugins_cache' ) ) {
 			wp_clean_plugins_cache();
 		}
+		// Le coeur vient toujours de wp.org : rafraichissement direct.
 		delete_site_transient( 'update_core' );
-		delete_site_transient( 'update_themes' );
-		delete_site_transient( 'update_plugins' );
 		if ( function_exists( 'wp_version_check' ) ) {
 			wp_version_check( [], true );
 		}
-		if ( function_exists( 'wp_update_themes' ) ) {
-			wp_update_themes();
-		}
-		if ( function_exists( 'wp_update_plugins' ) ) {
-			wp_update_plugins();
-		}
+		// Plugins et themes : detruit + reconstruit, puis rejoue les entrees des
+		// updaters tiers absents de ce contexte (cf. PremiumUpdatesBridge).
+		PremiumUpdatesBridge::refresh_update_transients();
 
 		return new WP_REST_Response(
 			[
@@ -288,21 +293,9 @@ final class SnapshotController {
 	 * fichier est introuvable / illisible.
 	 */
 	private function fresh_plugin_version( string $file, string $fallback ): string {
-		require_once ABSPATH . 'wp-admin/includes/plugin.php';
-		$path = WP_PLUGIN_DIR . '/' . $file;
-		// Invalide le cache realpath/stat de CE fichier precis avant la lecture :
-		// le dossier du plugin a pu etre remplace (nouvel inode) depuis le scan
-		// de get_plugins(), notamment apres le wp_update_plugins() de handle().
-		clearstatcache( true, $path );
-		if ( ! is_readable( $path ) ) {
-			return $fallback;
-		}
-		// $markup=false, $translate=false : lecture brute du header, sans i18n ni HTML.
-		// get_plugin_data() garantit toujours la cle 'Version' (vide si absente du header).
-		$data    = get_plugin_data( $path, false, false );
-		$version = (string) $data['Version'];
-
-		return '' !== $version ? $version : $fallback;
+		// Implementation dans PremiumUpdatesBridge : la passerelle a besoin de la
+		// meme lecture pour son garde version_compare, on evite d'en avoir deux copies.
+		return PremiumUpdatesBridge::installed_plugin_version( $file, $fallback );
 	}
 
 	/**
@@ -311,16 +304,8 @@ final class SnapshotController {
 	 * d'objet de WP_Theme qui peut rester perime apres une MAJ de theme.
 	 */
 	private function fresh_theme_version( \WP_Theme $theme, string $fallback ): string {
-		$style = $theme->get_stylesheet_directory() . '/style.css';
-		// Cf. fresh_plugin_version() : invalide le cache realpath/stat du fichier.
-		clearstatcache( true, $style );
-		if ( ! is_readable( $style ) ) {
-			return $fallback;
-		}
-		$data    = get_file_data( $style, [ 'Version' => 'Version' ] );
-		$version = isset( $data['Version'] ) ? (string) $data['Version'] : '';
-
-		return '' !== $version ? $version : $fallback;
+		// Cf. fresh_plugin_version() : implementation unique dans PremiumUpdatesBridge.
+		return PremiumUpdatesBridge::installed_theme_version( $theme->get_stylesheet(), $fallback );
 	}
 
 	/**
