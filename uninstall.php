@@ -27,9 +27,15 @@ if ( is_multisite() ) {
     }
 }
 
-// Dé-planification du cron heartbeat si encore présent.
-$timestamp = wp_next_scheduled( 'g2rd_connector_heartbeat' );
-if ( $timestamp ) {
-    wp_unschedule_event( $timestamp, 'g2rd_connector_heartbeat' );
+// Capture des MAJ tierces (option, pas transient : elle doit survivre au
+// wp_cache_flush() du snapshot sur les sites à cache objet persistant).
+delete_site_option( 'g2rd_updates_snapshot' );
+
+// Dé-planification des crons si encore présents.
+foreach ( [ 'g2rd_connector_heartbeat', 'g2rd_connector_refresh_updates' ] as $g2rd_hook ) {
+    $timestamp = wp_next_scheduled( $g2rd_hook );
+    if ( $timestamp ) {
+        wp_unschedule_event( $timestamp, $g2rd_hook );
+    }
+    wp_clear_scheduled_hook( $g2rd_hook );
 }
-wp_clear_scheduled_hook( 'g2rd_connector_heartbeat' );

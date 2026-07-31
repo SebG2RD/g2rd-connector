@@ -173,14 +173,21 @@ final class PremiumUpdatesBridge {
 			// On écrit même si tout est à jour : le cache reflète alors fidèlement
 			// « rien en attente », ce qui évacue les entrées déjà appliquées et
 			// permet à la ligne de diagnostic de prouver que la capture tourne.
-			set_site_transient(
+			//
+			// OPTION et non transient : avec un cache objet persistant (LiteSpeed,
+			// Redis…), WordPress range les transients DANS ce cache et non en base.
+			// Or le snapshot appelle `wp_cache_flush()` — délibérément, contre les
+			// versions de plugins périmées — ce qui effaçait notre propre capture à
+			// chaque synchronisation. Mesuré sur le parc : capture perdue sur les
+			// deux sites à cache objet externe, conservée sur les quatre autres.
+			// L'expiration est donc gérée par nous (cf. `cached_payload()`).
+			update_site_option(
 				self::CACHE_KEY,
 				[
 					'plugins'     => $plugins,
 					'themes'      => $themes,
 					'captured_at' => gmdate( 'c' ),
-				],
-				self::cache_ttl()
+				]
 			);
 		} catch ( \Throwable $e ) {
 			unset( $e );
@@ -570,12 +577,26 @@ final class PremiumUpdatesBridge {
 	}
 
 	/**
+	 * Capture persistée, ou `[]` si absente ou expirée.
+	 *
+	 * L'expiration est vérifiée ici plutôt que déléguée à l'API des transients :
+	 * la capture vit dans une option pour survivre au `wp_cache_flush()` du
+	 * snapshot sur les sites à cache objet persistant (cf. `capture_now()`).
+	 *
 	 * @return array<string, mixed>
 	 */
 	private static function cached_payload(): array {
-		$payload = get_site_transient( self::CACHE_KEY );
+		$payload = get_site_option( self::CACHE_KEY );
+		if ( ! is_array( $payload ) ) {
+			return [];
+		}
 
-		return is_array( $payload ) ? $payload : [];
+		$captured_at = isset( $payload['captured_at'] ) ? strtotime( (string) $payload['captured_at'] ) : false;
+		if ( false === $captured_at || ( time() - $captured_at ) > self::cache_ttl() ) {
+			return [];
+		}
+
+		return $payload;
 	}
 
 	/**
