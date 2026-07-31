@@ -13,6 +13,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Rest;
 
+use G2RD\Connector\Cron\UpdatesDiscoveryJob;
 use G2RD\Connector\Settings;
 use G2RD\Connector\Updates\PremiumUpdatesBridge;
 use WP_REST_Response;
@@ -139,11 +140,19 @@ final class SnapshotController {
 			wp_cache_flush();
 		}
 
+		// `false` IMPÉRATIF : ces deux fonctions du cœur suppriment les transients
+		// de mise à jour quand on ne leur passe rien
+		// (`wp_clean_plugins_cache( $clear_update_cache = true )`). Elles étaient
+		// appelées sans argument JUSTE AVANT le pont, dont la première action est
+		// de mémoriser le transient « avant destruction » : il lisait donc un
+		// transient déjà effacé, et la mémorisation n'a jamais rien mémorisé en
+		// contexte REST. Ici on ne veut que le nettoyage du cache d'objets ; la
+		// destruction et la reconstruction sont le travail du pont, ligne suivante.
 		if ( function_exists( 'wp_clean_themes_cache' ) ) {
-			wp_clean_themes_cache();
+			wp_clean_themes_cache( false );
 		}
 		if ( function_exists( 'wp_clean_plugins_cache' ) ) {
-			wp_clean_plugins_cache();
+			wp_clean_plugins_cache( false );
 		}
 		// Le coeur vient toujours de wp.org : rafraichissement direct.
 		delete_site_transient( 'update_core' );
@@ -154,18 +163,49 @@ final class SnapshotController {
 		// updaters tiers absents de ce contexte (cf. PremiumUpdatesBridge).
 		PremiumUpdatesBridge::refresh_update_transients();
 
+		// Les updaters tiers ne s'enregistrent pas ici : seul le contexte WP-Cron
+		// sait les faire parler. Si sa dernière capture est périmée, on le réveille
+		// — WP-Cron ne partant que sur une requête HTTP, un site client sans trafic
+		// resterait muet. Non bloquant : la réponse ci-dessous n'attend pas.
+		$discovery_stale = PremiumUpdatesBridge::capture_is_stale();
+		if ( $discovery_stale ) {
+			UpdatesDiscoveryJob::request_now();
+		}
+
 		return new WP_REST_Response(
 			[
-				'site'         => $this->site_info(),
-				'wp_core'      => $this->wp_core(),
-				'plugins'      => $this->plugins(),
-				'themes'       => $this->themes(),
-				'translations' => $this->translations(),
-				'server'       => $this->server_info(),
-				'db_health'    => $this->db_health(),
+				'site'              => $this->site_info(),
+				'wp_core'           => $this->wp_core(),
+				'plugins'           => $this->plugins(),
+				'themes'            => $this->themes(),
+				'translations'      => $this->translations(),
+				'server'            => $this->server_info(),
+				'db_health'         => $this->db_health(),
+				'updates_discovery' => $this->updates_discovery( $discovery_stale ),
 			],
 			200
 		);
+	}
+
+	/**
+	 * Fraîcheur de la découverte des MAJ tierces.
+	 *
+	 * Sans ce bloc, un site dont le cron est coupé continuerait d'annoncer « tout
+	 * est à jour » : le manager doit pouvoir distinguer « rien à mettre à jour »
+	 * de « je n'ai pas pu regarder ».
+	 *
+	 * @param bool $stale Résultat déjà calculé, pour ne pas relire le cache.
+	 * @return array{captured_at: string|null, stale: bool, cron_disabled: bool, next_run: string|null}
+	 */
+	private function updates_discovery( bool $stale ): array {
+		$last = PremiumUpdatesBridge::last_capture();
+
+		return [
+			'captured_at'   => null !== $last ? $last['captured_at'] : null,
+			'stale'         => $stale,
+			'cron_disabled' => defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON,
+			'next_run'      => UpdatesDiscoveryJob::next_run(),
+		];
 	}
 
 	/**

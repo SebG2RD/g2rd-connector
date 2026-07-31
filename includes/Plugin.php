@@ -11,6 +11,7 @@ namespace G2RD\Connector;
 
 use G2RD\Connector\Admin\Page;
 use G2RD\Connector\Cron\HeartbeatJob;
+use G2RD\Connector\Cron\UpdatesDiscoveryJob;
 use G2RD\Connector\Events\Listener;
 use G2RD\Connector\Rest\AdminController;
 use G2RD\Connector\Rest\CommandController;
@@ -80,6 +81,19 @@ final class Plugin {
 			( new PremiumUpdatesBridge() )->register();
 		}
 
+		// Découverte des MAJ en contexte WP-Cron, où les updaters tiers acceptent
+		// de s'enregistrer (SEOPress teste explicitement DOING_CRON). C'est ce qui
+		// affranchit le manager de toute visite humaine du wp-admin — la raison
+		// d'être d'une console de parc.
+		//
+		// Enregistré SANS condition de réglage, contrairement au heartbeat : savoir
+		// ce qui est à jour ne doit pas dépendre d'une option d'émission vers le
+		// manager. La planification est réparée à chaque boot, sinon les sites déjà
+		// installés — précisément ceux qui ont besoin du correctif — ne rejoueraient
+		// jamais le hook d'activation. Après le gate d'enrôlement (guideline 7).
+		( new UpdatesDiscoveryJob() )->register();
+		UpdatesDiscoveryJob::schedule();
+
 		// Endpoints REST sécurisés Bearer SiteToken (consommés par le manager).
 		add_action( 'rest_api_init', [ new SnapshotController(), 'register' ] );
 		if ( Settings::get( 'remote_commands_enabled' ) ) {
@@ -137,6 +151,7 @@ final class Plugin {
 
 	public static function deactivate(): void {
 		HeartbeatJob::unschedule();
+		UpdatesDiscoveryJob::unschedule();
 		flush_rewrite_rules();
 	}
 }

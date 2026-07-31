@@ -65,7 +65,7 @@ use WP_Screen;
 
 final class PremiumUpdatesBridge {
 
-	/** Cache persistant alimenté depuis l'administration. */
+	/** Cache persistant alimenté depuis l'administration et par le job cron. */
 	private const CACHE_KEY = 'g2rd_updates_snapshot';
 
 	/**
@@ -143,6 +143,16 @@ final class PremiumUpdatesBridge {
 	 * @internal Callback WordPress — public par nécessité.
 	 */
 	public function capture(): void {
+		self::capture_now();
+	}
+
+	/**
+	 * Copie les entrées de MAJ actuellement connues dans le cache persistant.
+	 *
+	 * Statique : appelée depuis l'administration (via `capture()`) ET depuis le
+	 * job cron, qui n'a pas d'instance sous la main.
+	 */
+	public static function capture_now(): void {
 		try {
 			$plugins = [];
 			foreach ( self::response_of( get_site_transient( 'update_plugins' ) ) as $file => $entry ) {
@@ -175,6 +185,58 @@ final class PremiumUpdatesBridge {
 		} catch ( \Throwable $e ) {
 			unset( $e );
 		}
+	}
+
+	/**
+	 * Rafraîchissement COMPLET, à n'appeler que depuis un contexte où les
+	 * updaters tiers s'enregistrent — en pratique WP-Cron (`DOING_CRON`), qui est
+	 * le contexte des mises à jour automatiques de WordPress.
+	 *
+	 * C'est ce qui affranchit la détection de toute visite humaine : la
+	 * destruction force une vraie re-vérification (sans elle, `wp_update_plugins()`
+	 * sort en avance dans sa fenêtre de 12 h), les updaters présents ici écrivent
+	 * leurs entrées, et la capture les fige dans le cache pour le contexte REST.
+	 */
+	public static function refresh_in_privileged_context(): void {
+		try {
+			if ( ! function_exists( 'wp_update_plugins' ) ) {
+				require_once ABSPATH . 'wp-admin/includes/update.php';
+			}
+
+			delete_site_transient( 'update_plugins' );
+			delete_site_transient( 'update_themes' );
+			wp_update_plugins();
+			wp_update_themes();
+
+			self::capture_now();
+		} catch ( \Throwable $e ) {
+			unset( $e );
+		}
+	}
+
+	/**
+	 * Une capture absente ou trop ancienne signifie que le manager risque de lire
+	 * un inventaire de MAJ incomplet. Sert au réveil du cron par le snapshot et au
+	 * champ `stale` remonté au manager.
+	 */
+	public static function capture_is_stale(): bool {
+		$last = self::last_capture();
+		if ( null === $last ) {
+			return true;
+		}
+		$captured_at = strtotime( $last['captured_at'] );
+
+		return false === $captured_at || ( time() - $captured_at ) > self::stale_after();
+	}
+
+	/**
+	 * Délai au-delà duquel une capture est périmée. Méthode plutôt que constante,
+	 * pour la même raison que `cache_ttl()` : `HOUR_IN_SECONDS` est défini à
+	 * l'exécution par WordPress. 6 h = deux fois l'intervalle du job `twicedaily`,
+	 * assez large pour ne pas éperonner les API des éditeurs.
+	 */
+	private static function stale_after(): int {
+		return 6 * HOUR_IN_SECONDS;
 	}
 
 	/**

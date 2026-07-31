@@ -167,8 +167,13 @@ final class CommandExecutor {
 			$reactivated = self::force_reactivate( $file, $was_network_active );
 		}
 
-		// Re-lire la version installée après upgrade.
-		wp_clean_plugins_cache();
+		// Re-lire la version installée après upgrade. `false` : on ne veut que le
+		// cache d'objets. Sans lui, la suppression du transient emporterait aussi
+		// les entrées des updaters tiers que ce contexte ne sait pas reconstruire
+		// (une MAJ premium en attente sur un AUTRE plugin disparaîtrait). L'entrée
+		// périmée du plugin qu'on vient de mettre à jour, elle, est écartée par
+		// PremiumUpdatesBridge, qui compare la version installée à celle annoncée.
+		wp_clean_plugins_cache( false );
 		$plugins_after = get_plugins();
 		$version_after = isset( $plugins_after[ $file ]['Version'] ) ? (string) $plugins_after[ $file ]['Version'] : $version_before;
 
@@ -288,8 +293,9 @@ final class CommandExecutor {
 			throw new \RuntimeException( esc_html( $result->get_error_message() ) );
 		}
 
-		// Re-lire la version installée après upgrade.
-		wp_clean_themes_cache();
+		// Re-lire la version installée après upgrade. `false` pour la même raison
+		// que dans update_plugin() : ne pas emporter les entrées tierces au passage.
+		wp_clean_themes_cache( false );
 		$themes_after  = wp_get_themes();
 		$version_after = isset( $themes_after[ $stylesheet ] ) ? (string) $themes_after[ $stylesheet ]->get( 'Version' ) : $version_before;
 

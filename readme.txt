@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 1.10.0
+Stable tag: 1.11.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,30 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.11.0 =
+
+* **Fix** — third-party plugin updates are now discovered **without anyone opening the site's
+  wp-admin**, which is the whole point of a fleet console. 1.10.0 relied on two sources that both
+  failed in practice: the admin capture only happens if a human browses the site, and the
+  "preserve before destroying" path never preserved anything. The snapshot called
+  `wp_clean_plugins_cache()` / `wp_clean_themes_cache()` **without arguments** two lines earlier,
+  and both core functions delete the update transients unless passed `false` — so the bridge
+  always read an already-erased transient. Measured on a client site: forcing a privileged
+  re-check put SEOPress PRO 10.1 in the database, the very next snapshot reported
+  `has_update: false` and destroyed the entry.
+* **New** — a dedicated WP-Cron job (`g2rd_connector_refresh_updates`, twice daily) forces a real
+  re-check and captures the result. WP-Cron is one of the three contexts third-party updaters
+  accept — SEOPress tests `DOING_CRON` explicitly — and it is the context WordPress itself uses
+  for automatic updates. No privilege elevation, no admin visit. The schedule self-heals on boot,
+  so existing installs get it on upgrade without replaying the activation hook.
+* **New** — the snapshot exposes `updates_discovery` (`captured_at`, `stale`, `cron_disabled`,
+  `next_run`). A site whose WP-Cron is disabled used to silently claim everything was up to date;
+  the manager can now tell "nothing to update" from "I could not look". When the capture is stale,
+  the snapshot also wakes WP-Cron up (`spawn_cron()`, non-blocking), so low-traffic sites refresh
+  within one sync cycle.
+* **Fix** — applying an update no longer wipes the pending updates of *other* premium plugins:
+  the two post-upgrade cache clears also pass `false`.
 
 = 1.10.0 =
 
