@@ -73,14 +73,22 @@ final class CommandController {
 			);
 		}
 
+		$body = [
+			'command' => $command,
+			'status'  => $outcome['status'],
+			'result'  => $outcome['result'] ?? null,
+			'error'   => $outcome['error'] ?? null,
+			'at'      => gmdate( 'c' ),
+		];
+
+		// Diagnostic : ce qu'un plugin tiers ou une notice PHP a écrit pendant la
+		// commande. Capturé par CommandExecutor plutôt que laissé corrompre ce JSON.
+		if ( isset( $outcome['stray_output'] ) && '' !== $outcome['stray_output'] ) {
+			$body['stray_output'] = $outcome['stray_output'];
+		}
+
 		return new WP_REST_Response(
-			[
-				'command' => $command,
-				'status'  => $outcome['status'],
-				'result'  => $outcome['result'] ?? null,
-				'error'   => $outcome['error'] ?? null,
-				'at'      => gmdate( 'c' ),
-			],
+			$body,
 			'done' === $outcome['status'] ? 200 : 500
 		);
 	}

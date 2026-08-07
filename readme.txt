@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 1.11.1
+Stable tag: 1.11.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,18 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.11.2 =
+
+* **Fix** — WordPress core updates were reported as failures even though they applied
+  correctly. `Core_Upgrader` was the only upgrader built without a skin, so the default
+  `WP_Upgrader_Skin` echoed its progress HTML (`show_message()` = `echo` + `flush()`) into
+  the REST response body, ahead of the JSON. The manager could not decode that body and
+  marked every site of the fleet as failed. Core updates now use `Automatic_Upgrader_Skin`,
+  like plugin, theme and translation updates already did.
+* **Hardening** — command output is buffered: anything a third-party plugin or a PHP notice
+  writes while a command runs is captured and returned as `stray_output` instead of
+  corrupting the JSON response.
 
 = 1.11.1 =
 

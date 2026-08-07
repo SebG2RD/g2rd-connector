@@ -42,6 +42,9 @@ final class CommandExecutor {
 		'update_translations',
 	];
 
+	/** Longueur maximale de la sortie parasite remontée au manager (diagnostic). */
+	private const STRAY_OUTPUT_MAX_CHARS = 500;
+
 	/**
 	 * Exécute une commande. Retourne :
 	 *   - [ 'status' => 'done', 'result' => array<string, mixed> ]
@@ -53,12 +56,24 @@ final class CommandExecutor {
 	 * update_theme (clé `stylesheet`).
 	 *
 	 * @param array<string, mixed>|null $payload
-	 * @return array{status:string,result?:array<string,mixed>,error?:string}|null
+	 * @return array{status:string,result?:array<string,mixed>,error?:string,stray_output?:string}|null
 	 */
 	public static function run( string $command, ?array $payload = null ): ?array {
 		if ( ! in_array( $command, self::ALLOWED, true ) ) {
 			return null;
 		}
+
+		// Une commande ne doit RIEN écrire dans le corps de la réponse : le manager y
+		// attend du JSON et rien d'autre. Cf. l'incident du 2026-08-06 où update_core,
+		// faute de skin silencieux, y déversait son HTML de progression — les 15 MAJ du
+		// cœur, pourtant appliquées, étaient rapportées en échec. La cause est corrigée
+		// (Automatic_Upgrader_Skin) ; ce tampon capture ce qu'un plugin tiers ou une
+		// notice PHP écrirait encore, et le remonte au manager au lieu de corrompre le
+		// JSON. Limite connue : show_message() appelle wp_ob_end_flush_all(), qu'aucun
+		// ob_start() ne retient — d'où le skin comme correction de fond.
+		$outer_level = ob_get_level();
+		$buffering   = ob_start();
+		$stray       = '';
 
 		try {
 			$result = match ( $command ) {
@@ -74,16 +89,43 @@ final class CommandExecutor {
 				'update_theme'              => self::update_theme( (array) ( $payload ?? [] ) ),
 				'update_translations'       => self::update_translations(),
 			};
-			return [
+			$outcome = [
 				'status' => 'done',
 				'result' => $result,
 			];
 		} catch ( \Throwable $e ) {
-			return [
+			$outcome = [
 				'status' => 'failed',
 				'error'  => $e->getMessage(),
 			];
+		} finally {
+			// Ne récupérer QUE notre propre tampon : une commande qui aurait fermé les
+			// tampons en cours de route (wp_ob_end_flush_all) ne doit pas nous faire
+			// voler celui d'un tiers.
+			if ( $buffering && ob_get_level() > $outer_level ) {
+				$stray = (string) ob_get_clean();
+			}
 		}
+
+		if ( '' !== trim( $stray ) ) {
+			$outcome['stray_output'] = self::truncate_stray( $stray );
+		}
+
+		return $outcome;
+	}
+
+	/**
+	 * Aplatit et tronque une sortie parasite : elle sert au diagnostic, pas à
+	 * transporter une page d'erreur entière jusqu'au manager.
+	 */
+	private static function truncate_stray( string $stray ): string {
+		$flat = trim( (string) preg_replace( '/\s+/', ' ', $stray ) );
+
+		if ( strlen( $flat ) <= self::STRAY_OUTPUT_MAX_CHARS ) {
+			return $flat;
+		}
+
+		return substr( $flat, 0, self::STRAY_OUTPUT_MAX_CHARS ) . '…';
 	}
 
 	/**
@@ -439,7 +481,10 @@ final class CommandExecutor {
 			? $updates[0]->version
 			: $version_before;
 
-		$upgrader = new Core_Upgrader();
+		// Automatic_Upgrader_Skin, comme pour les plugins/thèmes/traductions : le skin
+		// par défaut de WP_Upgrader ÉCRIT sa progression (show_message() = echo + flush),
+		// ce qui corrompt la réponse REST attendue par le manager.
+		$upgrader = new Core_Upgrader( new Automatic_Upgrader_Skin() );
 		$result   = $upgrader->upgrade( $updates[0] );
 		$updated  = ! is_wp_error( $result );
 
