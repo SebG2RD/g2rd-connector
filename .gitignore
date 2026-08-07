@@ -10,3 +10,8 @@
 .vscode/
 .claude/
 *.zip
+# Environnement local. Ce dépôt est PUBLIC : rien qui ressemble à un secret ne
+# doit pouvoir y arriver par inadvertance, même si le plugin n'utilise pas de .env.
+.env
+.env.*
+!.env.dist
