@@ -1,0 +1,40 @@
+version: 2
+updates:
+  # Même politique que le manager : les MAJ mineures/patch sont regroupées pour
+  # éviter l'empilement de PR, les MAJ MAJEURES restent en PR individuelles (à
+  # revoir au cas par cas, car potentiellement cassantes — une major mergée sans
+  # relecture a déjà cassé `npm ci` côté manager).
+  #
+  # Les dépendances vivent à la racine de ce dépôt (composer.json, package.json),
+  # pas dans des sous-dossiers comme côté manager.
+  - package-ecosystem: composer
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    labels: [dependencies]
+    groups:
+      dev-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    labels: [dependencies]
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    labels: [dependencies, ci]
+    groups:
+      github-actions:
+        patterns: ['*']
