@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.11.3
+Stable tag: 1.11.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -78,11 +78,23 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 
 == Changelog ==
 
+= 1.11.4 =
+
+* **Fix** — the dependency overrides introduced in 1.11.3 were too broad. Pinning `minimatch`
+  to the v3 branch globally also downgraded the copies used by `typescript-estree`,
+  `test-exclude` and `@sentry/node`, which expect v9 or v10; forcing `@opentelemetry/core` v2
+  into `@sentry/node` made that package throw on load. Both overrides are now scoped so only
+  the vulnerable copies are replaced, and the lockfile was regenerated so that `npm ci` and
+  `npm install` build the same tree. Development toolchain only — the shipped plugin was never
+  affected.
+* **Note** — the release archive no longer ships the `docs/` folder, which held internal design
+  notes.
+
 = 1.11.3 =
 
 * **Maintenance** — the admin build toolchain moved from `@wordpress/scripts` 28 to 34, and
   every known vulnerability in the development dependencies is now closed: `npm audit` reports
-  zero. No PHP file changed in this release.
+  zero. No PHP logic changed in this release, only the version header and constant.
 * **Note** — the admin panel bundle was rebuilt by the newer toolchain. It exposes the same REST
   routes, requests the same WordPress script handles (`wp-element`, `wp-components`,
   `wp-api-fetch`, `react-jsx-runtime`) and ships identical styles.
