@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.11.2
+Stable tag: 1.11.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,16 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.11.3 =
+
+* **Maintenance** — the admin build toolchain moved from `@wordpress/scripts` 28 to 34, and
+  every known vulnerability in the development dependencies is now closed: `npm audit` reports
+  zero. No PHP file changed in this release.
+* **Note** — the admin panel bundle was rebuilt by the newer toolchain. It exposes the same REST
+  routes, requests the same WordPress script handles (`wp-element`, `wp-components`,
+  `wp-api-fetch`, `react-jsx-runtime`) and ships identical styles.
+* **Compatibility** — declared as tested up to WordPress 7.1.
 
 = 1.11.2 =
 
