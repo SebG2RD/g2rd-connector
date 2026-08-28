@@ -2,7 +2,7 @@
 Contributors: sebg2rd
 Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
-Tested up to: 7.0
+Tested up to: 7.1
 Requires PHP: 8.1
 Stable tag: 1.11.2
 License: GPLv2 or later
