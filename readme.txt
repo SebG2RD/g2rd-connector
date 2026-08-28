@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.11.4
+Stable tag: 1.11.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,16 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.11.5 =
+
+* **Fix** — the settings panel stylesheet was never loaded. The plugin enqueued
+  `assets/admin/build/index.css`, but `wp-scripts` emits `style-index.css`; a `file_exists()`
+  guard meant the mismatch failed silently rather than raising an error, and it had been that
+  way since the panel was written. The panel now picks up its intended styling: a 720 px
+  column, spaced action buttons, and the version string in grey monospace.
+* **Added** — right-to-left locales now get `style-index-rtl.css`, which was already built and
+  shipped but had no way of being used.
 
 = 1.11.4 =
 

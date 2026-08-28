@@ -309,7 +309,7 @@ final class Page {
 
 	private function do_enqueue(): void {
 		$js_path  = G2RD_CONNECTOR_DIR . 'assets/admin/build/index.js';
-		$css_path = G2RD_CONNECTOR_DIR . 'assets/admin/build/index.css';
+		$css_path = G2RD_CONNECTOR_DIR . 'assets/admin/build/style-index.css';
 
 		if ( file_exists( $js_path ) ) {
 			wp_enqueue_script(
@@ -324,10 +324,13 @@ final class Page {
 		if ( file_exists( $css_path ) ) {
 			wp_enqueue_style(
 				'g2rd-connector-admin',
-				G2RD_CONNECTOR_URL . 'assets/admin/build/index.css',
+				G2RD_CONNECTOR_URL . 'assets/admin/build/style-index.css',
 				[ 'wp-components' ],
 				(string) filemtime( $css_path )
 			);
+			// wp-scripts emet aussi style-index-rtl.css : WordPress le
+			// substitue automatiquement dans une locale de droite a gauche.
+			wp_style_add_data( 'g2rd-connector-admin', 'rtl', 'replace' );
 		}
 	}
 }
