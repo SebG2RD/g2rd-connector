@@ -18,9 +18,9 @@
     },
     "overrides": {
         "@sentry/node": "^10.0.0",
-        "linkify-it@<5.0.2": "^5.0.2",
-        "markdown-it@<14.2.0": "^14.2.0",
-        "serialize-javascript@<7.0.5": "^7.0.5",
-        "uuid@<11.1.1": "^11.1.1"
+        "linkify-it": "^5.0.2",
+        "markdown-it": "^14.2.0",
+        "serialize-javascript": "^7.0.5",
+        "uuid": "^11.1.1"
     }
 }
