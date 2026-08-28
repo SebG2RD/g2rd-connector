@@ -42,7 +42,7 @@ jobs:
           --health-retries=10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup PHP 8.2 + WP-CLI
         uses: shivammathur/setup-php@v2
@@ -52,7 +52,7 @@ jobs:
           coverage: none
 
       - name: Setup Node 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 

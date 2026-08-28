@@ -24,7 +24,7 @@ jobs:
       php: ${{ steps.filter.outputs.php }}
       js: ${{ steps.filter.outputs.js }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       # Détection inline (même approche que le manager : pas de dépendance à
@@ -70,7 +70,7 @@ jobs:
         # Le plugin requiert PHP 8.1+ (composer.json / en-tête Requires PHP : 8.1).
         php: ['8.1', '8.2', '8.3', '8.4']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
@@ -84,7 +84,7 @@ jobs:
         run: composer validate --strict --no-check-publish
 
       - name: Cache Composer
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: vendor
           key: composer-${{ matrix.php }}-${{ hashFiles('composer.json', 'composer.lock') }}
@@ -113,10 +113,10 @@ jobs:
       matrix:
         node: ['20', '22']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
 
@@ -138,7 +138,7 @@ jobs:
 
       - name: Upload build artifact
         if: matrix.node == '22'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: admin-build
           path: assets/admin/build/

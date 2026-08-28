@@ -22,7 +22,7 @@ jobs:
     name: Générer et publier le SBOM
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
@@ -39,7 +39,7 @@ jobs:
         run: composer install --no-interaction --prefer-dist --no-dev || true
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -58,14 +58,14 @@ jobs:
           upload-release-assets: ${{ github.event_name == 'release' }}
 
       - name: Attester le SBOM (GitHub Artifact Attestation)
-        uses: actions/attest-sbom@v2
+        uses: actions/attest-sbom@v4
         continue-on-error: true
         with:
           subject-path: g2rd-connector-sbom.cdx.json
           sbom-path: g2rd-connector-sbom.cdx.json
 
       - name: Uploader le SBOM comme artifact de workflow
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sbom-${{ github.sha }}
           path: g2rd-connector-sbom.cdx.json
@@ -73,7 +73,7 @@ jobs:
 
       - name: Attacher le SBOM à la release (workflow_dispatch avec tag)
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.tag != ''
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.event.inputs.tag }}
           files: g2rd-connector-sbom.cdx.json
