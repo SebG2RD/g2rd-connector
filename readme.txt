@@ -87,6 +87,10 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
   the vulnerable copies are replaced, and the lockfile was regenerated so that `npm ci` and
   `npm install` build the same tree. Development toolchain only — the shipped plugin was never
   affected.
+* **Fix** — the overrides now use plain package keys instead of the version-range selector
+  (`"markdown-it@<14.2.0"`), which npm 10 does not interpret. The lockfile is generated with
+  npm 10 and `npm ci` was verified under npm 10.8.2, 10.9.4 and 11.16.0, so the CI runners and
+  a local machine build the same tree.
 * **Note** — the release archive no longer ships the `docs/` folder, which held internal design
   notes.
 
