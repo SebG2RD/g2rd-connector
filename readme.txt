@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.11.5
+Stable tag: 1.11.6
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,19 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.11.6 =
+
+* **Security** — closes the `minimatch` ReDoS advisory. A single vulnerable copy (3.0.8) sat
+  under `markdownlint-cli`; the override is scoped to that one parent, so the rest of the tree
+  keeps the v9 and v10 copies its consumers expect. Also pins `qs` to 6.16.0, which clears
+  three advisories reached through `express`.
+* **Note** — one advisory remains and cannot be fixed from here: `extract-zip` is flagged for
+  every published version, so no upgrade closes it. It is pulled in by `puppeteer`, which
+  `@wordpress/scripts` ships for its end-to-end and performance commands. Escaping it would
+  mean forcing `@puppeteer/browsers` 3.x, which requires Node 22.12 or newer while this
+  project still builds on Node 20. None of it is part of the released plugin, which contains
+  only PHP and the pre-built admin bundle.
 
 = 1.11.5 =
 

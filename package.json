@@ -1,6 +1,6 @@
 {
     "name": "g2rd-connector",
-    "version": "1.11.5",
+    "version": "1.11.6",
     "description": "Admin React app for the G2RD Connector WordPress plugin.",
     "license": "GPL-2.0-or-later",
     "private": true,
@@ -21,6 +21,10 @@
         "linkify-it": "^5.0.2",
         "markdown-it": "^14.2.0",
         "serialize-javascript": "^7.0.5",
-        "uuid": "^11.1.1"
+        "uuid": "^11.1.1",
+        "markdownlint-cli": {
+            "minimatch": "^3.1.5"
+        },
+        "qs": "^6.16.0"
     }
 }
