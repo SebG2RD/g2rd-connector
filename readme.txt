@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.11.6
+Stable tag: 1.11.7
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,19 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.11.7 =
+
+* **Fix** — the self-updater now caches the GitHub "latest release" answer for six hours.
+  It used to call the GitHub API on every rebuild of the `update_plugins` transient: core
+  update checks, admin screen visits, and every synchronisation from the manager. The
+  unauthenticated API allows 60 requests per hour per IP, and sites on shared hosting share
+  that IP, so the ceiling was reachable across a fleet.
+* **Safety** — the cache is flushed whenever the manager refreshes update data, before a
+  synchronisation and before an upgrade. Without that, the connector updating itself could
+  read a stale release and do nothing, silently. A failed GitHub call is remembered for only
+  fifteen minutes so an outage is not retried on every request, yet never hides a release for
+  six hours.
 
 = 1.11.6 =
 

@@ -36,6 +36,35 @@ final class GitHubUpdater {
 	private const REQUIRES_PHP    = '8.1';
 
 	/**
+	 * Clé et durées du cache de la dernière release.
+	 *
+	 * Sans cache, chaque reconstruction du transient `update_plugins` appelait
+	 * l'API GitHub : rafraichissement du coeur, visite d'un ecran d'administration,
+	 * synchronisation du manager. L'API non authentifiee plafonne a 60 requetes
+	 * par heure et PAR IP, et plusieurs sites d'un meme parc mutualise partagent
+	 * cette IP — le plafond etait atteignable.
+	 *
+	 * L'echec est memorise brievement et separement : un GitHub indisponible ne
+	 * doit pas etre retente a chaque appel, sans pour autant masquer une release
+	 * pendant six heures.
+	 */
+	private const CACHE_KEY          = 'g2rd_connector_latest_release';
+	private const CACHE_FAILURE_FLAG = 'failed';
+
+	/**
+	 * Durees en methodes plutot qu'en constantes, comme `stale_after()` dans
+	 * PremiumUpdatesBridge : `HOUR_IN_SECONDS` est defini a l'execution par
+	 * WordPress et n'existe pas quand la classe est compilee.
+	 */
+	private static function cache_ttl(): int {
+		return 6 * HOUR_IN_SECONDS;
+	}
+
+	private static function cache_ttl_failure(): int {
+		return 15 * MINUTE_IN_SECONDS;
+	}
+
+	/**
 	 * Args communs pour wp_remote_get vers l'API GitHub.
 	 *
 	 * @var array<string, mixed>
@@ -280,6 +309,41 @@ final class GitHubUpdater {
 	 * @return array<string, mixed>|null
 	 */
 	private function fetch_latest_release(): ?array {
+		$cached = get_site_transient( self::CACHE_KEY );
+		if ( is_array( $cached ) ) {
+			return $cached;
+		}
+		if ( self::CACHE_FAILURE_FLAG === $cached ) {
+			return null;
+		}
+
+		$release = $this->request_latest_release();
+		if ( null === $release ) {
+			set_site_transient( self::CACHE_KEY, self::CACHE_FAILURE_FLAG, self::cache_ttl_failure() );
+			return null;
+		}
+		set_site_transient( self::CACHE_KEY, $release, self::cache_ttl() );
+		return $release;
+	}
+
+	/**
+	 * Vide le cache de release. A appeler quand on a BESOIN d'une reponse
+	 * fraiche : PremiumUpdatesBridge::refresh_update_transients() le fait
+	 * avant chaque synchronisation et avant chaque upgrade. Sans cela, le
+	 * connecteur qui se met a jour lui-meme pourrait relire une release
+	 * perimee, et l'upgrade ne ferait rien, en silence.
+	 */
+	public static function flush_cache(): void {
+		delete_site_transient( self::CACHE_KEY );
+	}
+
+	/**
+	 * Appel reseau brut, sans cache. Ne pas appeler directement :
+	 * passer par fetch_latest_release().
+	 *
+	 * @return array<string, mixed>|null
+	 */
+	private function request_latest_release(): ?array {
 		$response = wp_remote_get( self::GITHUB_API_URL, self::REQUEST_ARGS );
 		if ( is_wp_error( $response ) ) {
 			return null;

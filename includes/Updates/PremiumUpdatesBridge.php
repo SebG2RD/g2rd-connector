@@ -60,6 +60,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Updates;
 
+use G2RD\Connector\Updater\GitHubUpdater;
 use stdClass;
 use WP_Screen;
 
@@ -212,6 +213,10 @@ final class PremiumUpdatesBridge {
 
 			delete_site_transient( 'update_plugins' );
 			delete_site_transient( 'update_themes' );
+			// Le connecteur cache sa propre release GitHub : ce refresh exige une
+			// reponse fraiche, sinon un upgrade du connecteur par lui-meme pourrait
+			// relire une release perimee et ne rien faire.
+			GitHubUpdater::flush_cache();
 			wp_update_plugins();
 			wp_update_themes();
 
