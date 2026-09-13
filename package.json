@@ -1,6 +1,6 @@
 {
     "name": "g2rd-connector",
-    "version": "1.11.7",
+    "version": "1.11.8",
     "description": "Admin React app for the G2RD Connector WordPress plugin.",
     "license": "GPL-2.0-or-later",
     "private": true,
@@ -11,7 +11,7 @@
         "format": "wp-scripts format assets/admin/src"
     },
     "devDependencies": {
-        "@wordpress/scripts": "^34.1.0"
+        "@wordpress/scripts": "^35.0.0"
     },
     "dependencies": {
         "@wordpress/element": "^8.6.0"

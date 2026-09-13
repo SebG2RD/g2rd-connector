@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.11.7
+Stable tag: 1.11.8
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,14 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.11.8 =
+
+* **Security** — closes the two remaining Dependabot alerts on the build tooling. `@wordpress/scripts`
+  moves to 35.0, whose `@puppeteer/browsers` 3.x no longer depends on `extract-zip` (flagged for
+  every published version, no fix available), and `adm-zip` is bumped to 0.6.1. `npm audit` is
+  back to zero. None of this ships in the released plugin, which contains only PHP and the
+  pre-built admin bundle.
 
 = 1.11.7 =
 
