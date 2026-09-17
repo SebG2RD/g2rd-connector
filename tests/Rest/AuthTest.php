@@ -84,6 +84,32 @@ final class AuthTest extends TestCase {
 	}
 
 	/**
+	 * WordPress appelle le permission_callback deux fois pour la MÊME requête
+	 * (dispatch, puis rest_send_allow_header pour l'en-tête Allow). Observé sur le
+	 * banc de test : sans mémoire par requête, le second passage comptait un faux
+	 * rejeu — 9 échecs comptés pour 3 réels.
+	 */
+	public function test_second_permission_check_of_the_same_request_is_not_a_replay(): void {
+		$request = $this->signed_request();
+
+		self::assertTrue( Auth::require_site_token( $request ) );
+		self::assertTrue( Auth::require_site_token( $request ) );
+
+		self::assertSame( [ 'status' => 'ok' ], Auth::last_signature_check() );
+		self::assertSame( 0, SignatureState::stats()['failed_count'] );
+	}
+
+	public function test_a_real_failure_is_counted_once_even_if_checked_twice(): void {
+		$request = $this->signed_request();
+		$request->set_body( '{"command":"update_core"}' );
+
+		Auth::require_site_token( $request );
+		Auth::require_site_token( $request );
+
+		self::assertSame( 1, SignatureState::stats()['failed_count'] );
+	}
+
+	/**
 	 * Une signature invalide ne doit pas pouvoir remplir le registre des nonces.
 	 */
 	public function test_invalid_signature_does_not_store_its_nonce(): void {

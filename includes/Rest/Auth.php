@@ -35,6 +35,20 @@ final class Auth {
 	private static ?array $last_signature_check = null;
 
 	/**
+	 * Résultat déjà calculé, par objet requête.
+	 *
+	 * WordPress appelle le permission_callback DEUX fois pour une même requête :
+	 * au dispatch, puis dans rest_send_allow_header() pour bâtir l'en-tête Allow.
+	 * Sans cette mémoire, le second passage retrouve le nonce que le premier vient
+	 * d'enregistrer et compte un faux rejeu — mesuré sur le banc de test : 9 échecs
+	 * comptés pour 3 réels. Un WeakMap ne retient pas la requête en mémoire et ne
+	 * peut pas confondre deux requêtes distinctes.
+	 *
+	 * @var \WeakMap<WP_REST_Request, array{status:string,code?:string,server_time?:int}>|null
+	 */
+	private static ?\WeakMap $checked = null;
+
+	/**
 	 * Permission callback à brancher sur tous les endpoints sécurisés.
 	 *
 	 * @return true|WP_Error
@@ -60,7 +74,11 @@ final class Auth {
 			);
 		}
 
-		$check                      = self::check_signature( $request, $token );
+		self::$checked ??= new \WeakMap();
+		if ( ! isset( self::$checked[ $request ] ) ) {
+			self::$checked[ $request ] = self::check_signature( $request, $token );
+		}
+		$check                      = self::$checked[ $request ];
 		self::$last_signature_check = $check;
 
 		if ( RequestSignature::STATUS_OK === $check['status'] || 'required' !== Settings::get( 'signature_policy' ) ) {
