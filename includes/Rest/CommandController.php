@@ -87,6 +87,13 @@ final class CommandController {
 			$body['stray_output'] = $outcome['stray_output'];
 		}
 
+		// Résultat de la vérification de signature (cf. Auth) : en politique `report`
+		// un échec n'empêche pas la commande, il doit donc être visible du manager.
+		$signature = Auth::last_signature_check();
+		if ( null !== $signature ) {
+			$body['signature_check'] = $signature;
+		}
+
 		return new WP_REST_Response(
 			$body,
 			'done' === $outcome['status'] ? 200 : 500

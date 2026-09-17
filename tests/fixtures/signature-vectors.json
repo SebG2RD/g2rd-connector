@@ -1,0 +1,39 @@
+{
+  "description": "Vecteurs de signature v1 partages entre g2rd-connector et g2rd-manager-projet. Calcules par une implementation INDEPENDANTE (.NET HMACSHA256), pas par le code teste. Ne pas modifier sans mettre a jour les deux depots.",
+  "key_context": "g2rd-sign-v1",
+  "vectors": [
+    {
+      "name": "post_command_update_plugin",
+      "site_token": "test-site-token-0123456789abcdef",
+      "method": "POST",
+      "route": "/g2rd/v1/command",
+      "timestamp": "1789000000",
+      "nonce": "000102030405060708090a0b0c0d0e0f",
+      "body": "{\"command\":\"update_plugin\",\"payload\":{\"file\":\"akismet/akismet.php\"}}",
+      "body_sha256": "90af3ad192113ba264dabdabcac8411a00fe21e99b146e564292610e7dccde4d",
+      "signature": "1bc44459b6fc06553679880765566446c40fb37bc35a51b52d15d6c76f87f28f"
+    },
+    {
+      "name": "get_snapshot_empty_body",
+      "site_token": "test-site-token-0123456789abcdef",
+      "method": "GET",
+      "route": "/g2rd/v1/snapshot",
+      "timestamp": "1789000123",
+      "nonce": "ffeeddccbbaa99887766554433221100",
+      "body": "",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "signature": "31ffb8e83c74ea3d25c700f22fe1a8564d6f044b3972fd63c511718b2e3fd304"
+    },
+    {
+      "name": "post_utf8_body_other_token",
+      "site_token": "autre-jeton-é-ü-42",
+      "method": "POST",
+      "route": "/g2rd/v1/command",
+      "timestamp": "1789000456",
+      "nonce": "0123456789abcdef0123456789abcdef",
+      "body": "{\"command\":\"clear_cache\",\"note\":\"éàü — test\"}",
+      "body_sha256": "9c708c0c30f9029b67adb2d5bc45ae85391f780fdd49721c785be7958f16cb19",
+      "signature": "1e8aad5a266d0e741dbb242469a11a0e0b39c80f320400519b56282ee3d07310"
+    }
+  ]
+}

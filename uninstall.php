@@ -31,6 +31,9 @@ if ( is_multisite() ) {
 // wp_cache_flush() du snapshot sur les sites à cache objet persistant).
 delete_site_option( 'g2rd_updates_snapshot' );
 
+// Registre des nonces de signature + compteur d'échecs (cf. Security\SignatureState).
+delete_option( 'g2rd_connector_signature_state' );
+
 // Dé-planification des crons si encore présents.
 foreach ( [ 'g2rd_connector_heartbeat', 'g2rd_connector_refresh_updates' ] as $g2rd_hook ) {
     $timestamp = wp_next_scheduled( $g2rd_hook );

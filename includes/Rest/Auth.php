@@ -5,6 +5,12 @@
  * Le manager présente le token long-lived (généré côté Symfony) dans
  * l'en-tête Authorization. On compare en hash_equals contre l'option stockée.
  *
+ * En plus du Bearer, le manager SIGNE ses requêtes (cf. Security\RequestSignature).
+ * La politique par défaut est `report` : la signature est vérifiée, un échec est
+ * compté et remonté au manager, mais la requête est ACCEPTÉE — aucune commande
+ * existante ne peut être refusée à cause de la signature tant que la politique
+ * `required` n'a pas été activée explicitement.
+ *
  * @package G2RD\Connector
  */
 
@@ -12,6 +18,8 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Rest;
 
+use G2RD\Connector\Security\RequestSignature;
+use G2RD\Connector\Security\SignatureState;
 use G2RD\Connector\Settings;
 use WP_Error;
 use WP_REST_Request;
@@ -19,11 +27,21 @@ use WP_REST_Request;
 final class Auth {
 
 	/**
+	 * Résultat de la dernière vérification de signature de la requête courante,
+	 * relu par les contrôleurs pour le remonter au manager.
+	 *
+	 * @var array{status:string,code?:string,server_time?:int}|null
+	 */
+	private static ?array $last_signature_check = null;
+
+	/**
 	 * Permission callback à brancher sur tous les endpoints sécurisés.
 	 *
 	 * @return true|WP_Error
 	 */
 	public static function require_site_token( WP_REST_Request $request ): bool|WP_Error {
+		self::$last_signature_check = null;
+
 		$header = (string) $request->get_header( 'authorization' );
 		if ( '' === $header || stripos( $header, 'Bearer ' ) !== 0 ) {
 			return new WP_Error(
@@ -42,6 +60,71 @@ final class Auth {
 			);
 		}
 
-		return true;
+		$check                      = self::check_signature( $request, $token );
+		self::$last_signature_check = $check;
+
+		if ( RequestSignature::STATUS_OK === $check['status'] || 'required' !== Settings::get( 'signature_policy' ) ) {
+			return true;
+		}
+
+		$code = $check['code'] ?? 'signature_missing';
+		$data = [ 'status' => 401 ];
+		if ( isset( $check['server_time'] ) ) {
+			$data['server_time'] = $check['server_time'];
+		}
+
+		return new WP_Error(
+			'g2rd_connector_' . $code,
+			__( 'Signature de la requête absente ou invalide.', 'g2rd-connector' ),
+			$data
+		);
+	}
+
+	/**
+	 * Résultat de la vérification de signature de la requête courante, ou null si
+	 * aucune requête authentifiée n'a encore été traitée.
+	 *
+	 * @return array{status:string,code?:string,server_time?:int}|null
+	 */
+	public static function last_signature_check(): ?array {
+		return self::$last_signature_check;
+	}
+
+	/**
+	 * Vérifie la signature, consulte le registre des nonces, et compte les échecs.
+	 *
+	 * Ne lève JAMAIS : une erreur inattendue pendant la vérification ne doit pas
+	 * pouvoir faire échouer une requête en politique `report`.
+	 *
+	 * @return array{status:string,code?:string,server_time?:int}
+	 */
+	private static function check_signature( WP_REST_Request $request, string $token ): array {
+		$now = time();
+
+		try {
+			$nonce = (string) $request->get_header( RequestSignature::HEADER_NONCE );
+			$check = RequestSignature::verify(
+				$token,
+				(string) $request->get_method(),
+				(string) $request->get_route(),
+				(string) $request->get_body(),
+				(string) $request->get_header( RequestSignature::HEADER_TIMESTAMP ),
+				$nonce,
+				(string) $request->get_header( RequestSignature::HEADER_SIGNATURE ),
+				$now
+			);
+
+			if ( RequestSignature::STATUS_OK === $check['status'] && ! SignatureState::remember_nonce( $nonce, $now ) ) {
+				$check = RequestSignature::failed( RequestSignature::CODE_REPLAYED );
+			}
+
+			if ( RequestSignature::STATUS_FAILED === $check['status'] ) {
+				SignatureState::record_failure( (string) ( $check['code'] ?? RequestSignature::CODE_INVALID ), $now );
+			}
+
+			return $check;
+		} catch ( \Throwable ) {
+			return RequestSignature::failed( 'signature_error' );
+		}
 	}
 }

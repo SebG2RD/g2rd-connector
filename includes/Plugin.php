@@ -14,6 +14,7 @@ use G2RD\Connector\Cron\HeartbeatJob;
 use G2RD\Connector\Cron\UpdatesDiscoveryJob;
 use G2RD\Connector\Events\Listener;
 use G2RD\Connector\Rest\AdminController;
+use G2RD\Connector\Rest\Auth;
 use G2RD\Connector\Rest\CommandController;
 use G2RD\Connector\Rest\HealthController;
 use G2RD\Connector\Rest\SnapshotController;
@@ -94,6 +95,11 @@ final class Plugin {
 		( new UpdatesDiscoveryJob() )->register();
 		UpdatesDiscoveryJob::schedule();
 
+		// Remonte au manager le résultat de la vérification de signature sur TOUTES
+		// les routes authentifiées (inventaire compris), via un en-tête de réponse :
+		// le corps des réponses existantes n'est pas modifié.
+		add_filter( 'rest_post_dispatch', [ $this, 'expose_signature_check' ], 10, 3 );
+
 		// Endpoints REST sécurisés Bearer SiteToken (consommés par le manager).
 		add_action( 'rest_api_init', [ new SnapshotController(), 'register' ] );
 		if ( Settings::get( 'remote_commands_enabled' ) ) {
@@ -140,6 +146,44 @@ final class Plugin {
 			}
 		}
 		return $result;
+	}
+
+	/**
+	 * Ajoute l'en-tête `X-G2RD-Signature-Check` (`ok`, `absent` ou
+	 * `failed; code=…`) aux réponses des routes `g2rd/v1` authentifiées.
+	 *
+	 * En politique `report`, une signature invalide n'empêche pas la requête :
+	 * sans ce retour, le manager ne saurait jamais qu'un site échoue à vérifier,
+	 * et ne pourrait donc jamais passer sereinement en politique `required`.
+	 *
+	 * @param mixed            $response Réponse REST (inchangée si non-WP_HTTP_Response).
+	 * @param \WP_REST_Server  $server   Serveur REST (non utilisé).
+	 * @param \WP_REST_Request $request  Requête REST courante.
+	 * @return mixed
+	 */
+	public function expose_signature_check( $response, \WP_REST_Server $server, \WP_REST_Request $request ) {
+		unset( $server );
+		if ( ! $response instanceof \WP_HTTP_Response ) {
+			return $response;
+		}
+		if ( 0 !== strpos( (string) $request->get_route(), '/' . G2RD_CONNECTOR_REST_NS ) ) {
+			return $response;
+		}
+
+		// Routes publiques ou d'admin locale du même namespace : pas de Bearer, donc
+		// rien à remonter (et surtout pas le résultat d'un dispatch précédent).
+		$check = Auth::last_signature_check();
+		if ( null === $check || '' === (string) $request->get_header( 'authorization' ) ) {
+			return $response;
+		}
+
+		$value = $check['status'];
+		if ( isset( $check['code'] ) ) {
+			$value .= '; code=' . $check['code'];
+		}
+		$response->header( 'X-G2RD-Signature-Check', $value );
+
+		return $response;
 	}
 
 	public static function activate(): void {

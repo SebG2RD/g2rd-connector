@@ -31,6 +31,9 @@ final class Settings {
 			'heartbeat_enabled'       => true,
 			'events_enabled'          => true,
 			'remote_commands_enabled' => true,
+			// `report` : signature vérifiée, échec remonté, requête acceptée.
+			// `required` : toute requête non signée ou mal signée est refusée.
+			'signature_policy'        => 'report',
 		];
 	}
 
@@ -65,6 +68,11 @@ final class Settings {
 			if ( isset( $value[ $flag ] ) ) {
 				$clean[ $flag ] = (bool) $value[ $flag ];
 			}
+		}
+		if ( isset( $value['signature_policy'] ) ) {
+			// Toute valeur inconnue retombe sur la politique la plus permissive : une
+			// saisie erronée ne doit jamais pouvoir couper le site du manager.
+			$clean['signature_policy'] = 'required' === $value['signature_policy'] ? 'required' : 'report';
 		}
 
 		return array_replace_recursive( self::all(), $clean );
