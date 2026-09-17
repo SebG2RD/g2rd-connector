@@ -47,7 +47,7 @@ jobs:
           CHANGED="$(git diff --name-only "$BASE" "$HEAD" || true)"
           echo "$CHANGED"
           # PHP : code du plugin + config qualité PHP + ce workflow.
-          if echo "$CHANGED" | grep -qE '^(includes/|g2rd-connector\.php|uninstall\.php|composer\.(json|lock)|phpcs\.xml\.dist|phpstan\.neon\.dist|\.github/workflows/ci\.yml$)'; then
+          if echo "$CHANGED" | grep -qE '^(includes/|tests/|g2rd-connector\.php|uninstall\.php|composer\.(json|lock)|phpcs\.xml\.dist|phpstan\.neon\.dist|phpunit\.xml\.dist|\.github/workflows/ci\.yml$)'; then
             echo "php=true" >> "$GITHUB_OUTPUT"
           else
             echo "php=false" >> "$GITHUB_OUTPUT"
@@ -98,6 +98,9 @@ jobs:
 
       - name: PHPStan
         run: composer run analyse
+
+      - name: PHPUnit
+        run: composer run test
 
       - name: Composer audit
         run: composer audit --abandoned=report

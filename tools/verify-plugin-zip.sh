@@ -59,6 +59,9 @@ forbidden=(
   "$SLUG/phpcs.xml.dist"
   "$SLUG/phpstan.neon.dist"
   "$SLUG/tools"
+  "$SLUG/tests"
+  "$SLUG/phpunit.xml"
+  "$SLUG/vendor"
 )
 for f in "${forbidden[@]}"; do
   if unzip -Z1 "$ZIP" | grep -q "^$f"; then

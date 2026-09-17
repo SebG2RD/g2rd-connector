@@ -113,6 +113,8 @@ jobs:
             --exclude='vendor' \
             --exclude='dist' \
             --exclude='tools' \
+            --exclude='tests' \
+            --exclude='phpunit.xml*' \
             --exclude='assets/admin/src' \
             --exclude='assets/admin/node_modules' \
             --exclude='.phpcs.cache' \
