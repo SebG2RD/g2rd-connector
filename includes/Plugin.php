@@ -11,6 +11,7 @@ namespace G2RD\Connector;
 
 use G2RD\Connector\Admin\Page;
 use G2RD\Connector\Cron\HeartbeatJob;
+use G2RD\Connector\Cron\RestorePointPurgeJob;
 use G2RD\Connector\Cron\UpdatesDiscoveryJob;
 use G2RD\Connector\Events\Listener;
 use G2RD\Connector\Rest\AdminController;
@@ -109,6 +110,11 @@ final class Plugin {
 		//   - la garde qui empêche WordPress de réinstaller seul une version retirée.
 		( new HealthEndpoint() )->register();
 		( new AutoUpdateGuard() )->register();
+		// Purge locale horaire des points de restauration : fonctionne hors connexion
+		// à la plateforme. Planification réparée à chaque démarrage, comme la
+		// découverte des MAJ.
+		( new RestorePointPurgeJob() )->register();
+		RestorePointPurgeJob::schedule();
 
 		// Endpoints REST sécurisés Bearer SiteToken (consommés par le manager).
 		add_action( 'rest_api_init', [ new SnapshotController(), 'register' ] );
@@ -206,6 +212,7 @@ final class Plugin {
 	public static function deactivate(): void {
 		HeartbeatJob::unschedule();
 		UpdatesDiscoveryJob::unschedule();
+		RestorePointPurgeJob::unschedule();
 		flush_rewrite_rules();
 	}
 }

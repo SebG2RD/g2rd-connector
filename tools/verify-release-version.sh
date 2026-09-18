@@ -24,10 +24,10 @@ check() {
   fi
 }
 
-HEADER=$(grep -m1 -oP '^\s*\*\s*Version:\s*\K[0-9][0-9.]*' g2rd-connector.php || true)
-CONST=$(grep -m1 -oP "G2RD_CONNECTOR_VERSION'\s*,\s*'\K[0-9][0-9.]*" g2rd-connector.php || true)
-STABLE=$(grep -m1 -oP '^Stable tag:\s*\K[0-9][0-9.]*' readme.txt || true)
-PKG=$(grep -m1 -oP '"version"\s*:\s*"\K[0-9][0-9.]*' package.json || true)
+HEADER=$(grep -m1 -oP '^\s*\*\s*Version:\s*\K[0-9][0-9A-Za-z.-]*' g2rd-connector.php || true)
+CONST=$(grep -m1 -oP "G2RD_CONNECTOR_VERSION'\s*,\s*'\K[0-9][0-9A-Za-z.-]*" g2rd-connector.php || true)
+STABLE=$(grep -m1 -oP '^Stable tag:\s*\K[0-9][0-9A-Za-z.-]*' readme.txt || true)
+PKG=$(grep -m1 -oP '"version"\s*:\s*"\K[0-9][0-9A-Za-z.-]*' package.json || true)
 
 echo "Vérification de l'alignement des versions sur $VERSION"
 check "g2rd-connector.php  (en-tête Version)"        "$HEADER"

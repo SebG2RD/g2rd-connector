@@ -27,6 +27,7 @@ declare(strict_types=1);
 namespace G2RD\Connector\Rollback;
 
 use G2RD\Connector\Commands\CommandExecutor;
+use G2RD\Connector\Cron\RestorePointPurgeJob;
 
 final class ProtectedUpdate {
 
@@ -70,6 +71,8 @@ final class ProtectedUpdate {
 		// ── Point de restauration ────────────────────────────────────────────────
 		$keep    = ! empty( $payload['keep_on_success'] );
 		$grace   = max( 0, (int) ( $payload['grace_seconds'] ?? 0 ) );
+		// Un point retenu (échec, rollback) est supprimé par le cron au-delà de ce plafond.
+		$hold_until = $now + (int) ( $payload['hold_max_seconds'] ?? RestorePointPurgeJob::DEFAULT_HOLD_MAX_SECONDS );
 		$meta    = [
 			'version'           => $version,
 			'kind'              => (string) ( $payload['kind'] ?? RestorePointStore::KIND_CUSTOM ),
@@ -99,13 +102,7 @@ final class ProtectedUpdate {
 		} catch ( \Throwable $e ) {
 			// WordPress ≥ 6.3 remet lui-même les fichiers d'origine quand l'upgrade échoue ;
 			// le point est retenu jusqu'à résolution (design §5.6), l'erreur remonte comme avant.
-			$s->store->update(
-				$point['id'],
-				[
-					'hold' => true,
-					'expires_at' => null,
-				]
-			);
+			$s->store->hold( $point['id'], $hold_until );
 			UpdateTransaction::close();
 			throw $e;
 		}
@@ -157,13 +154,7 @@ final class ProtectedUpdate {
 		$version_after = (string) ( $result['version_after'] ?? '' );
 		try {
 			$this->restore( $plugin_file, $point, $version, $version_after, (bool) ( $result['was_active'] ?? false ), (bool) ( $result['network_active'] ?? false ) );
-			$s->store->update(
-				$point['id'],
-				[
-					'hold' => true,
-					'expires_at' => null,
-				]
-			);
+			$s->store->hold( $point['id'], $hold_until );
 			$health['after_rollback'] = $s->health->measure();
 			UpdateTransaction::close();
 			// array_replace (pas `+`) : `updated` et `version_after` doivent refléter l'état
@@ -184,13 +175,7 @@ final class ProtectedUpdate {
 				]
 			);
 		} catch ( \Throwable $e ) {
-			$s->store->update(
-				$point['id'],
-				[
-					'hold' => true,
-					'expires_at' => null,
-				]
-			);
+			$s->store->hold( $point['id'], $hold_until );
 			UpdateTransaction::close();
 			return $result + [
 				'outcome'       => self::OUTCOME_AUTO_ROLLBACK_FAILED,
@@ -261,13 +246,7 @@ final class ProtectedUpdate {
 				$point    = $services->store->get( $point_id );
 				if ( null !== $point ) {
 					( new self( $services ) )->restore( $plugin_file, $point, (string) $point['version'], null, ! empty( $txn['was_active'] ), ! empty( $txn['network_active'] ) );
-					$services->store->update(
-						$point_id,
-						[
-							'hold' => true,
-							'expires_at' => null,
-						]
-					);
+					$services->store->hold( $point_id, $now + RestorePointPurgeJob::DEFAULT_HOLD_MAX_SECONDS );
 					$outcome['outcome'] = 'recovered_rolled_back';
 				} else {
 					$outcome['outcome'] = 'recovered_no_restore_point';

@@ -71,17 +71,60 @@ wp plugin activate g2rd-connector
 | Méthode | Path | Auth | Description |
 | --- | --- | --- | --- |
 | GET | `/wp-json/g2rd/v1/health` | none | Ping public |
-| GET | `/wp-json/g2rd/v1/snapshot` | Bearer SiteToken | Inventaire complet |
-| POST | `/wp-json/g2rd/v1/command` | Bearer SiteToken | Exécute commande |
+| GET | `/wp-json/g2rd/v1/snapshot` | Bearer SiteToken (+ signature) | Inventaire complet |
+| POST | `/wp-json/g2rd/v1/command` | Bearer SiteToken (+ signature) | Exécute commande |
+
+### Signature des requêtes du manager
+
+En plus du Bearer, le manager signe chaque requête (HMAC-SHA256, clé dérivée du SiteToken,
+horodatage ±300 s, nonce anti-rejeu) : en-têtes `X-G2RD-Timestamp`, `X-G2RD-Nonce`,
+`X-G2RD-Signature: v1=…`. C'est la **route REST** (`/g2rd/v1/command`) qui est signée, pas le
+chemin de l'URL — un site en sous-dossier ou en permaliens simples (`?rest_route=`) reste valide.
+
+Politique, réglable dans la page d'administration (« Exiger des commandes signées ») :
+
+- `report` (défaut) : la signature est vérifiée et son résultat remonté au manager (champ
+  `signature_check`, en-tête `X-G2RD-Signature-Check`), mais une requête non signée reste acceptée ;
+- `required` : toute requête non signée ou mal signée est refusée (401).
+
+Les commandes `rollback_plugin`, `delete_restore_point` et `set_signature_policy` exigent une
+signature valide quelle que soit la politique.
+
+### Rollback des extensions (points de restauration)
+
+Quand le manager envoie `update_plugin` avec `snapshot: true`, le plugin enchaîne, dans la même
+requête : référence de santé (loopback accueil + `admin-ajax.php?action=g2rd_health`), zip du
+dossier de l'extension dans `wp-content/g2rd-snapshots/`, mise à jour, contrôle de santé, et
+**rollback automatique** si le site a régressé (HTTP ≥ 500, écran blanc, erreur fatale). Un site
+dont le loopback est impossible donne « non vérifiable », jamais « cassé ».
+
+- Les points portent un nom aléatoire et le dossier est protégé (`index.php`, `.htaccess`,
+  `web.config`). Sous **nginx**, `.htaccess` est ignoré : ajoutez à la configuration du site
+  `location ~* /wp-content/g2rd-snapshots/ { deny all; return 404; }`.
+- Rétention : un point par extension, purgé après le délai de grâce fixé par le manager (72 h par
+  défaut) ou immédiatement sur les plans sans délai ; budget disque global (300 Mo par défaut) ;
+  un point retenu après un échec est supprimé au plus tard après 7 jours ; jamais plus de 3 points
+  par extension. La purge est un cron WordPress local, elle fonctionne hors connexion au manager.
+- Après un rollback, la version retirée est bloquée pour les mises à jour automatiques de
+  WordPress jusqu'à la version suivante.
+- Le plugin ne se rollback jamais lui-même. La capacité `restore_points` n'est annoncée dans
+  l'inventaire que si le système de fichiers est en accès direct et qu'une bibliothèque zip existe.
+- Limite connue : WordPress peut envoyer son e-mail « erreur critique » avant le rollback
+  automatique (au plus une fois par jour).
 
 ## Développement
 
 ```bash
 composer install
-composer run lint         # PHPCS WordPress Standards
+composer run lint         # PHPCS WordPress Standards (+ sniffs Security, comme Plugin Check)
 composer run analyse      # PHPStan level 6
+composer run test         # PHPUnit + Brain Monkey (sans WordPress)
+composer run ci           # les trois
 npm ci && npm run start   # @wordpress/scripts en watch mode
 ```
+
+Une version `X.Y.Z-rc.N` (commit `version: X.Y.Z-rc.N`) est publiée en **pré-release** : l'updater
+des sites l'ignore, elle s'installe à la main sur les sites pilotes.
 
 ## License
 

@@ -18,6 +18,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Rollback;
 
+use G2RD\Connector\Cron\RestorePointPurgeJob;
 use G2RD\Connector\Settings;
 
 // phpcs:disable WordPress.WP.AlternativeFunctions -- système de fichiers direct, voir RestorePointStore.
@@ -81,13 +82,7 @@ final class RestoreCommands {
 					throw RestoreException::integrity( 'restore point hash differs from the platform record' );
 				}
 				$restored = ( new ProtectedUpdate( $s ) )->restore( $file, $point, $expected_version, $expected_current, $was_active, $network );
-				$s->store->update(
-					$point['id'],
-					[
-						'hold' => true,
-						'expires_at' => null,
-					]
-				);
+				$s->store->hold( $point['id'], time() + (int) ( $payload['hold_max_seconds'] ?? RestorePointPurgeJob::DEFAULT_HOLD_MAX_SECONDS ) );
 				$via = 'restore_point';
 			} elseif ( '' !== $source ) {
 				$restored = $this->restore_from_download( $file, $source, $expected_version, $expected_current, $was_active, $network );

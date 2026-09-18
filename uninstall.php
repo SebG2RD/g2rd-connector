@@ -34,8 +34,42 @@ delete_site_option( 'g2rd_updates_snapshot' );
 // Registre des nonces de signature + compteur d'échecs (cf. Security\SignatureState).
 delete_option( 'g2rd_connector_signature_state' );
 
+// Points de restauration (cf. Rollback\RestorePointStore) : on supprime UNIQUEMENT
+// les zips indexés par le plugin et ses fichiers de protection, puis le dossier s'il
+// est vide. Un fichier étranger déposé dans ce dossier n'est jamais touché.
+// WordPress inclut uninstall.php SANS charger le plugin : les constantes du fichier
+// principal n'existent pas encore, l'autoloader en a besoin.
+if ( ! defined( 'G2RD_CONNECTOR_DIR' ) ) {
+	define( 'G2RD_CONNECTOR_DIR', plugin_dir_path( __FILE__ ) );
+}
+require_once __DIR__ . '/includes/autoload.php';
+if ( class_exists( \G2RD\Connector\Rollback\RestorePointStore::class ) ) {
+	$g2rd_store = new \G2RD\Connector\Rollback\RestorePointStore();
+	foreach ( array_keys( $g2rd_store->all() ) as $g2rd_point_id ) {
+		$g2rd_store->remove( (string) $g2rd_point_id );
+	}
+	$g2rd_dir = $g2rd_store->dir();
+	if ( is_dir( $g2rd_dir ) ) {
+		foreach ( [ 'index.php', '.htaccess', 'web.config' ] as $g2rd_guard ) {
+			if ( file_exists( $g2rd_dir . '/' . $g2rd_guard ) ) {
+				wp_delete_file( $g2rd_dir . '/' . $g2rd_guard );
+			}
+		}
+		$g2rd_left = array_diff( (array) scandir( $g2rd_dir ), [ '.', '..' ] );
+		if ( [] === $g2rd_left ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- dossier créé par le plugin, vide.
+			rmdir( $g2rd_dir );
+		}
+	}
+	unset( $g2rd_store, $g2rd_point_id, $g2rd_dir, $g2rd_guard, $g2rd_left );
+}
+foreach ( [ 'g2rd_restore_points', 'g2rd_update_txn', 'g2rd_pending_outcomes', 'g2rd_blocked_versions' ] as $g2rd_option ) {
+	delete_option( $g2rd_option );
+}
+unset( $g2rd_option );
+
 // Dé-planification des crons si encore présents.
-foreach ( [ 'g2rd_connector_heartbeat', 'g2rd_connector_refresh_updates' ] as $g2rd_hook ) {
+foreach ( [ 'g2rd_connector_heartbeat', 'g2rd_connector_refresh_updates', 'g2rd_connector_restore_points_purge' ] as $g2rd_hook ) {
     $timestamp = wp_next_scheduled( $g2rd_hook );
     if ( $timestamp ) {
         wp_unschedule_event( $timestamp, $g2rd_hook );

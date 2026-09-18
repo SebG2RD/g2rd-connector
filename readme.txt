@@ -78,6 +78,19 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 
 == Changelog ==
 
+= Unreleased =
+
+* **Plugin rollback with restore points.** When the manager asks for it, `update_plugin` now takes a
+  health baseline, zips the plugin into `wp-content/g2rd-snapshots/`, updates, checks the site again
+  (home page + admin-ajax) and rolls back automatically if the site regressed. Manual rollback,
+  wordpress.org fallback, disk budget, grace period and a local hourly purge cron. The connector
+  never rolls itself back.
+* **Signed manager requests.** HMAC-SHA256 signature verified next to the Bearer, report-only by
+  default (nothing is refused; the result is reported to the manager). New commands always require
+  a valid signature. A toggle in the admin page switches to strict mode.
+* **Auto-update guard.** After a rollback, WordPress will not silently reinstall the removed version.
+* **Tests.** PHPUnit + Brain Monkey suite (unit tests without WordPress), excluded from the shipped zip.
+
 = 1.11.8 =
 
 * **Security** — closes the two remaining Dependabot alerts on the build tooling. `@wordpress/scripts`

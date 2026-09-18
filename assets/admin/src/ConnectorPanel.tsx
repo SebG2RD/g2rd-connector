@@ -42,6 +42,7 @@ export function ConnectorPanel( { data }: Props ): JSX.Element {
 		heartbeat_enabled: state.heartbeatEnabled,
 		events_enabled: state.eventsEnabled,
 		remote_commands_enabled: state.remoteCommandsEnabled,
+		signature_required: state.signatureRequired,
 	} );
 
 	const save = async (): Promise< void > => {
@@ -247,6 +248,36 @@ export function ConnectorPanel( { data }: Props ): JSX.Element {
 						}
 						disabled={ anyBusy }
 					/>
+
+					<ToggleControl
+						label="Exiger des commandes signées"
+						help={
+							state.signatureRequired
+								? 'Toute requête du manager non signée ou mal signée est refusée. À désactiver si le manager cesse de signer et que le site devient injoignable.'
+								: `La signature est vérifiée et remontée au manager, mais une requête non signée reste acceptée. ${
+										state.signatureFailures.failed_count > 0
+											? `${ state.signatureFailures.failed_count } échec(s) de vérification constaté(s) : n'activez pas avant d'en avoir trouvé la cause.`
+											: 'Aucun échec de vérification constaté.'
+								  }`
+						}
+						checked={ state.signatureRequired }
+						onChange={ ( v ) =>
+							setState( { ...state, signatureRequired: v } )
+						}
+						disabled={ anyBusy }
+					/>
+
+					<p className="description">
+						Points de restauration des extensions :{ ' ' }
+						{ state.restorePoints.count } ({ ' ' }
+						{ ( state.restorePoints.total_bytes / 1048576 ).toFixed(
+							1
+						) }{ ' ' }
+						Mo){ ' ' }
+						{ state.restorePoints.dir_writable
+							? ''
+							: '— dossier non accessible en écriture : le rollback est indisponible sur ce site.' }
+					</p>
 
 					<div className="g2rd-connector-actions">
 						{ ! state.enrolled && (

@@ -17,6 +17,8 @@ declare(strict_types=1);
 
 namespace G2RD\Connector;
 
+use G2RD\Connector\Rollback\RestorePointInventory;
+use G2RD\Connector\Security\SignatureState;
 use G2RD\Connector\Updates\PremiumUpdatesBridge;
 
 final class BootData {
@@ -41,6 +43,9 @@ final class BootData {
 			'heartbeatEnabled'      => (bool) $s['heartbeat_enabled'],
 			'eventsEnabled'         => (bool) $s['events_enabled'],
 			'remoteCommandsEnabled' => (bool) $s['remote_commands_enabled'],
+			'signatureRequired'     => 'required' === ( $s['signature_policy'] ?? 'report' ),
+			'signatureFailures'     => SignatureState::stats(),
+			'restorePoints'         => RestorePointInventory::describe(),
 			'restUrl'               => rest_url( G2RD_CONNECTOR_REST_NS . '/' ),
 			'nonce'                 => wp_create_nonce( 'wp_rest' ),
 			'connectorVersion'      => G2RD_CONNECTOR_VERSION,

@@ -51,6 +51,12 @@ final class AdminController {
 				'required' => false,
 				'type'     => 'boolean',
 			],
+			// Politique de signature des commandes (cf Rest\Auth) : true = `required`,
+			// false = `report`. Issue de secours locale si la plateforme ne signe plus.
+			'signature_required'      => [
+				'required' => false,
+				'type'     => 'boolean',
+			],
 		];
 
 		$url_arg = [
@@ -179,6 +185,11 @@ final class AdminController {
 			if ( null !== $value ) {
 				$settings[ $flag ] = (bool) $value;
 			}
+		}
+
+		$signature_required = $request->get_param( 'signature_required' );
+		if ( null !== $signature_required ) {
+			$settings['signature_policy'] = $signature_required ? 'required' : 'report';
 		}
 
 		return $settings;

@@ -181,7 +181,10 @@ jobs:
           name: 'G2RD Connector v${{ steps.version.outputs.version }}'
           generate_release_notes: true
           draft: false
-          prerelease: false
+          # Une version `-rc.N` est publiée en PRÉ-RELEASE : l'updater GitHub des sites
+          # lit /releases/latest, qui les ignore. Elle s'installe à la main sur les sites
+          # pilotes ; la promotion en release normale se fait par un `version: X.Y.Z`.
+          prerelease: ${{ contains(steps.version.outputs.version, '-rc') }}
           body: |
             ## G2RD Connector v${{ steps.version.outputs.version }}
 

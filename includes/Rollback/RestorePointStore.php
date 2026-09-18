@@ -135,6 +135,21 @@ final class RestorePointStore {
 	}
 
 	/**
+	 * Retient un point (mise à jour échouée ou annulée) : il n'expire plus, mais
+	 * le cron le supprimera au-delà de `$hold_until` — le disque du client est compté.
+	 */
+	public function hold( string $id, int $hold_until ): void {
+		$this->update(
+			$id,
+			[
+				'hold'       => true,
+				'expires_at' => null,
+				'hold_until' => $hold_until,
+			]
+		);
+	}
+
+	/**
 	 * Supprime un point : son zip, puis son entrée d'index. Ne touche qu'à un
 	 * fichier présent dans l'index ET situé dans le dossier de stockage.
 	 */

@@ -29,6 +29,23 @@ export interface ConnectorBootData {
 	heartbeatEnabled: boolean;
 	eventsEnabled: boolean;
 	remoteCommandsEnabled: boolean;
+	/**
+	 * Politique de signature des commandes du manager : true = toute requête non
+	 * signée est refusée (`required`), false = vérifiée et remontée, mais acceptée
+	 * (`report`). Issue de secours locale si le manager cessait de signer.
+	 */
+	signatureRequired: boolean;
+	signatureFailures: {
+		failed_count: number;
+		last_failed_at: number | null;
+		last_code: string | null;
+	};
+	/** Points de restauration détenus par ce site (rollback des extensions). */
+	restorePoints: {
+		count: number;
+		total_bytes: number;
+		dir_writable: boolean;
+	};
 	restUrl: string;
 	nonce: string;
 	connectorVersion: string;
