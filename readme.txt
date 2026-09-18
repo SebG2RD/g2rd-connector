@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.11.8
+Stable tag: 1.12.0-rc.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -69,7 +69,7 @@ Disconnect from the plugin settings (button **Disconnect from manager**), or rev
 
 = What happens on uninstall? =
 
-All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job is unscheduled, and the site stops sending anything. The manager-side record is preserved until you delete it from the dashboard.
+All plugin options (`g2rd_connector_settings`, restore point index, signature state) are removed, the cron jobs are unscheduled, the restore point archives the plugin created in `wp-content/g2rd-snapshots/` are deleted (nothing else in that folder is touched), and the site stops sending anything. The manager-side record is preserved until you delete it from the dashboard.
 
 == Screenshots ==
 
@@ -78,7 +78,7 @@ All plugin options (`g2rd_connector_settings`) are removed, the hourly cron job 
 
 == Changelog ==
 
-= Unreleased =
+= 1.12.0-rc.1 =
 
 * **Plugin rollback with restore points.** When the manager asks for it, `update_plugin` now takes a
   health baseline, zips the plugin into `wp-content/g2rd-snapshots/`, updates, checks the site again
