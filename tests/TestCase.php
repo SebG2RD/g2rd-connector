@@ -26,6 +26,7 @@ abstract class TestCase extends PHPUnitTestCase {
 		parent::setUp();
 		Monkey\setUp();
 		Functions\stubTranslationFunctions();
+		Functions\stubEscapeFunctions();
 
 		$this->options = [];
 

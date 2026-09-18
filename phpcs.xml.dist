@@ -31,6 +31,11 @@
          À réactiver une fois les docblocks ajoutés (cf. README, section Qualité). -->
     <!-- <rule ref="WordPress-Docs"/> -->
 
+    <!-- Plugin Check (wp.org) applique les sniffs de sécurité EN PLUS de WordPress-Core.
+         On les joue aussi en local pour ne plus les découvrir en CI : 12 messages
+         d'exception non échappés avaient passé le lint local (étape 3a du rollback). -->
+    <rule ref="WordPress.Security"/>
+
     <config name="testVersion" value="8.1-"/>
     <config name="minimum_supported_wp_version" value="6.4"/>
 </ruleset>

@@ -46,12 +46,12 @@ final class Snapshotter {
 	public function create( string $plugin_file, array $meta, int $now ): array {
 		$source = $this->resolve_source( $plugin_file );
 		if ( null === $source ) {
-			throw new RestorePointException( RestorePointException::FAILED, 'plugin directory not found: ' . $plugin_file );
+			throw RestorePointException::failed( esc_html( 'plugin directory not found: ' . $plugin_file ) );
 		}
 		[ $source_path, $is_dir ] = $source;
 
 		if ( ! $this->store->ensure_dir() ) {
-			throw new RestorePointException( RestorePointException::FAILED, 'snapshot directory is not writable' );
+			throw RestorePointException::failed( 'snapshot directory is not writable' );
 		}
 
 		$size   = $is_dir ? $this->dir_size( $source_path ) : (int) filesize( $source_path );
@@ -61,19 +61,13 @@ final class Snapshotter {
 		// 1) Espace disque MESURÉ insuffisant : refus, rien n'est écrit.
 		$free = $this->free_space( $this->store->dir() );
 		if ( null !== $free && $free < 2 * $size + $margin ) {
-			throw new RestorePointException(
-				RestorePointException::DISK_SPACE,
-				sprintf( 'insufficient disk space: %d bytes free, %d required', $free, 2 * $size + $margin )
-			);
+			throw RestorePointException::disk_space( esc_html( sprintf( 'insufficient disk space: %d bytes free, %d required', $free, 2 * $size + $margin ) ) );
 		}
 
 		// 2) Budget des points : on évince d'abord ce qui coûte le moins, puis on refuse.
 		$missing = $this->store->make_room( $size, $budget, $now );
 		if ( $missing > 0 ) {
-			throw new RestorePointException(
-				RestorePointException::DISK_SPACE,
-				sprintf( 'restore points budget exceeded: %d bytes over the %d bytes allowed', $missing, $budget )
-			);
+			throw RestorePointException::disk_space( esc_html( sprintf( 'restore points budget exceeded: %d bytes over the %d bytes allowed', $missing, $budget ) ) );
 		}
 
 		$id   = RestorePointStore::new_id();
@@ -85,10 +79,10 @@ final class Snapshotter {
 		try {
 			$expected = $this->zip( $source_path, $is_dir, $tmp );
 			if ( ! $this->zip_is_sound( $tmp, $expected ) ) {
-				throw new RestorePointException( RestorePointException::FAILED, 'zip verification failed' );
+				throw RestorePointException::failed( 'zip verification failed' );
 			}
 			if ( ! rename( $tmp, $path ) ) {
-				throw new RestorePointException( RestorePointException::FAILED, 'could not finalize zip' );
+				throw RestorePointException::failed( 'could not finalize zip' );
 			}
 		} catch ( \Throwable $e ) {
 			if ( file_exists( $tmp ) ) {
@@ -97,7 +91,7 @@ final class Snapshotter {
 			if ( $e instanceof RestorePointException ) {
 				throw $e;
 			}
-			throw new RestorePointException( RestorePointException::FAILED, 'zip failed: ' . $e->getMessage() );
+			throw RestorePointException::failed( esc_html( 'zip failed: ' . $e->getMessage() ) );
 		}
 
 		$record = [
@@ -166,7 +160,7 @@ final class Snapshotter {
 	private function zip_with_ziparchive( string $source_path, bool $is_dir, string $target ): int {
 		$zip = new \ZipArchive();
 		if ( true !== $zip->open( $target, \ZipArchive::CREATE | \ZipArchive::OVERWRITE ) ) {
-			throw new \RuntimeException( 'cannot open zip for writing' );
+			throw new \RuntimeException( esc_html( 'cannot open zip for writing' ) );
 		}
 
 		$count = 0;
@@ -188,7 +182,7 @@ final class Snapshotter {
 		}
 
 		if ( ! $zip->close() ) {
-			throw new \RuntimeException( 'cannot write zip' );
+			throw new \RuntimeException( esc_html( 'cannot write zip' ) );
 		}
 		return $count;
 	}
@@ -202,7 +196,7 @@ final class Snapshotter {
 		// PclZip lit ses options via func_get_args() : le stub ne déclare que le 1er paramètre.
 		$result = $archive->create( $source_path, PCLZIP_OPT_REMOVE_PATH, $parent ); // @phpstan-ignore-line
 		if ( 0 === $result || ! is_array( $result ) ) {
-			throw new \RuntimeException( 'PclZip: ' . $archive->errorInfo( true ) );
+			throw new \RuntimeException( esc_html( 'PclZip: ' . (string) $archive->errorInfo( true ) ) );
 		}
 		return count( $result );
 	}
