@@ -9,7 +9,9 @@
  * La politique par défaut est `report` : la signature est vérifiée, un échec est
  * compté et remonté au manager, mais la requête est ACCEPTÉE — aucune commande
  * existante ne peut être refusée à cause de la signature tant que la politique
- * `required` n'a pas été activée explicitement.
+ * `required` n'a pas été activée explicitement. Seules les commandes listées dans
+ * CommandExecutor::SIGNED_ONLY exigent une signature valide quelle que soit la
+ * politique.
  *
  * @package G2RD\Connector
  */
@@ -18,6 +20,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Rest;
 
+use G2RD\Connector\Commands\CommandExecutor;
 use G2RD\Connector\Security\RequestSignature;
 use G2RD\Connector\Security\SignatureState;
 use G2RD\Connector\Settings;
@@ -81,7 +84,7 @@ final class Auth {
 		$check                      = self::$checked[ $request ];
 		self::$last_signature_check = $check;
 
-		if ( RequestSignature::STATUS_OK === $check['status'] || 'required' !== Settings::get( 'signature_policy' ) ) {
+		if ( RequestSignature::STATUS_OK === $check['status'] || ! self::signature_is_mandatory( $request ) ) {
 			return true;
 		}
 
@@ -144,5 +147,19 @@ final class Auth {
 		} catch ( \Throwable ) {
 			return RequestSignature::failed( 'signature_error' );
 		}
+	}
+
+	/**
+	 * La signature est-elle exigée pour cette requête ? Oui en politique `required`,
+	 * et toujours pour les commandes de CommandExecutor::SIGNED_ONLY (rollback…),
+	 * quelle que soit la politique : elles n'existaient pas avant la signature, aucun
+	 * manager légitime ne les envoie sans signer.
+	 */
+	private static function signature_is_mandatory( WP_REST_Request $request ): bool {
+		if ( 'required' === Settings::get( 'signature_policy' ) ) {
+			return true;
+		}
+		$command = $request->get_param( 'command' );
+		return is_string( $command ) && in_array( $command, CommandExecutor::SIGNED_ONLY, true );
 	}
 }

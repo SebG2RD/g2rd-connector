@@ -21,6 +21,9 @@ namespace G2RD\Connector\Commands;
 
 use Automatic_Upgrader_Skin;
 use Core_Upgrader;
+use G2RD\Connector\Rollback\ProtectedUpdate;
+use G2RD\Connector\Rollback\RestoreCommands;
+use G2RD\Connector\Rollback\Services;
 use G2RD\Connector\Updates\PremiumUpdatesBridge;
 use Language_Pack_Upgrader;
 use Plugin_Upgrader;
@@ -40,6 +43,22 @@ final class CommandExecutor {
 		'update_plugin',
 		'update_theme',
 		'update_translations',
+		'rollback_plugin',
+		'delete_restore_point',
+		'set_signature_policy',
+	];
+
+	/**
+	 * Commandes qui exigent une signature valide QUELLE QUE SOIT la politique de
+	 * signature du site (cf Rest\Auth). Les commandes historiques n'y figurent pas :
+	 * en politique `report`, elles restent acceptées sans signature.
+	 *
+	 * @var list<string>
+	 */
+	public const SIGNED_ONLY = [
+		'rollback_plugin',
+		'delete_restore_point',
+		'set_signature_policy',
 	];
 
 	/** Longueur maximale de la sortie parasite remontée au manager (diagnostic). */
@@ -88,6 +107,9 @@ final class CommandExecutor {
 				'update_plugin'             => self::update_plugin( (array) ( $payload ?? [] ) ),
 				'update_theme'              => self::update_theme( (array) ( $payload ?? [] ) ),
 				'update_translations'       => self::update_translations(),
+				'rollback_plugin'           => ( new RestoreCommands( Services::make() ) )->rollback_plugin( (array) ( $payload ?? [] ) ),
+				'delete_restore_point'      => ( new RestoreCommands( Services::make() ) )->delete_restore_point( (array) ( $payload ?? [] ) ),
+				'set_signature_policy'      => ( new RestoreCommands( Services::make() ) )->set_signature_policy( (array) ( $payload ?? [] ) ),
 			};
 			$outcome = [
 				'status' => 'done',
@@ -151,6 +173,30 @@ final class CommandExecutor {
 			throw new \RuntimeException( esc_html( 'plugin not installed: ' . $file ) );
 		}
 
+		// Mise à jour PROTÉGÉE (point de restauration + contrôle de santé + rollback
+		// automatique), uniquement si la plateforme le demande (`snapshot: true`), si
+		// le site le permet, et jamais pour le connecteur lui-même : son rollback
+		// remplacerait le code en cours d'exécution. Sans le drapeau, le chemin
+		// historique ci-dessous est strictement inchangé.
+		if ( ! empty( $payload['snapshot'] ) && Services::supported() && plugin_basename( G2RD_CONNECTOR_FILE ) !== $file ) {
+			return ( new ProtectedUpdate( Services::make() ) )->run(
+				$file,
+				$payload,
+				static fn (): array => self::perform_plugin_upgrade( $file, $plugins )
+			);
+		}
+
+		return self::perform_plugin_upgrade( $file, $plugins );
+	}
+
+	/**
+	 * La mise à jour elle-même : Plugin_Upgrader + réactivation. Chemin historique,
+	 * partagé par la mise à jour simple et la mise à jour protégée.
+	 *
+	 * @param array<string, array<string, mixed>> $plugins Sortie de get_plugins(), déjà contrôlée.
+	 * @return array<string, mixed>
+	 */
+	private static function perform_plugin_upgrade( string $file, array $plugins ): array {
 		$version_before = isset( $plugins[ $file ]['Version'] ) ? (string) $plugins[ $file ]['Version'] : '';
 
 		// État d'activation AVANT l'upgrade : Plugin_Upgrader::upgrade() désactive

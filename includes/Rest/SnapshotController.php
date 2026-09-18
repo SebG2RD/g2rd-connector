@@ -14,6 +14,9 @@ declare(strict_types=1);
 namespace G2RD\Connector\Rest;
 
 use G2RD\Connector\Cron\UpdatesDiscoveryJob;
+use G2RD\Connector\Rollback\PendingOutcomes;
+use G2RD\Connector\Rollback\RestorePointInventory;
+use G2RD\Connector\Rollback\Services;
 use G2RD\Connector\Settings;
 use G2RD\Connector\Updates\PremiumUpdatesBridge;
 use WP_REST_Response;
@@ -182,9 +185,29 @@ final class SnapshotController {
 				'server'            => $this->server_info(),
 				'db_health'         => $this->db_health(),
 				'updates_discovery' => $this->updates_discovery( $discovery_stale ),
+				// Rollback des plugins : ce que le site sait faire, les points qu'il
+				// détient, et ce qui s'est passé hors d'une réponse à la plateforme.
+				'capabilities'      => $this->capabilities(),
+				'restore_points'    => RestorePointInventory::describe(),
+				'pending_outcomes'  => PendingOutcomes::all(),
 			],
 			200
 		);
+	}
+
+	/**
+	 * Capacités du connecteur, pour que la plateforme n'ait pas à comparer des
+	 * numéros de version. `restore_points` n'est annoncée que si le module peut
+	 * réellement fonctionner ici (système de fichiers direct + bibliothèque zip).
+	 *
+	 * @return list<string>
+	 */
+	private function capabilities(): array {
+		$capabilities = [ 'signed_commands' ];
+		if ( Services::supported() ) {
+			$capabilities[] = 'restore_points';
+		}
+		return $capabilities;
 	}
 
 	/**

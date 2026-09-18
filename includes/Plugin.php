@@ -18,6 +18,8 @@ use G2RD\Connector\Rest\Auth;
 use G2RD\Connector\Rest\CommandController;
 use G2RD\Connector\Rest\HealthController;
 use G2RD\Connector\Rest\SnapshotController;
+use G2RD\Connector\Rollback\AutoUpdateGuard;
+use G2RD\Connector\Rollback\HealthEndpoint;
 use G2RD\Connector\Updater\GitHubUpdater;
 use G2RD\Connector\Updates\PremiumUpdatesBridge;
 
@@ -99,6 +101,14 @@ final class Plugin {
 		// les routes authentifiées (inventaire compris), via un en-tête de réponse :
 		// le corps des réponses existantes n'est pas modifié.
 		add_filter( 'rest_post_dispatch', [ $this, 'expose_signature_check' ], 10, 3 );
+
+		// Rollback des plugins : deux hooks légers, le reste du module n'est chargé
+		// qu'à la demande d'une commande ou du cron.
+		//   - la cible de la sonde d'administration du contrôle de santé (admin-ajax,
+		//     répond seulement à un jeton à usage unique) ;
+		//   - la garde qui empêche WordPress de réinstaller seul une version retirée.
+		( new HealthEndpoint() )->register();
+		( new AutoUpdateGuard() )->register();
 
 		// Endpoints REST sécurisés Bearer SiteToken (consommés par le manager).
 		add_action( 'rest_api_init', [ new SnapshotController(), 'register' ] );

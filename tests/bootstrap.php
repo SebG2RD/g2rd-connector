@@ -17,6 +17,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 if ( ! defined( 'WP_CONTENT_DIR' ) ) {
 	define( 'WP_CONTENT_DIR', sys_get_temp_dir() . '/g2rd-connector-tests-content' );
 }
+if ( ! defined( 'WP_PLUGIN_DIR' ) ) {
+	define( 'WP_PLUGIN_DIR', WP_CONTENT_DIR . '/plugins' );
+}
+if ( ! defined( 'G2RD_CONNECTOR_FILE' ) ) {
+	define( 'G2RD_CONNECTOR_FILE', WP_CONTENT_DIR . '/plugins/g2rd-connector/g2rd-connector.php' );
+}
 if ( ! defined( 'G2RD_CONNECTOR_VERSION' ) ) {
 	define( 'G2RD_CONNECTOR_VERSION', '0.0.0-test' );
 }
