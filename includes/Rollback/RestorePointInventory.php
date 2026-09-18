@@ -37,6 +37,7 @@ final class RestorePointInventory {
 			'items'        => $items,
 			'count'        => count( $items ),
 			'total_bytes'  => $store->total_bytes(),
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- simple diagnostic ; WP_Filesystem exigerait des identifiants pour la même information.
 			'dir_writable' => is_dir( $store->dir() ) ? is_writable( $store->dir() ) : true,
 		];
 	}

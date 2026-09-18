@@ -152,7 +152,12 @@ final class RestoreCommandsTest extends FilesystemTestCase {
 	}
 
 	public function test_download_fallback_refuses_a_host_outside_the_allowlist(): void {
-		Functions\when( 'download_url' )->alias( static fn (): never => throw new \LogicException( 'aucun téléchargement attendu' ) );
+		// Fonction classique, pas fléchée : PHP 8.1 refuse `fn (): never => throw …`.
+		Functions\when( 'download_url' )->alias(
+			static function (): never {
+				throw new \LogicException( 'aucun téléchargement attendu' );
+			}
+		);
 
 		$r = CommandExecutor::run( 'rollback_plugin', [
 			'file'             => self::FILE,
