@@ -16,4 +16,7 @@ define( 'G2RD_CONNECTOR_REST_NS', 'g2rd/v1' );
 
 // Constantes de PclZip (wp-admin/includes/class-pclzip.php), chargé à l'exécution
 // seulement quand ZipArchive est absent : les stubs WordPress ne les déclarent pas.
-define( 'PCLZIP_OPT_REMOVE_PATH', 77001 );
+define( 'PCLZIP_OPT_PATH', 77001 );
+define( 'PCLZIP_OPT_REMOVE_PATH', 77003 );
+define( 'PCLZIP_OPT_EXTRACT_AS_STRING', 77006 );
+define( 'PCLZIP_OPT_BY_NAME', 77008 );

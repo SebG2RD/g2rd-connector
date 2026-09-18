@@ -29,7 +29,7 @@
     },
     "scripts": {
         "lint": "phpcs",
-        "analyse": "phpstan analyse --memory-limit=1G",
+        "analyse": "phpstan analyse --memory-limit=2G",
         "test": "phpunit",
         "ci": [ "@lint", "@analyse", "@test" ]
     },
