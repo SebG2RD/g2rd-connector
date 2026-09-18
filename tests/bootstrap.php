@@ -14,6 +14,9 @@ require_once dirname( __DIR__ ) . '/vendor/autoload.php';
 if ( ! defined( 'ABSPATH' ) ) {
 	define( 'ABSPATH', sys_get_temp_dir() . '/g2rd-connector-tests-abspath/' );
 }
+if ( ! defined( 'WP_CONTENT_DIR' ) ) {
+	define( 'WP_CONTENT_DIR', sys_get_temp_dir() . '/g2rd-connector-tests-content' );
+}
 if ( ! defined( 'G2RD_CONNECTOR_VERSION' ) ) {
 	define( 'G2RD_CONNECTOR_VERSION', '0.0.0-test' );
 }
