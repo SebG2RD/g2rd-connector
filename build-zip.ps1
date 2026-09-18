@@ -15,7 +15,7 @@ Remove-Item -Force        $zipPath    -ErrorAction SilentlyContinue
 
 # Staging : copie filtree (exclut .git, .github, build-zip.ps1, *.zip, caches)
 $excludeDirs  = @('.git', '.github', 'node_modules', 'vendor', 'tests', '.phpunit.cache', '.phpcs.cache', '.phpstan.cache')
-$excludeFiles = @('build-zip.ps1', '*.zip', '*.log', '.DS_Store', 'phpunit.xml*')
+$excludeFiles = @('build-zip.ps1', '*.zip', '*.log', '.DS_Store', 'phpunit.xml*', 'patchwork.json')
 
 $dest = Join-Path $staging 'g2rd-connector'
 New-Item -ItemType Directory -Path $dest -Force | Out-Null

@@ -115,6 +115,7 @@ jobs:
             --exclude='tools' \
             --exclude='tests' \
             --exclude='phpunit.xml*' \
+            --exclude='patchwork.json' \
             --exclude='assets/admin/src' \
             --exclude='assets/admin/node_modules' \
             --exclude='.phpcs.cache' \

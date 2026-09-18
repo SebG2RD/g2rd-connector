@@ -61,6 +61,7 @@ forbidden=(
   "$SLUG/tools"
   "$SLUG/tests"
   "$SLUG/phpunit.xml"
+  "$SLUG/patchwork.json"
   "$SLUG/vendor"
 )
 for f in "${forbidden[@]}"; do

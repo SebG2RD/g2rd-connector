@@ -81,3 +81,39 @@ if ( ! class_exists( 'WP_REST_Request' ) ) {
 		}
 	}
 }
+
+if ( ! class_exists( 'Automatic_Upgrader_Skin' ) ) {
+	class Automatic_Upgrader_Skin {}
+}
+
+if ( ! class_exists( 'Plugin_Upgrader' ) ) {
+	/**
+	 * Doublure : le résultat de upgrade() est fixé par le test ; un callable permet
+	 * de simuler l'effet de bord réel (remplacement des fichiers du plugin).
+	 */
+	class Plugin_Upgrader {
+		/** @var mixed */
+		public static $next_result = true;
+		/** @var callable|null */
+		public static $on_upgrade = null;
+		/** @var list<string> */
+		public static array $upgraded = [];
+
+		public function __construct( public object $skin ) {}
+
+		/** @return mixed */
+		public function upgrade( string $file ) {
+			self::$upgraded[] = $file;
+			if ( null !== self::$on_upgrade ) {
+				( self::$on_upgrade )( $file );
+			}
+			return self::$next_result;
+		}
+
+		public static function reset(): void {
+			self::$next_result = true;
+			self::$on_upgrade  = null;
+			self::$upgraded    = [];
+		}
+	}
+}
