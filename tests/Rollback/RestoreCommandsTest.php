@@ -124,6 +124,45 @@ final class RestoreCommandsTest extends FilesystemTestCase {
 
 		self::assertSame( 'rollback_failed_integrity', $r['outcome'] );
 		self::assertSame( '2.0', $this->plugins_on_disk()[ self::FILE ]['Version'] );
+		self::assertTrue( $this->active, 'une restauration refusée ne doit pas laisser l\'extension éteinte' );
+	}
+
+	/**
+	 * Une erreur fatale pendant la réactivation ne doit plus laisser l'extension
+	 * éteinte.
+	 *
+	 * `activate_plugin()` inclut le fichier principal de l'extension et laisse courir
+	 * du code tiers, le tout AVANT d'écrire `active_plugins`. Le 2026-09-23 sur
+	 * g2rd.fr, Imagify a été correctement restauré en 2.3.2 puis laissé DÉSACTIVÉ,
+	 * avec « Call to a member function dirlist() on null » renvoyé à la plateforme.
+	 * Sur un site client, perdre une extension est pire que le problème qu'on venait
+	 * réparer.
+	 *
+	 * La voie de secours n'exécute aucun code tiers : elle écrit l'option directement.
+	 */
+	public function test_a_fatal_during_reactivation_still_leaves_the_plugin_active(): void {
+		Functions\when( 'activate_plugin' )->alias(
+			static function (): void {
+				throw new \Error( 'Call to a member function dirlist() on null' );
+			}
+		);
+
+		$outcome = CommandExecutor::run( 'rollback_plugin', [
+			'file'                     => self::FILE,
+			'restore_point_id'         => $this->point['id'],
+			'expected_sha256'          => $this->point['sha256'],
+			'expected_version'         => '1.0',
+			'expected_current_version' => '2.0',
+		] );
+
+		self::assertSame( 'done', $outcome['status'], 'la commande ne doit pas remonter l\'erreur fatale' );
+		self::assertSame( RestoreCommands::OUTCOME_SUCCESS, $outcome['result']['outcome'] );
+		self::assertSame( '1.0', $this->plugins_on_disk()[ self::FILE ]['Version'] );
+		self::assertContains(
+			self::FILE,
+			(array) ( $this->options['active_plugins'] ?? [] ),
+			'la voie de secours doit rallumer l\'extension sans passer par le code tiers',
+		);
 	}
 
 	public function test_version_drift_is_refused(): void {

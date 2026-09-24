@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.12.0-rc.1
+Stable tag: 1.12.0-rc.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,18 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.12.0-rc.2 =
+
+* **A plugin is never left deactivated after a restore.** `activate_plugin()` includes the plugin's
+  main file and lets third-party code run, all of it BEFORE `active_plugins` is written. A fatal
+  error there used to leave the plugin switched off with no recourse. The fallback path, which runs
+  no third-party code, now takes over. Reactivation is also attempted when the restore itself fails:
+  the operation is transactional -- the original directory is put back -- so switching the plugin
+  back on is always the right move.
+* **`$wp_filesystem` is initialised before touching any files.** The connector does not need it
+  (extraction goes through ZipArchive), but a lot of third-party code assumes it is available as
+  soon as a plugin moves. That assumption holds in wp-admin and fails in a REST request.
 
 = 1.12.0-rc.1 =
 
