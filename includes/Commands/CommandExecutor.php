@@ -316,9 +316,28 @@ final class CommandExecutor {
 
 		// 1) Voie standard : activate_plugin silencieux. Un retour non-WP_Error
 		// signifie que le plugin a bien été (re)basculé actif dans l'option.
-		$activated = activate_plugin( $file, '', $network_wide, true );
-		if ( ! is_wp_error( $activated ) ) {
-			return true;
+		try {
+			$activated = activate_plugin( $file, '', $network_wide, true );
+			if ( ! is_wp_error( $activated ) ) {
+				return true;
+			}
+		} catch ( \Throwable $e ) {
+			// activate_plugin() inclut le fichier principal de l'extension et laisse
+			// courir du code tiers, le tout AVANT d'écrire `active_plugins`. Une erreur
+			// fatale à cet endroit laissait donc l'extension ÉTEINTE, sans recours :
+			// le catch ci-dessous n'existait pas et l'exception remontait jusqu'à la
+			// réponse de la commande.
+			//
+			// Constaté le 2026-09-23 sur g2rd.fr : Imagify correctement restauré en
+			// 2.3.2, puis désactivé, avec « Call to a member function dirlist() on
+			// null » renvoyé à la plateforme. Sur un site client, perdre une extension
+			// est pire que le problème qu'on venait réparer.
+			//
+			// On bascule sur la voie 2, qui n'exécute AUCUN code tiers : elle écrit
+			// l'option directement. Le chemin de chargement normal de WordPress ne
+			// repasse pas par ces hooks d'activation ; et si la version restaurée
+			// était réellement cassée, le mode recovery natif prend le relais.
+			unset( $e );
 		}
 
 		// 2) Dernier recours : forcer l'option, en court-circuitant les validations

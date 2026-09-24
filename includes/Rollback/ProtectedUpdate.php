@@ -205,13 +205,29 @@ final class ProtectedUpdate {
 		if ( ! function_exists( 'deactivate_plugins' ) ) {
 			require_once ABSPATH . 'wp-admin/includes/plugin.php';
 		}
+
+		// `$wp_filesystem` initialisé AVANT de toucher aux fichiers. Nous n'en avons
+		// pas besoin — l'extraction passe par ZipArchive — mais beaucoup de code tiers
+		// le suppose disponible dès qu'une extension bouge, ce qui est vrai dans
+		// l'administration et FAUX dans une requête REST. Une seule de ces
+		// suppositions suffit à faire tomber la restauration entière.
+		self::ensure_filesystem();
+
 		deactivate_plugins( $plugin_file, true );
 
-		$restored = $s->restorer->restore_from_zip( $path, $plugin_file, (string) $point['sha256'], $expected_version, $expected_current_version );
-
-		if ( $reactivate ) {
-			CommandExecutor::force_reactivate( $plugin_file, $network );
+		try {
+			$restored = $s->restorer->restore_from_zip( $path, $plugin_file, (string) $point['sha256'], $expected_version, $expected_current_version );
+		} finally {
+			// Réactivation GARANTIE, y compris quand la restauration échoue :
+			// `restore_from_zip()` est transactionnel (le dossier d'origine reprend sa
+			// place), donc rallumer est toujours le bon geste. Laisser une extension
+			// éteinte sur un site client est le pire résultat possible — c'est
+			// exactement ce qui s'est produit le 2026-09-23.
+			if ( $reactivate ) {
+				CommandExecutor::force_reactivate( $plugin_file, $network );
+			}
 		}
+
 		if ( null !== $expected_current_version && '' !== $expected_current_version ) {
 			AutoUpdateGuard::block( $plugin_file, $expected_current_version );
 		}
@@ -334,6 +350,53 @@ final class ProtectedUpdate {
 		if ( file_exists( $flag ) ) {
 			// phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- fichier posé par WP_Upgrader, retiré comme il le ferait lui-même.
 			unlink( $flag );
+		}
+	}
+
+	/**
+	 * Renseigne `$wp_filesystem`, que WordPress n'initialise pas de lui-même hors de
+	 * l'administration.
+	 *
+	 * Le connecteur n'en a pas l'usage : l'extraction passe par ZipArchive. Mais dès
+	 * qu'une extension bouge, du code tiers se réveille — vérificateurs de mise à
+	 * jour, caches, sauvegardes de réglages — et beaucoup écrit `$wp_filesystem->…`
+	 * sans vérifier, parce que la supposition tient toujours dans `wp-admin`. Dans
+	 * une requête REST elle ne tient pas, et une seule de ces lignes fait tomber la
+	 * restauration entière.
+	 *
+	 * Volontairement silencieuse : c'est une précaution, pas une dépendance. Si
+	 * l'initialisation échoue, la restauration doit continuer — elle n'en a pas
+	 * besoin pour son propre travail.
+	 */
+	private static function ensure_filesystem(): void {
+		global $wp_filesystem;
+
+		if ( $wp_filesystem instanceof \WP_Filesystem_Base ) {
+			return;
+		}
+
+		if ( ! function_exists( 'WP_Filesystem' ) ) {
+			if ( ! defined( 'ABSPATH' ) ) {
+				return;
+			}
+			// `is_readable` avant `require_once` : l'échec d'un require est une erreur
+			// fatale que try/catch ne rattrape pas. Une précaution ne doit jamais
+			// pouvoir casser ce qu'elle protège.
+			$file = rtrim( (string) ABSPATH, '/\\' ) . '/wp-admin/includes/file.php';
+			if ( ! is_readable( $file ) ) {
+				return;
+			}
+			require_once $file;
+		}
+
+		if ( ! function_exists( 'WP_Filesystem' ) ) {
+			return;
+		}
+
+		try {
+			WP_Filesystem();
+		} catch ( \Throwable $e ) {
+			unset( $e );
 		}
 	}
 }
