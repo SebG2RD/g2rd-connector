@@ -60,15 +60,32 @@ jobs:
           fi
 
   php:
-    name: PHP ${{ matrix.php }}
+    name: PHP ${{ matrix.php }}${{ matrix.experimental && ' (aperçu, non bloquant)' || '' }}
     needs: detect-changes
     if: needs.detect-changes.outputs.php == 'true'
     runs-on: ubuntu-latest
+    # Une version en aperçu signale sans jamais interdire de livrer : un échec
+    # d'outillage ne doit pas bloquer un correctif le jour où il est urgent.
+    continue-on-error: ${{ matrix.experimental == true }}
     strategy:
       fail-fast: false
       matrix:
         # Le plugin requiert PHP 8.1+ (composer.json / en-tête Requires PHP : 8.1).
+        # Ce plancher ne bouge pas : le relever couperait les sites clients restés
+        # en 8.1 ou 8.2.
         php: ['8.1', '8.2', '8.3', '8.4']
+        include:
+          # PLAFOND, pas plancher. PHP 8.5 est déjà installé chez l'hébergeur
+          # (/opt/alt/php85 sur le serveur au 2026-09-25) : un client peut y basculer
+          # depuis son panneau, sans nous prévenir. Sans ce job, on l'apprendrait
+          # par un site cassé.
+          #
+          # Non bloquant au départ : l'outillage (PHPStan 1.x, PHPUnit 10.5,
+          # PHPCS 3.10) est antérieur à 8.5 et criera sur des dépréciations ou des
+          # jetons qu'il ne connaît pas — des échecs d'OUTILLAGE, pas de code.
+          # À rendre bloquant une fois vert de façon stable.
+          - php: '8.5'
+            experimental: true
     steps:
       - uses: actions/checkout@v7
 
@@ -90,8 +107,11 @@ jobs:
           key: composer-${{ matrix.php }}-${{ hashFiles('composer.json', 'composer.lock') }}
           restore-keys: composer-${{ matrix.php }}-
 
+      # `--ignore-platform-req=php` sur l'aperçu uniquement : les dépendances de dev
+      # plafonnent leur contrainte PHP, et sans ce drapeau le job échouerait à
+      # l'installation sans jamais exécuter le moindre test — on n'apprendrait rien.
       - name: Install dependencies
-        run: composer install --no-progress --prefer-dist
+        run: composer install --no-progress --prefer-dist ${{ matrix.experimental && '--ignore-platform-req=php' || '' }}
 
       - name: PHPCS (WordPress Coding Standards)
         run: composer run lint
