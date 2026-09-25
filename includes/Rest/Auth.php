@@ -52,6 +52,39 @@ final class Auth {
 	private static ?\WeakMap $checked = null;
 
 	/**
+	 * Le jeton présenté par le manager, quel que soit l'en-tête qui le porte.
+	 *
+	 * `Authorization` reste la voie normale. `X-G2RD-Token` est un REPLI, parce que
+	 * `Authorization` est un en-tête que les pare-feu d'hébergement mutualisé
+	 * filtrent volontiers : le 2026-09-25, une règle mod_security a renvoyé 403 sur
+	 * toute requête REST le portant, coupant la plateforme de 18 sites clients à la
+	 * fois. Les sites fonctionnaient parfaitement pour leurs visiteurs ; seul le
+	 * canal de gestion était mort, et aucun réenrôlement ne pouvait y changer quoi
+	 * que ce soit puisque la requête n'atteignait jamais WordPress.
+	 *
+	 * Ce repli ne change RIEN à la sécurité : même jeton, même `hash_equals`, même
+	 * politique de signature ensuite. Il déplace le secret d'un en-tête vers un
+	 * autre, il ne l'affaiblit pas. Un en-tête n'est pas un secret ; le jeton l'est.
+	 *
+	 * @return string|null Le jeton, ou null si aucun en-tête exploitable.
+	 */
+	private static function presented_token( WP_REST_Request $request ): ?string {
+		$header = (string) $request->get_header( 'authorization' );
+		if ( '' !== $header && stripos( $header, 'Bearer ' ) === 0 ) {
+			$token = trim( substr( $header, 7 ) );
+			return '' !== $token ? $token : null;
+		}
+
+		// Repli examiné SEULEMENT si `Authorization` est absent ou inexploitable.
+		// L'inverse — regarder le repli d'abord — laisserait un en-tête personnalisé
+		// primer sur l'en-tête standard : un mauvais Bearer pourrait alors être
+		// rattrapé par un repli valide. Deux tests gardent cet ordre.
+		$fallback = trim( (string) $request->get_header( 'x-g2rd-token' ) );
+
+		return '' !== $fallback ? $fallback : null;
+	}
+
+	/**
 	 * Permission callback à brancher sur tous les endpoints sécurisés.
 	 *
 	 * @return true|WP_Error
@@ -59,16 +92,14 @@ final class Auth {
 	public static function require_site_token( WP_REST_Request $request ): bool|WP_Error {
 		self::$last_signature_check = null;
 
-		$header = (string) $request->get_header( 'authorization' );
-		if ( '' === $header || stripos( $header, 'Bearer ' ) !== 0 ) {
+		$token = self::presented_token( $request );
+		if ( null === $token ) {
 			return new WP_Error(
 				'g2rd_connector_missing_token',
 				__( 'Authorization Bearer token requis.', 'g2rd-connector' ),
 				[ 'status' => 401 ]
 			);
 		}
-
-		$token = trim( substr( $header, 7 ) );
 		if ( ! Settings::token_matches( $token ) ) {
 			return new WP_Error(
 				'g2rd_connector_invalid_token',

@@ -57,6 +57,74 @@ final class AuthTest extends TestCase {
 		self::assertSame( 0, SignatureState::stats()['failed_count'] );
 	}
 
+	// ── Repli `X-G2RD-Token` ────────────────────────────────────────────────────
+
+	/**
+	 * Le 2026-09-25, une règle mod_security a renvoyé 403 sur toute requête REST
+	 * portant un en-tête `Authorization`, coupant la plateforme de 18 sites clients.
+	 * Les sites répondaient parfaitement à leurs visiteurs ; seul le canal de gestion
+	 * était mort, et aucun réenrôlement n'y pouvait rien — la requête n'atteignait
+	 * jamais WordPress. `Authorization` est un en-tête que les pare-feu mutualisés
+	 * filtrent volontiers ; il fallait une seconde porte.
+	 */
+	public function test_the_token_is_accepted_from_the_fallback_header(): void {
+		$request = new WP_REST_Request( 'POST', self::ROUTE );
+		$request->set_header( 'X-G2RD-Token', self::TOKEN );
+		$request->set_body( self::BODY );
+		$request->set_param( 'command', 'clear_cache' );
+
+		self::assertTrue( Auth::require_site_token( $request ) );
+	}
+
+	/** Le repli n'affaiblit rien : un mauvais jeton reste refusé, même par cette voie. */
+	public function test_a_wrong_token_in_the_fallback_header_is_still_refused(): void {
+		$request = new WP_REST_Request( 'POST', self::ROUTE );
+		$request->set_header( 'X-G2RD-Token', 'mauvais-jeton' );
+		$request->set_body( self::BODY );
+
+		$result = Auth::require_site_token( $request );
+		self::assertInstanceOf( WP_Error::class, $result );
+		self::assertSame( 'g2rd_connector_invalid_token', $result->get_error_code() );
+		self::assertSame( [ 'status' => 403 ], $result->get_error_data() );
+	}
+
+	/**
+	 * Un `Authorization` présent et VALIDE garde la main : le repli ne sert que
+	 * lorsque l'en-tête standard est absent ou inexploitable.
+	 */
+	public function test_a_valid_authorization_header_wins_over_the_fallback(): void {
+		$request = $this->request();
+		$request->set_header( 'X-G2RD-Token', 'mauvais-jeton' );
+
+		self::assertTrue( Auth::require_site_token( $request ) );
+	}
+
+	/**
+	 * Le garde-fou qui compte : un `Authorization` porteur d'un MAUVAIS jeton ne doit
+	 * pas pouvoir être rattrapé par un repli valide. Sinon un attaquant qui contrôle
+	 * un en-tête personnalisé contournerait l'en-tête standard.
+	 */
+	public function test_a_bad_bearer_cannot_be_rescued_by_a_valid_fallback(): void {
+		$request = $this->request();
+		$request->set_header( 'Authorization', 'Bearer mauvais-jeton' );
+		$request->set_header( 'X-G2RD-Token', self::TOKEN );
+
+		$result = Auth::require_site_token( $request );
+		self::assertInstanceOf( WP_Error::class, $result );
+		self::assertSame( 'g2rd_connector_invalid_token', $result->get_error_code() );
+	}
+
+	/** Un repli vide ne vaut pas mieux qu'un en-tête absent. */
+	public function test_an_empty_fallback_header_is_a_missing_token(): void {
+		$request = new WP_REST_Request( 'POST', self::ROUTE );
+		$request->set_header( 'X-G2RD-Token', '   ' );
+
+		$result = Auth::require_site_token( $request );
+		self::assertInstanceOf( WP_Error::class, $result );
+		self::assertSame( 'g2rd_connector_missing_token', $result->get_error_code() );
+		self::assertSame( [ 'status' => 401 ], $result->get_error_data() );
+	}
+
 	// ── Politique `report` ──────────────────────────────────────────────────────
 
 	public function test_valid_signature_is_ok(): void {
