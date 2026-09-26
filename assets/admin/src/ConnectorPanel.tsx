@@ -42,6 +42,7 @@ export function ConnectorPanel( { data }: Props ): JSX.Element {
 		heartbeat_enabled: state.heartbeatEnabled,
 		events_enabled: state.eventsEnabled,
 		remote_commands_enabled: state.remoteCommandsEnabled,
+		force_ipv4_to_manager: state.forceIpv4ToManager,
 		signature_required: state.signatureRequired,
 	} );
 
@@ -244,6 +245,18 @@ export function ConnectorPanel( { data }: Props ): JSX.Element {
 							setState( {
 								...state,
 								remoteCommandsEnabled: v,
+							} )
+						}
+						disabled={ anyBusy }
+					/>
+					<ToggleControl
+						label="Forcer l'IPv4 vers le manager"
+						help="À activer si l'hébergeur bloque l'IPv6 sortante du serveur : les battements de cœur, les événements et l'enrôlement passent alors par l'IPv4. Ne concerne que les appels vers le manager."
+						checked={ state.forceIpv4ToManager }
+						onChange={ ( v ) =>
+							setState( {
+								...state,
+								forceIpv4ToManager: v,
 							} )
 						}
 						disabled={ anyBusy }

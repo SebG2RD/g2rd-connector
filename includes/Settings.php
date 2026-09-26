@@ -31,6 +31,11 @@ final class Settings {
 			'heartbeat_enabled'       => true,
 			'events_enabled'          => true,
 			'remote_commands_enabled' => true,
+			// Forcer l'IPv4 pour les appels sortants VERS LE MANAGER uniquement. Le
+			// 2026-09-25, le CDN de l'hébergeur refusait l'IPv6 sortante du serveur
+			// (403) : battements de cœur, événements et enrôlement mouraient en route
+			// alors que le site répondait à ses visiteurs. Dormant par défaut.
+			'force_ipv4_to_manager'   => false,
 			// `report` : signature vérifiée, échec remonté, requête acceptée.
 			// `required` : toute requête non signée ou mal signée est refusée.
 			'signature_policy'        => 'report',

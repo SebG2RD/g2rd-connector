@@ -197,6 +197,16 @@ final class Page {
 							</label>
 						</td>
 					</tr>
+					<tr>
+						<th scope="row"><?php echo esc_html__( 'IPv4 vers le manager', 'g2rd-connector' ); ?></th>
+						<td>
+							<label>
+								<input type="checkbox" name="g2rd_force_ipv4_to_manager" value="1"
+									<?php checked( (bool) ( $settings['force_ipv4_to_manager'] ?? false ) ); ?>>
+								<?php echo esc_html__( 'Forcer l\'IPv4 pour les appels vers le manager (si l\'hébergeur bloque l\'IPv6 sortante)', 'g2rd-connector' ); ?>
+							</label>
+						</td>
+					</tr>
 				</table>
 
 				<p class="submit">
@@ -235,6 +245,7 @@ final class Page {
 				'heartbeat_enabled'       => ! empty( $_POST['g2rd_heartbeat_enabled'] ),
 				'events_enabled'          => ! empty( $_POST['g2rd_events_enabled'] ),
 				'remote_commands_enabled' => ! empty( $_POST['g2rd_remote_commands_enabled'] ),
+				'force_ipv4_to_manager'   => ! empty( $_POST['g2rd_force_ipv4_to_manager'] ),
 			]
 		);
 

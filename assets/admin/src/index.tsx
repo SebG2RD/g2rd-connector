@@ -30,6 +30,12 @@ export interface ConnectorBootData {
 	eventsEnabled: boolean;
 	remoteCommandsEnabled: boolean;
 	/**
+	 * Forcer l'IPv4 pour les appels sortants vers le manager (et eux seuls). À
+	 * activer quand l'hébergeur refuse l'IPv6 sortante du serveur : battements de
+	 * cœur, événements et enrôlement passent alors par l'IPv4.
+	 */
+	forceIpv4ToManager: boolean;
+	/**
 	 * Politique de signature des commandes du manager : true = toute requête non
 	 * signée est refusée (`required`), false = vérifiée et remontée, mais acceptée
 	 * (`report`). Issue de secours locale si le manager cessait de signer.
