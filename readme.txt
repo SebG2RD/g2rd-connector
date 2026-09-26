@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.12.0-rc.3
+Stable tag: 1.12.0-rc.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,15 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.12.0-rc.4 =
+
+* **Fix: the "Force IPv4 to the manager" option can now be saved.** In rc.3 the box could be
+  ticked and saved, but it was unticked again on reload: the settings sanitizer, which
+  WordPress runs on every write of the option, did not know the new key and dropped it. The
+  option is now kept, from the settings page and from the admin panel alike. A new test
+  checks that every boolean setting declared in the defaults survives a save, so a future
+  option cannot be silently dropped the same way.
 
 = 1.12.0-rc.3 =
 

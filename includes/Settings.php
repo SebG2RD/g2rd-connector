@@ -69,7 +69,9 @@ final class Settings {
 				$clean[ $text_key ] = sanitize_text_field( (string) $value[ $text_key ] );
 			}
 		}
-		foreach ( [ 'heartbeat_enabled', 'events_enabled', 'remote_commands_enabled' ] as $flag ) {
+		// Toute case à cocher déclarée dans defaults() doit figurer ici : une clé absente
+		// est jetée à chaque enregistrement (défaut de la 1.12.0-rc.3 sur l'option IPv4).
+		foreach ( [ 'heartbeat_enabled', 'events_enabled', 'remote_commands_enabled', 'force_ipv4_to_manager' ] as $flag ) {
 			if ( isset( $value[ $flag ] ) ) {
 				$clean[ $flag ] = (bool) $value[ $flag ];
 			}
