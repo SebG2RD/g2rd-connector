@@ -14,6 +14,7 @@ use G2RD\Connector\Cron\HeartbeatJob;
 use G2RD\Connector\Cron\RestorePointPurgeJob;
 use G2RD\Connector\Cron\UpdatesDiscoveryJob;
 use G2RD\Connector\Events\Listener;
+use G2RD\Connector\Outbound\ManagerIpv4Guard;
 use G2RD\Connector\Rest\AdminController;
 use G2RD\Connector\Rest\Auth;
 use G2RD\Connector\Rest\CommandController;
@@ -64,6 +65,14 @@ final class Plugin {
 		// Migration de sécurité : ré-chiffre un site_token encore stocké en clair
 		// (installations antérieures au chiffrement au repos). No-op une fois fait.
 		Settings::maybe_migrate_token();
+
+		// Forcer l'IPv4 vers le manager (opt-in). AVANT la barrière d'enrôlement :
+		// l'enrôlement lui-même est un appel sortant vers le manager, et c'est
+		// précisément lui qui échouait en IPv6 le 2026-09-25 (403 du CDN de
+		// l'hébergeur). Ne touche qu'aux requêtes dont l'hôte est celui du manager.
+		if ( Settings::get( 'force_ipv4_to_manager' ) ) {
+			( new ManagerIpv4Guard() )->register();
+		}
 
 		// ── Gate "site enrôlé" : RIEN n'est exposé / envoyé tant que l'utilisateur
 		// n'a pas explicitement enrôlé le site via la page admin. Conforme

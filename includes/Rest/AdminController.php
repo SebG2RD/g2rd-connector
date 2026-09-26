@@ -180,7 +180,7 @@ final class AdminController {
 	private function collect_settings( WP_REST_Request $request ): array {
 		$settings = [ 'manager_url' => (string) $request->get_param( 'manager_url' ) ];
 
-		foreach ( [ 'heartbeat_enabled', 'events_enabled', 'remote_commands_enabled' ] as $flag ) {
+		foreach ( [ 'heartbeat_enabled', 'events_enabled', 'remote_commands_enabled', 'force_ipv4_to_manager' ] as $flag ) {
 			$value = $request->get_param( $flag );
 			if ( null !== $value ) {
 				$settings[ $flag ] = (bool) $value;

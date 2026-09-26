@@ -78,6 +78,18 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 
 == Changelog ==
 
+= 1.12.0-rc.3 =
+
+* **The site token can travel in an `X-G2RD-Token` header.** Some shared-hosting firewalls
+  reject any REST request carrying `Authorization`, from any origin, before WordPress even
+  sees it. The fallback header is read only when `Authorization` is absent or unusable; same
+  token, same comparison, same signature policy afterwards. Two tests guard the precedence.
+* **"Force IPv4 to the manager" option** (off by default). On 2026-09-25 the host's CDN
+  returned 403 to the server's outgoing IPv6 for every domain: heartbeats, events and
+  enrollment died on the way while the site served its visitors normally. When enabled, the
+  connector pins cURL to IPv4 for requests whose host is the manager's -- and only those.
+  Replaces the hand-placed mu-plugin that did not follow plugin updates.
+
 = 1.12.0-rc.2 =
 
 * **A plugin is never left deactivated after a restore.** `activate_plugin()` includes the plugin's
