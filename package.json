@@ -14,7 +14,7 @@
         "@wordpress/scripts": "^35.0.0"
     },
     "dependencies": {
-        "@wordpress/element": "^8.6.0"
+        "@wordpress/element": "^8.8.0"
     },
     "overrides": {
         "@sentry/node": "^10.0.0",
