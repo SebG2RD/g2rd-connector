@@ -90,6 +90,43 @@ Politique, réglable dans la page d'administration (« Exiger des commandes sign
 Les commandes `rollback_plugin`, `delete_restore_point` et `set_signature_policy` exigent une
 signature valide quelle que soit la politique.
 
+#### File des commandes (cron)
+
+Le cron horaire tire aussi des commandes de la file du manager
+(`GET /api/agent/sites/{site}/commands`). Les trois commandes ci-dessus y obéissent à la **même
+règle** que par la route REST : sans enveloppe signée valide, elles ne sont pas exécutées, quelle que
+soit la politique, et le site répond `failed` avec un code dans `result.code`
+(`g2rd_connector_signature_missing`, `g2rd_connector_signature_invalid`,
+`g2rd_connector_signature_replayed`, `g2rd_connector_clock_skew`, `g2rd_connector_signature_error`)
+et un message explicite dans `error`.
+L'échec est compté dans le diagnostic de signature (page d'administration, battement de cœur).
+
+Format d'une entrée signée — la preuve voyage dans l'entrée, puisque c'est le site qui tire :
+
+```json
+{ "id": 42,
+  "signed": { "body": "{\"command\":\"rollback_plugin\",\"payload\":{…}}",
+              "timestamp": "1789000000", "nonce": "<32 hex>", "signature": "v1=<64 hex>" } }
+```
+
+- même clé et même chaîne canonique v1 que la route REST, avec la méthode `PULL` (jamais une
+  méthode HTTP) et la route `/api/agent/sites/{site}/commands/{commande}` : une preuve ne vaut que
+  pour CE site et CETTE commande, et ne se rejoue pas d'un canal à l'autre ;
+- `body` est la chaîne JSON brute signée ; c'est la seule source de la commande et de son payload
+  (un `payload` en clair est ignoré pour ces commandes, un `kind` en clair qui la contredit fait
+  refuser l'entrée) ;
+- la signature doit être faite à la **remise** de la file, pas à la mise en file : la fenêtre est de
+  ±300 s et le cron est horaire. Toutes les entrées d'un passage sont vérifiées au même instant,
+  avant toute exécution ;
+- pour qu'un connecteur plus ancien ignore l'entrée au lieu de l'exécuter, le manager omet `kind`
+  et `payload` en clair (une entrée sans `kind` ni `signed` reste ignorée, comme avant).
+
+Vecteurs de référence calculés indépendamment : `tests/fixtures/queue-signature-vectors.json`.
+
+Les commandes historiques de la file (`clear_cache`, `check_updates`, `update_plugin`…), que le
+manager publie aujourd'hui sans signature, suivent le chemin d'avant, inchangé, y compris en
+politique `required` ; une enveloppe éventuelle n'y est vérifiée que pour rapport.
+
 ### Rollback des extensions (points de restauration)
 
 Quand le manager envoie `update_plugin` avec `snapshot: true`, le plugin enchaîne, dans la même

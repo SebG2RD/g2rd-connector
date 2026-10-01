@@ -50,8 +50,10 @@ final class CommandExecutor {
 
 	/**
 	 * Commandes qui exigent une signature valide QUELLE QUE SOIT la politique de
-	 * signature du site (cf Rest\Auth). Les commandes historiques n'y figurent pas :
-	 * en politique `report`, elles restent acceptées sans signature.
+	 * signature du site, par la route REST (cf Rest\Auth) comme par la file tirée
+	 * par le cron (cf Cron\HeartbeatJob et Security\QueueSignature). Les commandes
+	 * historiques n'y figurent pas : en politique `report`, elles restent acceptées
+	 * sans signature.
 	 *
 	 * @var list<string>
 	 */

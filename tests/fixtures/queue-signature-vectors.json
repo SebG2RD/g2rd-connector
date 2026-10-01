@@ -1,0 +1,58 @@
+{
+  "description": "Vecteurs de signature v1 de la FILE des commandes (cron), methode PULL, route /api/agent/sites/{site}/commands/{commande}. Calcules par une implementation INDEPENDANTE (Python hmac/hashlib), pas par le code teste. Le manager devra les rejouer le jour ou il signera la file.",
+  "key_context": "g2rd-sign-v1",
+  "vectors": [
+    {
+      "name": "pull_set_signature_policy_required",
+      "site_token": "test-site-token-0123456789abcdef",
+      "site_id": 7,
+      "command_id": 42,
+      "method": "PULL",
+      "route": "/api/agent/sites/7/commands/42",
+      "timestamp": "1789000000",
+      "nonce": "000102030405060708090a0b0c0d0e0f",
+      "body": "{\"command\":\"set_signature_policy\",\"payload\":{\"policy\":\"required\"}}",
+      "body_sha256": "c966ecf86952213bbdef101f3b52fa414dd1484b2b41e067257937d7aaed8589",
+      "signature": "v1=46b5c35b101366ce1a3c25a55f9832320329e552118f3b3ce8a82e954119491a"
+    },
+    {
+      "name": "pull_delete_restore_point_ids",
+      "site_token": "test-site-token-0123456789abcdef",
+      "site_id": 7,
+      "command_id": 43,
+      "method": "PULL",
+      "route": "/api/agent/sites/7/commands/43",
+      "timestamp": "1789000123",
+      "nonce": "ffeeddccbbaa99887766554433221100",
+      "body": "{\"command\":\"delete_restore_point\",\"payload\":{\"ids\":[\"rp_1\",\"rp_2\"]}}",
+      "body_sha256": "edc23fce4bfe54875afe837af38cf68d5f219d8c80e58fb8038044cf3045a554",
+      "signature": "v1=194fd200d8babd0b8534582691b47d19048c8543a21f6bea2ea249e991cc0326"
+    },
+    {
+      "name": "pull_rollback_utf8_other_token",
+      "site_token": "autre-jeton-é-ü-42",
+      "site_id": 1234,
+      "command_id": 987654,
+      "method": "PULL",
+      "route": "/api/agent/sites/1234/commands/987654",
+      "timestamp": "1789000456",
+      "nonce": "0123456789abcdef0123456789abcdef",
+      "body": "{\"command\":\"rollback_plugin\",\"payload\":{\"file\":\"akismet/akismet.php\",\"note\":\"réessai\"}}",
+      "body_sha256": "21101ba8ff29aa657d8c8f318915a6e7bab31d9dd7dd77f09e6fb11c4c58f816",
+      "signature": "v1=7ddd2419a1369e0e0fdd80802ffee5bea1fd6567564ac414d785d5799de0f2da"
+    },
+    {
+      "name": "pull_clear_cache_no_payload",
+      "site_token": "test-site-token-0123456789abcdef",
+      "site_id": 7,
+      "command_id": 44,
+      "method": "PULL",
+      "route": "/api/agent/sites/7/commands/44",
+      "timestamp": "1789000789",
+      "nonce": "abcdefabcdefabcdefabcdefabcdefab",
+      "body": "{\"command\":\"clear_cache\"}",
+      "body_sha256": "15ae6cd0c781180c822594976207647f8871f6ec915fe021c92256a11a02125e",
+      "signature": "v1=d1eb0c561d5b5e618545e78b662316bedf45deb3088087fb591c8d314fc044fd"
+    }
+  ]
+}

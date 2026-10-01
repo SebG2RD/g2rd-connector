@@ -78,6 +78,19 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 
 == Changelog ==
 
+= Unreleased =
+
+* **Security: commands that require a signature now require it from the command queue too.**
+  `rollback_plugin`, `delete_restore_point` and `set_signature_policy` already required a valid
+  signature on the REST route, whatever the signature policy. The hourly cron, which pulls
+  commands from the manager's queue, executed them without any check: a single unsigned queue
+  entry could switch a site from `required` back to `report`, or delete every restore point.
+  They are now executed from the queue only with a valid signed envelope (same key, same v1
+  scheme, bound to the site and to the command, ±300 s window, replay protection); otherwise
+  the site answers `failed` with an explicit, translatable message and counts the failure. The
+  manager never puts these commands in the queue today, so no current traffic is refused; the
+  historical queue commands (cache, updates, cleanup) run exactly as before.
+
 = 1.12.0-rc.4 =
 
 * **Fix: the "Force IPv4 to the manager" option can now be saved.** In rc.3 the box could be
