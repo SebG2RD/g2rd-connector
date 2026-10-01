@@ -49,7 +49,9 @@ final class SettingsSanitizeTest extends TestCase {
 		// une chaîne ASCII : balises, octets %xx, blancs.
 		\Brain\Monkey\Functions\when( 'sanitize_text_field' )->alias(
 			static function ( string $text ): string {
-				$text = strip_tags( $text );
+				// Le bouchon reproduit wp_strip_all_tags(), qui appelle strip_tags() ; la fonction
+				// WordPress n'est pas chargée sous PHPUnit.
+				$text = strip_tags( $text ); // phpcs:ignore WordPress.WP.AlternativeFunctions.strip_tags_strip_tags
 				$text = (string) preg_replace( '/%[a-f0-9]{2}/i', '', $text );
 				$text = (string) preg_replace( '/[\r\n\t ]+/', ' ', $text );
 				return trim( $text );
@@ -66,4 +68,3 @@ final class SettingsSanitizeTest extends TestCase {
 		}
 	}
 }
-

@@ -81,19 +81,41 @@ Les clés sont dérivées des sels de `wp-config.php` (`AUTH_KEY`, `SECURE_AUTH_
 
 - Tous les formats restent lisibles. Une valeur `v2` altérée ne donne aucun jeton (jamais un jeton
   modifié) ; un préfixe `enc:` inconnu n'est jamais pris pour du clair.
-- Migration `v1` → `v2` à la **première écriture des réglages** (en pratique le battement de cœur
+- **Limite : seule une valeur `v2` est protégée contre l'altération.** Le `v1` et le clair restent
+  acceptés par défaut pour la compatibilité. Un accès en écriture à la base permet donc encore de
+  substituer une valeur de l'ancien format : la copie de secours ci-dessous (dont l'IV peut être
+  altéré pour obtenir un jeton modifié), ou un jeton en clair choisi. Une telle valeur est signalée
+  (`tokenState: legacy`), pas refusée.
+- **Mode strict, dormant par défaut** : `define( 'G2RD_CONNECTOR_REQUIRE_AUTHENTICATED_TOKEN', true );`
+  dans `wp-config.php` (hors base : la même personne ne peut pas le retirer), ou le filtre
+  `g2rd_connector_require_authenticated_token`. Il refuse un `v1` seul ou un clair dès que le site
+  écrit lui-même au format authentifié (sinon il reste inactif) ; un `v1` qui enveloppe un `v2`
+  reste accepté. Jeton refusé : `tokenState: refused`, avis d'erreur aux administrateurs, aucune
+  migration (une valeur refusée n'est jamais « blanchie » en `v2`). À n'activer qu'une fois
+  `tokenState: ok`, c'est-à-dire après la migration.
+- Migration vers `v2` à la **première écriture des réglages** (en pratique le battement de cœur
   suivant), jamais au démarrage : le retour arrière automatique de WordPress relit toujours la
-  valeur. Aller-retour vérifié avant écriture ; la valeur `v1` est copiée dans l'option
-  `g2rd_connector_site_token_v1` (sans autoload, jamais lue, retirée à la désinstallation). Un `v1`
-  illisible n'est jamais écrasé.
-- Jeton stocké mais illisible (valeur altérée, sels changés) : avis d'erreur aux administrateurs,
-  `tokenState: unreadable` dans les données de la page d'administration.
+  valeur. Au démarrage, un jeton historique en clair est seulement chiffré au format qu'écrivait la
+  1.12.0-rc.4 (`v1` ; laissé en clair sans openssl, comme alors). Aller-retour vérifié avant
+  écriture ; la valeur `v1` est copiée dans l'option `g2rd_connector_site_token_v1` (sans autoload,
+  jamais lue, retirée à la désinstallation ; aucune copie possible sans openssl). Un `v1` illisible
+  n'est jamais écrasé.
+- La copie de secours correspond **toujours au jeton courant** : régénérée à chaque nouvel
+  enrôlement, vidée (jamais supprimée) par « Déconnecter du manager ». Un site jamais migré n'en a
+  pas.
+- États du jeton (`tokenState` dans les données de la page d'administration, `tokenStrict` pour le
+  mode strict) : `none`, `ok`, `legacy` (ancien format accepté : normal juste après la mise à jour,
+  suspect s'il dure), `refused`, `unreadable` (valeur altérée, sels changés). Pour `refused` et
+  `unreadable`, avis d'erreur aux administrateurs (cliquer sur « Déconnecter du manager », puis
+  réenrôler avec une nouvelle invitation) ; la page autonome du connecteur affiche cet état à la
+  place du bandeau vert « Site enrôlé ».
 - Filtre `g2rd_connector_token_cipher` (`sb`, `gcm`, `v1`) : impose l'algorithme d'écriture ; `v1`
   sert de repli d'urgence et suspend la migration. La lecture n'en dépend jamais.
 - Rétrogradation **manuelle** vers 1.12.0-rc.4 ou avant après la migration : l'ancien code ne lit
   pas `v2` (site déconnecté). Remettre la copie : `wp option patch update g2rd_connector_settings
-  site_token "$(wp option get g2rd_connector_site_token_v1)"`, ou remettre le connecteur à jour
-  (la valeur réécrite par l'ancienne version est réparée à la lecture).
+  site_token "$(wp option get g2rd_connector_site_token_v1)"` (la copie est celle du jeton courant ;
+  vide après une déconnexion, absente sans openssl), ou remettre le connecteur à jour (la valeur
+  réécrite par l'ancienne version est réparée à la lecture).
 - Rien ne change sur le réseau : même Bearer, même clé de signature, aucun réenrôlement.
 
 ## Routes REST exposées

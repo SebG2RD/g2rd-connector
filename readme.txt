@@ -119,20 +119,33 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   the database decrypted, without any error, into a modified token. New values use the `enc:v2:`
   format, `enc:v2:sb:` (libsodium secretbox, XSalsa20-Poly1305) or `enc:v2:gcm:` (AES-256-GCM),
   the algorithm being written in the value; the keys are still derived from the wp-config.php
-  salts (no new secret) and every value is read back before being stored. An altered value now
-  gives no token at all instead of a wrong one. Existing values keep working byte for byte: `v1`
-  values and the historical plaintext token are still read; a `v1` token is rewritten as `v2` on
-  the next settings write (in practice the next accepted heartbeat), never at boot, after a
-  successful round trip, and its previous value is kept in the non-autoloaded
-  `g2rd_connector_site_token_v1` option (removed on uninstall). An unreadable token is never
+  salts (no new secret) and every value is read back before being stored. An altered `v2` value
+  now gives no token at all instead of a wrong one. **Limit:** only `v2` values are protected
+  against tampering. For compatibility, `v1` values and the historical plaintext token are still
+  accepted by default, so someone with write access to the database can still replace the token
+  with an old-format value (including the backup copy below, or a plaintext token of their
+  choice); such a value is reported as `tokenState: legacy` in the admin page data. The new
+  `G2RD_CONNECTOR_REQUIRE_AUTHENTICATED_TOKEN` wp-config.php constant (or the
+  `g2rd_connector_require_authenticated_token` filter), off by default, refuses a `v1`-only or
+  plaintext token once the site itself writes authenticated values (`tokenState: refused`, with
+  an explicit admin notice); a `v1` value wrapping a `v2` one stays accepted. Existing values keep
+  working byte for byte: a historical plaintext token is encrypted at boot as `v1`, the format
+  1.12.0-rc.4 wrote (left as is without openssl, as before), and a `v1` or plaintext token is
+  rewritten as `v2` on the next settings write (in practice the next accepted heartbeat), never
+  at boot, after a successful round trip. Its `v1` value is then kept in the non-autoloaded
+  `g2rd_connector_site_token_v1` option (removed on uninstall; no copy is possible on a host
+  without openssl). That copy follows the current token: regenerated on every new enrolment,
+  emptied (never deleted) on "Disconnect from the manager". An unreadable token is never
   overwritten, and administrators now see an explicit notice instead of a silent disconnection
-  (altered value or changed salts). Hosts with neither sodium nor GCM keep writing `v1`; the
-  `g2rd_connector_token_cipher` filter (`sb`, `gcm`, `v1`) can force an algorithm, `v1`
-  also suspending the migration. Nothing changes on the wire: same Bearer token, same signature
-  key, no re-enrolment. If the connector is ever downgraded by hand to 1.12.0-rc.4 or older
-  after the migration, it cannot read the new value: copy `g2rd_connector_site_token_v1` back
-  into the `site_token` key of `g2rd_connector_settings`, or simply update the connector again
-  (the value written by the older version is repaired on read).
+  (altered value or changed salts) telling them to disconnect then re-enrol the site; the
+  standalone connector page shows that state instead of the green "enrolled" banner. Hosts with
+  neither sodium nor GCM keep writing `v1`; the `g2rd_connector_token_cipher` filter (`sb`,
+  `gcm`, `v1`) can force an algorithm, `v1` also suspending the migration. Nothing changes on the
+  wire: same Bearer token, same signature key, no re-enrolment. If the connector is ever
+  downgraded by hand to 1.12.0-rc.4 or older after the migration, it cannot read the new value:
+  copy `g2rd_connector_site_token_v1` back into the `site_token` key of
+  `g2rd_connector_settings`, or simply update the connector again (the value written by the
+  older version is repaired on read).
 
 = 1.12.0-rc.4 =
 

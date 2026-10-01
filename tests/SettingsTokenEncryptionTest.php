@@ -28,7 +28,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 
 	protected function setUp(): void {
 		parent::setUp();
-		$json = file_get_contents( __DIR__ . '/fixtures/token-v1-vectors.json' );
+		$json = file_get_contents( __DIR__ . '/fixtures/token-v1-vectors.json' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- fichier local, WordPress non chargé.
 		self::assertIsString( $json );
 		$this->vectors = json_decode( $json, true, 512, JSON_THROW_ON_ERROR );
 	}
@@ -134,7 +134,8 @@ final class SettingsTokenEncryptionTest extends TestCase {
 		];
 
 		self::assertSame( $this->vectors['v1_lisible']['clair'], Settings::site_token() );
-		self::assertSame( 'ok', Settings::token_state() );
+		// Lisible, mais non authentifié : signalé pour le diagnostic, jamais refusé par défaut.
+		self::assertSame( 'legacy', Settings::token_state() );
 	}
 
 	public function test_le_jeton_en_clair_historique_reste_lisible(): void {
@@ -195,6 +196,11 @@ final class SettingsTokenEncryptionTest extends TestCase {
 		self::assertSame( self::PLAIN, Settings::site_token() );
 	}
 
+	/**
+	 * Au démarrage, le clair historique est chiffré au format qu'écrivait la rc.4
+	 * (v1) : un retour arrière automatique vers la rc.4 le relit toujours. Le passage
+	 * en v2 se fait à la première écriture des réglages, avec copie de secours.
+	 */
 	public function test_le_jeton_en_clair_historique_reste_accepte_puis_chiffre_en_v2(): void {
 		$this->options[ Settings::OPTION_KEY ] = [
 			'site_id'    => 7,
@@ -203,8 +209,31 @@ final class SettingsTokenEncryptionTest extends TestCase {
 
 		Settings::maybe_migrate_token();
 
+		$v1 = $this->options[ Settings::OPTION_KEY ]['site_token'];
+		self::assertStringStartsWith( 'enc:v1:', $v1 );
+		self::assertSame( self::PLAIN, $this->legacy_decrypt( $v1 ) );
+		self::assertSame( self::PLAIN, Settings::site_token() );
+		self::assertArrayNotHasKey( Settings::TOKEN_BACKUP_OPTION, $this->options );
+
+		Settings::update( [ 'last_heartbeat_at' => 'x' ] );
+
 		self::assertStringStartsWith( 'enc:v2:', $this->options[ Settings::OPTION_KEY ]['site_token'] );
 		self::assertSame( self::PLAIN, Settings::site_token() );
+		self::assertSame( $v1, $this->options[ Settings::TOKEN_BACKUP_OPTION ] );
+	}
+
+	/** Un clair qui n'est pas passé par le démarrage migre aussi à la première écriture. */
+	public function test_un_jeton_en_clair_migre_en_v2_a_la_premiere_ecriture(): void {
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => self::PLAIN,
+		];
+
+		Settings::update( [ 'last_heartbeat_at' => 'x' ] );
+
+		self::assertStringStartsWith( 'enc:v2:', $this->options[ Settings::OPTION_KEY ]['site_token'] );
+		self::assertSame( self::PLAIN, Settings::site_token() );
+		self::assertSame( self::PLAIN, $this->legacy_decrypt( $this->options[ Settings::TOKEN_BACKUP_OPTION ] ) );
 	}
 
 	// ── Migration à la première écriture ───────────────────────────────────────
@@ -352,12 +381,81 @@ final class SettingsTokenEncryptionTest extends TestCase {
 		self::assertSame( 'none', Settings::token_state() );
 	}
 
+	/**
+	 * Après une migration, « Déconnecter du manager » ne laisse pas l'ancien jeton en
+	 * base dans un format non authentifié : la copie est vidée, jamais supprimée.
+	 */
+	public function test_la_deconnexion_vide_aussi_la_copie_de_secours(): void {
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => $this->vectors['v1_lisible']['stocke'],
+		];
+		Settings::update( [ 'last_heartbeat_at' => 'x' ] );
+		self::assertNotSame( '', $this->options[ Settings::TOKEN_BACKUP_OPTION ] );
+
+		Settings::update(
+			[
+				'site_id'    => null,
+				'site_token' => '',
+			]
+		);
+
+		self::assertArrayHasKey( Settings::TOKEN_BACKUP_OPTION, $this->options );
+		self::assertSame( '', $this->options[ Settings::TOKEN_BACKUP_OPTION ] );
+	}
+
+	/**
+	 * Réenrôlement après une migration : la copie suit le jeton courant. Sinon la
+	 * procédure de rétrogradation documentée remettrait l'ancien jeton, périmé.
+	 */
+	public function test_le_reenrolement_aligne_la_copie_de_secours(): void {
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => $this->vectors['v1_lisible']['stocke'],
+		];
+		Settings::update( [ 'last_heartbeat_at' => 'x' ] );
+
+		Settings::update(
+			[
+				'site_id'    => 8,
+				'site_token' => 'jeton-du-reenrolement',
+			]
+		);
+
+		self::assertStringStartsWith( 'enc:v2:', $this->options[ Settings::OPTION_KEY ]['site_token'] );
+		self::assertSame( 'jeton-du-reenrolement', Settings::site_token() );
+		$backup = $this->options[ Settings::TOKEN_BACKUP_OPTION ];
+		self::assertStringStartsWith( 'enc:v1:', $backup );
+		self::assertSame( 'jeton-du-reenrolement', $this->legacy_decrypt( $backup ) );
+	}
+
+	/** Déconnexion puis nouvel enrôlement : la copie, vidée, reprend le nouveau jeton. */
+	public function test_la_copie_videe_reprend_le_jeton_du_nouvel_enrolement(): void {
+		$this->options[ Settings::TOKEN_BACKUP_OPTION ] = '';
+
+		Settings::update(
+			[
+				'site_id'    => 9,
+				'site_token' => 'jeton-neuf',
+			]
+		);
+
+		self::assertSame( 'jeton-neuf', $this->legacy_decrypt( $this->options[ Settings::TOKEN_BACKUP_OPTION ] ) );
+	}
+
 	// ── État et avis administrateur ─────────────────────────────────────────────
 
 	public function test_etat_du_jeton(): void {
 		self::assertSame( 'none', Settings::token_state() );
 
 		$this->options[ Settings::OPTION_KEY ] = [ 'site_token' => 'jeton-historique' ];
+		self::assertSame( 'legacy', Settings::token_state() );
+
+		$this->options[ Settings::OPTION_KEY ] = [ 'site_token' => Settings::encrypt_token( self::PLAIN ) ];
+		self::assertSame( 'ok', Settings::token_state() );
+
+		// Un v1 qui enveloppe un v2 (connecteur rétrogradé) : contenu authentifié.
+		$this->options[ Settings::OPTION_KEY ] = [ 'site_token' => Settings::encrypt_token( Settings::encrypt_token( self::PLAIN ), 'v1' ) ];
 		self::assertSame( 'ok', Settings::token_state() );
 
 		$this->options[ Settings::OPTION_KEY ] = [ 'site_token' => 'enc:v9:abc' ];
@@ -377,6 +475,8 @@ final class SettingsTokenEncryptionTest extends TestCase {
 		self::assertStringContainsString( 'ne peut pas être lu', $html );
 		self::assertStringContainsString( 'AUTH_KEY', $html );
 		self::assertStringContainsString( 'nouvelle invitation', $html );
+		self::assertStringContainsString( 'Déconnecter du manager', $html );
+		self::assertStringContainsString( 'fiche dans le manager', $html );
 	}
 
 	public function test_l_avis_n_est_pas_montre_sans_droit_manage_options(): void {
@@ -399,12 +499,324 @@ final class SettingsTokenEncryptionTest extends TestCase {
 		self::assertSame( '', $this->render_notice() );
 	}
 
+	// ── Anciens formats : signalés, refusables sur demande ──────────────────────
+
+	/**
+	 * Preuve du LEAD DEV : quelqu'un qui peut écrire en base n'a pas besoin de toucher
+	 * la valeur v2, il lui suffit de la remplacer par un ancien format. Par défaut ces
+	 * valeurs restent acceptées (compatibilité), mais l'état n'est plus « ok ».
+	 */
+	public function test_une_valeur_v1_ou_claire_substituee_est_signalee(): void {
+		$v1      = Settings::encrypt_token( self::PLAIN, 'v1' );
+		$raw     = (string) base64_decode( substr( $v1, 7 ), true );
+		$raw[0]  = chr( ord( $raw[0] ) ^ ( ord( 'j' ) ^ ord( 'k' ) ) );
+		$altered = 'enc:v1:' . base64_encode( $raw );
+
+		self::assertSame( 'keton-du-site-0123456789abcdef', Settings::decrypt_token( $altered ) );
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => $altered,
+		];
+		self::assertSame( 'legacy', Settings::token_state() );
+
+		$this->options[ Settings::OPTION_KEY ]['site_token'] = 'jeton-choisi-par-attaquant';
+		self::assertSame( 'jeton-choisi-par-attaquant', Settings::site_token() );
+		self::assertSame( 'legacy', Settings::token_state() );
+	}
+
+	public function test_le_mode_strict_est_dormant_par_defaut(): void {
+		self::assertFalse( Settings::strict_token_storage() );
+		self::assertSame( self::PLAIN, Settings::decrypt_token( Settings::encrypt_token( self::PLAIN, 'v1' ) ) );
+		self::assertSame( 'jeton-historique', Settings::decrypt_token( 'jeton-historique' ) );
+	}
+
+	/** Mode strict : le v1 seul et le clair sont refusés, jamais une valeur authentifiée. */
+	public function test_le_mode_strict_refuse_le_v1_seul_et_le_clair(): void {
+		$this->strict();
+		$v2           = Settings::encrypt_token( self::PLAIN );
+		$v1_contenant = Settings::encrypt_token( $v2, 'v1' );
+
+		self::assertTrue( Settings::strict_token_storage() );
+		self::assertSame( '', Settings::decrypt_token( $this->vectors['v1_lisible']['stocke'] ) );
+		self::assertSame( '', Settings::decrypt_token( 'jeton-choisi-par-attaquant' ) );
+		self::assertSame( self::PLAIN, Settings::decrypt_token( $v2 ) );
+		self::assertSame( self::PLAIN, Settings::decrypt_token( $v1_contenant ) );
+
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => 'jeton-choisi-par-attaquant',
+		];
+		self::assertFalse( Settings::token_matches( 'jeton-choisi-par-attaquant' ) );
+		self::assertSame( 'refused', Settings::token_state() );
+
+		$this->options[ Settings::OPTION_KEY ]['site_token'] = $this->vectors['v1_lisible']['stocke'];
+		self::assertSame( 'refused', Settings::token_state() );
+
+		$this->options[ Settings::OPTION_KEY ]['site_token'] = $v1_contenant;
+		self::assertSame( 'ok', Settings::token_state() );
+		self::assertTrue( Settings::token_matches( self::PLAIN ) );
+	}
+
+	/** Le mode strict ne blanchit jamais une valeur refusée : ni migration, ni chiffrement au démarrage. */
+	public function test_le_mode_strict_ne_migre_pas_une_valeur_refusee(): void {
+		$this->strict();
+		$v1                                    = $this->vectors['v1_lisible']['stocke'];
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => $v1,
+		];
+
+		Settings::update( [ 'last_heartbeat_at' => 'x' ] );
+
+		self::assertSame( $v1, $this->options[ Settings::OPTION_KEY ]['site_token'] );
+		self::assertArrayNotHasKey( Settings::TOKEN_BACKUP_OPTION, $this->options );
+
+		$this->options[ Settings::OPTION_KEY ]['site_token'] = 'jeton-choisi-par-attaquant';
+		Settings::maybe_migrate_token();
+		self::assertSame( 'jeton-choisi-par-attaquant', $this->options[ Settings::OPTION_KEY ]['site_token'] );
+	}
+
+	/** En mode strict, un enrôlement écrit en v2 : le site reste joignable. */
+	public function test_le_mode_strict_accepte_un_nouvel_enrolement(): void {
+		$this->strict();
+
+		Settings::update(
+			[
+				'site_id'    => 7,
+				'site_token' => self::PLAIN,
+			]
+		);
+
+		self::assertSame( self::PLAIN, Settings::site_token() );
+		self::assertSame( 'ok', Settings::token_state() );
+	}
+
+	/**
+	 * Sans algorithme authentifié pour écrire (ici le repli d'urgence `v1`), le mode
+	 * strict reste inactif : il couperait sinon le site sur ses propres écritures.
+	 */
+	public function test_le_mode_strict_est_inactif_sans_ecriture_authentifiee(): void {
+		Filters\expectApplied( 'g2rd_connector_require_authenticated_token' )->andReturn( true );
+		Filters\expectApplied( 'g2rd_connector_token_cipher' )->andReturn( 'v1' );
+
+		self::assertFalse( Settings::strict_token_storage() );
+		self::assertSame( self::PLAIN, Settings::decrypt_token( Settings::encrypt_token( self::PLAIN, 'v1' ) ) );
+	}
+
+	/** La constante de wp-config.php (hors base) active le mode strict. */
+	#[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
+	#[\PHPUnit\Framework\Attributes\PreserveGlobalState( false )]
+	public function test_la_constante_de_wp_config_active_le_mode_strict(): void {
+		define( 'G2RD_CONNECTOR_REQUIRE_AUTHENTICATED_TOKEN', true );
+
+		self::assertTrue( Settings::strict_token_storage() );
+		self::assertSame( '', Settings::decrypt_token( 'jeton-historique' ) );
+	}
+
+	public function test_l_avis_jeton_refuse_explique_la_cause_et_l_action(): void {
+		$this->strict();
+		Functions\when( 'current_user_can' )->justReturn( true );
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => $this->vectors['v1_lisible']['stocke'],
+		];
+
+		$html = $this->render_notice();
+
+		self::assertStringContainsString( 'notice-error', $html );
+		self::assertStringContainsString( 'ancien format', $html );
+		self::assertStringContainsString( 'G2RD_CONNECTOR_REQUIRE_AUTHENTICATED_TOKEN', $html );
+		self::assertStringContainsString( 'Déconnecter du manager', $html );
+		self::assertStringContainsString( 'nouvelle invitation', $html );
+	}
+
+	/** Un format ancien mais accepté ne déclenche aucun avis (la migration suit). */
+	public function test_aucun_avis_pour_un_format_ancien_accepte(): void {
+		Functions\when( 'current_user_can' )->justReturn( true );
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => 'jeton-historique',
+		];
+
+		self::assertSame( '', $this->render_notice() );
+	}
+
+	// ── Page du connecteur ──────────────────────────────────────────────────────
+
+	/** Jeton illisible : plus de bandeau vert « Site enrôlé », mais l'état réel et l'action. */
+	public function test_la_page_montre_l_etat_reel_quand_le_jeton_est_illisible(): void {
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => $this->vectors['v1_autre_cle']['stocke'],
+		];
+
+		$html = $this->render_page();
+
+		self::assertStringNotContainsString( 'notice-success', $html );
+		self::assertStringNotContainsString( 'Site enrôlé.', $html );
+		self::assertStringContainsString( 'notice-error', $html );
+		self::assertStringContainsString( 'Déconnecter du manager', $html );
+	}
+
+	public function test_la_page_garde_le_bandeau_vert_quand_le_jeton_est_lisible(): void {
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => Settings::encrypt_token( self::PLAIN ),
+		];
+
+		$html = $this->render_page();
+
+		self::assertStringContainsString( 'notice-success', $html );
+		self::assertStringContainsString( 'Site enrôlé.', $html );
+	}
+
+	// ── encrypt_token : jamais de clair par erreur ──────────────────────────────
+
+	/** Un algorithme inconnu passé en argument retombe sur le choix automatique. */
+	public function test_un_algorithme_inconnu_n_ecrit_jamais_en_clair(): void {
+		foreach ( [ 'aes', '', 'SB', 'clair' ] as $cipher ) {
+			$stored = Settings::encrypt_token( self::PLAIN, $cipher );
+
+			self::assertStringStartsWith( 'enc:v2:', $stored, $cipher );
+			self::assertSame( self::PLAIN, Settings::decrypt_token( $stored ) );
+		}
+	}
+
+	// ── BootData ────────────────────────────────────────────────────────────────
+
+	public function test_boot_data_expose_l_etat_et_le_mode_strict(): void {
+		Functions\when( 'rest_url' )->justReturn( 'https://site.test/wp-json/g2rd/v1/' );
+		Functions\when( 'wp_create_nonce' )->justReturn( 'nonce' );
+		Functions\when( 'get_site_option' )->justReturn( false );
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => 'jeton-historique',
+		];
+
+		$data = \G2RD\Connector\BootData::build();
+
+		self::assertSame( 'legacy', $data['tokenState'] );
+		self::assertFalse( $data['tokenStrict'] );
+
+		$this->strict();
+		$data = \G2RD\Connector\BootData::build();
+		self::assertSame( 'refused', $data['tokenState'] );
+		self::assertTrue( $data['tokenStrict'] );
+	}
+
+	// ── Hébergeur sans sodium natif ─────────────────────────────────────────────
+
+	/**
+	 * Sans l'extension sodium, la bibliothèque sodium_compat de WordPress est chargée
+	 * et sert à l'écriture comme à la lecture. Le bouchon de wp-includes/sodium_compat
+	 * reproduit ce que fait WordPress : il définit les fonctions manquantes.
+	 */
+	public function test_sodium_compat_est_charge_et_utilise_sans_l_extension(): void {
+		$this->sodium_functions( 'g2rd_test_compat_secretbox', 'g2rd_test_compat_secretbox_open' );
+		$GLOBALS['g2rd_test_compat_calls'] = [];
+
+		$stored = Settings::encrypt_token( self::PLAIN );
+
+		self::assertTrue( function_exists( 'g2rd_test_compat_secretbox' ) );
+		self::assertStringStartsWith( 'enc:v2:sb:', $stored );
+		self::assertSame( self::PLAIN, Settings::decrypt_token( $stored ) );
+		self::assertContains( 'box', $GLOBALS['g2rd_test_compat_calls'] );
+		self::assertContains( 'open', $GLOBALS['g2rd_test_compat_calls'] );
+
+		// Interopérabilité : une valeur écrite avec sodium_compat se lit avec l'extension
+		// (l'hébergeur qui l'installe plus tard ne perd pas le jeton).
+		$autre = Settings::encrypt_token( 'jeton-ecrit-par-compat' );
+		$this->sodium_functions( 'sodium_crypto_secretbox', 'sodium_crypto_secretbox_open' );
+		$GLOBALS['g2rd_test_compat_calls'] = [];
+
+		self::assertSame( 'jeton-ecrit-par-compat', Settings::decrypt_token( $autre ) );
+		self::assertSame( [], $GLOBALS['g2rd_test_compat_calls'] );
+	}
+
+	/** Ni sodium ni sodium_compat : l'écriture passe en GCM, une valeur sb devient illisible et signalée. */
+	public function test_sans_sodium_ni_compat_l_ecriture_passe_en_gcm(): void {
+		$sb = Settings::encrypt_token( self::PLAIN, 'sb' );
+		$this->sodium_functions( 'g2rd_test_sodium_absent', 'g2rd_test_sodium_absent_open' );
+
+		$stored = Settings::encrypt_token( self::PLAIN );
+
+		self::assertStringStartsWith( 'enc:v2:gcm:', $stored );
+		self::assertSame( self::PLAIN, Settings::decrypt_token( $stored ) );
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => $sb,
+		];
+		self::assertSame( 'unreadable', Settings::token_state() );
+	}
+
 	// ── Outils ──────────────────────────────────────────────────────────────────
 
 	private function render_notice(): string {
 		ob_start();
 		( new Page() )->render_token_notice();
 		return (string) ob_get_clean();
+	}
+
+	/** Page autonome du connecteur (sans formulaire soumis). */
+	private function render_page(): string {
+		Functions\when( 'current_user_can' )->justReturn( true );
+		Functions\when( 'wp_nonce_field' )->justReturn( '' );
+		Functions\when( 'checked' )->justReturn( '' );
+		Functions\when( 'get_site_option' )->justReturn( false );
+		ob_start();
+		( new Page() )->render_standalone_page();
+		return (string) ob_get_clean();
+	}
+
+	/** Active le mode strict par le filtre (la constante ne peut pas être retirée d'un processus). */
+	private function strict(): void {
+		Filters\expectApplied( 'g2rd_connector_require_authenticated_token' )->andReturn( true );
+	}
+
+	/**
+	 * Remplace les fonctions sodium utilisées par Settings, pour simuler un hébergeur
+	 * sans l'extension. Un bouchon de wp-includes/sodium_compat/autoload.php, chargé
+	 * par Settings quand ces fonctions manquent, définit les fonctions « compat »
+	 * (enveloppes de l'extension qui notent leurs appels), comme le fait WordPress.
+	 */
+	private function sodium_functions( string $box, string $open ): void {
+		if ( ! defined( 'WPINC' ) ) {
+			define( 'WPINC', 'wp-includes' );
+		}
+		$autoload = ABSPATH . WPINC . '/sodium_compat/autoload.php';
+		if ( ! is_file( $autoload ) ) {
+			if ( ! is_dir( dirname( $autoload ) ) ) {
+				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir -- WordPress (WP_Filesystem) n'est pas chargé sous PHPUnit.
+				mkdir( dirname( $autoload ), 0777, true );
+			}
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- idem.
+			file_put_contents(
+				$autoload,
+				"<?php\n"
+				. "function g2rd_test_compat_secretbox( \$m, \$n, \$k ) { \$GLOBALS['g2rd_test_compat_calls'][] = 'box'; return sodium_crypto_secretbox( \$m, \$n, \$k ); }\n"
+				. "function g2rd_test_compat_secretbox_open( \$c, \$n, \$k ) { \$GLOBALS['g2rd_test_compat_calls'][] = 'open'; return sodium_crypto_secretbox_open( \$c, \$n, \$k ); }\n"
+			);
+		}
+		$property = new \ReflectionProperty( Settings::class, 'sodium' );
+		$property->setValue(
+			null,
+			[
+				'box'  => $box,
+				'open' => $open,
+			]
+		);
+	}
+
+	protected function tearDown(): void {
+		$property = new \ReflectionProperty( Settings::class, 'sodium' );
+		$property->setValue(
+			null,
+			[
+				'box'  => 'sodium_crypto_secretbox',
+				'open' => 'sodium_crypto_secretbox_open',
+			]
+		);
+		parent::tearDown();
 	}
 
 	/** Octets bruts d'une valeur v2 (après `enc:v2:<alg>:`). */
