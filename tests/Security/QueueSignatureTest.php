@@ -203,6 +203,40 @@ final class QueueSignatureTest extends TestCase {
 		self::assertSame( 'signature_invalid', QueueSignature::verify_entry( 'un-autre-jeton', self::SITE_ID, $this->entry(), self::NOW )['code'] );
 	}
 
+	/**
+	 * Constat de relecture : un jeton illisible ou refusé vaut '' et la clé dérivée de
+	 * '' est publique. Une entrée `rollback_plugin` signée avec cette clé était jugée
+	 * `ok` ; elle doit être refusée, quel que soit son contenu.
+	 */
+	public function test_empty_token_never_validates_an_entry(): void {
+		$body  = '{"command":"rollback_plugin","payload":{"file":"x/x.php","expected_version":"1.0.0"}}';
+		$route = '/api/agent/sites/' . self::SITE_ID . '/commands/' . self::CMD_ID;
+		$entry = [
+			'id'     => self::CMD_ID,
+			'signed' => [
+				'body'      => $body,
+				'timestamp' => (string) self::NOW,
+				'nonce'     => self::NONCE,
+				'signature' => 'v1=' . RequestSignature::sign( '', 'PULL', $route, (string) self::NOW, self::NONCE, $body ),
+			],
+		];
+
+		$check = QueueSignature::verify_entry( '', self::SITE_ID, $entry, self::NOW );
+
+		self::assertSame(
+			[
+				'status' => 'failed',
+				'code'   => 'token_unavailable',
+			],
+			$check
+		);
+	}
+
+	/** Une entrée sans enveloppe reste « absente » : le chemin des commandes historiques ne change pas. */
+	public function test_empty_token_keeps_absent_for_unsigned_entries(): void {
+		self::assertSame( [ 'status' => 'absent' ], QueueSignature::verify_entry( '', self::SITE_ID, [ 'id' => 1 ], self::NOW ) );
+	}
+
 	public function test_out_of_window_is_clock_skew_with_server_time(): void {
 		$check = QueueSignature::verify_entry( self::TOKEN, self::SITE_ID, $this->entry(), self::NOW + 301 );
 		self::assertSame( 'failed', $check['status'] );

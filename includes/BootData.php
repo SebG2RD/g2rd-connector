@@ -51,8 +51,9 @@ final class BootData {
 			// Restaurations wordpress.org installées sans contrôle d'empreinte (K3) :
 			// compteur + dernier cas, pour le diagnostic (pas encore affiché).
 			'unverifiedDownloads'   => UnverifiedDownloads::stats(),
-			// État du jeton de connexion (K4) : `none`, `ok`, `legacy` (ancien format non
-			// authentifié, accepté : normal juste après la mise à jour, suspect s'il dure),
+			// État du jeton de connexion (K4) : `none`, `ok`, `legacy` (écriture v2 activée
+			// et ancien format non authentifié, accepté : normal juste après la mise à jour,
+			// suspect s'il dure),
 			// `refused` (ancien format refusé par le mode strict) ou `unreadable` (altéré
 			// en base ou sels changés). Pas encore affiché par l'app React.
 			'tokenState'            => Settings::token_state(),

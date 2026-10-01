@@ -507,6 +507,109 @@ final class HeartbeatJobSignedQueueTest extends TestCase {
 		self::assertSame( 'nonce_store_full', SignatureState::stats()['last_code'] );
 	}
 
+	// ── Jeton illisible ou refusé (constat de relecture) ────────────────────────
+
+	/**
+	 * Un jeton stocké qui ne se déchiffre pas vaut '' ; la clé dérivée de '' est
+	 * publique. Avant le correctif, une entrée signée avec cette clé passait :
+	 * la politique passait à `required` sans que personne ne connaisse le jeton.
+	 */
+	public function test_jeton_illisible_une_signed_only_signee_avec_la_cle_du_jeton_vide_est_refusee(): void {
+		$this->options[ Settings::OPTION_KEY ]['site_token'] = 'enc:v9:altere';
+		self::assertSame( 'unreadable', Settings::token_state() );
+		self::assertSame( '', Settings::site_token() );
+		$this->set_policy( 'report' );
+		$this->options[ RestorePointStore::OPTION_KEY ] = [
+			'rp_1' => [
+				'id'          => 'rp_1',
+				'file'        => 'rp_1.zip',
+				'plugin_file' => 'akismet/akismet.php',
+				'created_at'  => self::NOW - 60,
+				'size'        => 10,
+			],
+		];
+		$this->queue(
+			[
+				[
+					'id'     => 42,
+					'signed' => $this->envelope( 42, '{"command":"set_signature_policy","payload":{"policy":"required"}}', null, null, self::SITE_ID, '' ),
+				],
+				[
+					'id'     => 43,
+					'kind'   => 'delete_restore_point',
+					'signed' => $this->envelope( 43, '{"command":"delete_restore_point","payload":{"all":true}}', null, null, self::SITE_ID, '' ),
+				],
+			]
+		);
+
+		$this->run_job();
+
+		self::assertSame( 'report', Settings::get( 'signature_policy' ) );
+		self::assertArrayHasKey( 'rp_1', $this->options[ RestorePointStore::OPTION_KEY ], 'aucun point supprimé' );
+		self::assertCount( 2, $this->posts );
+		foreach ( $this->posts as $post ) {
+			self::assertSame( 'failed', $post['body']['status'] );
+			self::assertSame( 'g2rd_connector_token_unavailable', $post['body']['result']['code'] );
+			self::assertStringContainsString( 'jeton', (string) $post['body']['error'] );
+			self::assertStringContainsString( 'ré-enrôler', (string) $post['body']['error'] );
+		}
+		self::assertSame( 'token_unavailable', SignatureState::stats()['last_code'] );
+	}
+
+	/**
+	 * Même attaque dans le modèle de menace du mode strict : un jeton v1 planté en
+	 * base est refusé (site_token() = ''), il ne doit pas ouvrir la porte pour autant.
+	 */
+	public function test_jeton_refuse_par_le_mode_strict_une_signed_only_signee_avec_la_cle_du_jeton_vide_est_refusee(): void {
+		Functions\when( 'apply_filters' )->alias(
+			static function ( string $hook, $value ) {
+				if ( 'g2rd_connector_require_authenticated_token' === $hook || 'g2rd_connector_token_v2' === $hook ) {
+					return true;
+				}
+				return $value;
+			}
+		);
+		$this->options[ Settings::OPTION_KEY ]['site_token'] = Settings::encrypt_token( self::TOKEN, 'v1' );
+		self::assertSame( 'refused', Settings::token_state() );
+		self::assertSame( '', Settings::site_token() );
+		$this->set_policy( 'required' );
+		$this->queue(
+			[
+				[
+					'id'     => 42,
+					'signed' => $this->envelope( 42, '{"command":"set_signature_policy","payload":{"policy":"report"}}', null, null, self::SITE_ID, '' ),
+				],
+			]
+		);
+
+		$this->run_job();
+
+		self::assertSame( 'required', Settings::get( 'signature_policy' ) );
+		$post = $this->only_post();
+		self::assertSame( 'failed', $post['body']['status'] );
+		self::assertSame( 'g2rd_connector_token_unavailable', $post['body']['result']['code'] );
+	}
+
+	/** Commande historique : chemin inchangé (rapport seul), l'échec est seulement compté. */
+	public function test_jeton_illisible_une_commande_historique_garde_son_chemin(): void {
+		$this->options[ Settings::OPTION_KEY ]['site_token'] = 'enc:v9:altere';
+		$this->queue(
+			[
+				[
+					'id'     => 42,
+					'kind'   => 'clear_cache',
+					'signed' => $this->envelope( 42, '{"command":"clear_cache"}', null, null, self::SITE_ID, '' ),
+				],
+			]
+		);
+
+		$this->run_job();
+
+		self::assertSame( 'done', $this->only_post()['body']['status'] );
+		self::assertSame( [ 'wp_cache_flush' ], $this->calls );
+		self::assertSame( 'token_unavailable', SignatureState::stats()['last_code'] );
+	}
+
 	// ── Outils ──────────────────────────────────────────────────────────────────
 
 	/**
@@ -549,7 +652,7 @@ final class HeartbeatJobSignedQueueTest extends TestCase {
 	 *
 	 * @return array{body:string, timestamp:string, nonce:string, signature:string}
 	 */
-	private function envelope( int $command_id, string $body, ?string $timestamp = null, ?string $nonce = null, int $site_id = self::SITE_ID ): array {
+	private function envelope( int $command_id, string $body, ?string $timestamp = null, ?string $nonce = null, int $site_id = self::SITE_ID, string $token = self::TOKEN ): array {
 		$timestamp ??= (string) self::NOW;
 		$nonce     ??= bin2hex( random_bytes( 16 ) );
 		$route       = sprintf( '/api/agent/sites/%d/commands/%d', $site_id, $command_id );
@@ -558,7 +661,7 @@ final class HeartbeatJobSignedQueueTest extends TestCase {
 			'body'      => $body,
 			'timestamp' => $timestamp,
 			'nonce'     => $nonce,
-			'signature' => 'v1=' . RequestSignature::sign( self::TOKEN, 'PULL', $route, $timestamp, $nonce, $body ),
+			'signature' => 'v1=' . RequestSignature::sign( $token, 'PULL', $route, $timestamp, $nonce, $body ),
 		];
 	}
 }

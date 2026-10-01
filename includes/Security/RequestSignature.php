@@ -50,6 +50,13 @@ final class RequestSignature {
 	public const CODE_NONCE_STORE_FULL = 'nonce_store_full';
 
 	/**
+	 * Le jeton du site est inutilisable (illisible, ou refusé par le mode strict) :
+	 * la clé dérivée d'un jeton vide serait publique, aucune signature n'est donc
+	 * vérifiée.
+	 */
+	public const CODE_TOKEN_UNAVAILABLE = 'token_unavailable';
+
+	/**
 	 * Clé de signature (32 octets bruts) dérivée du SiteToken.
 	 */
 	public static function derive_key( string $site_token ): string {
@@ -100,6 +107,12 @@ final class RequestSignature {
 	public static function verify( string $site_token, string $method, string $route, string $body, string $timestamp, string $nonce, string $signature, int $now ): array {
 		if ( '' === $timestamp && '' === $nonce && '' === $signature ) {
 			return [ 'status' => self::STATUS_ABSENT ];
+		}
+
+		// Jeton vide : derive_key('') est calculable par n'importe qui. Aucun HMAC
+		// n'est calculé, la signature est refusée quelle qu'elle soit.
+		if ( '' === $site_token ) {
+			return self::failed( self::CODE_TOKEN_UNAVAILABLE );
 		}
 
 		// Signature partielle ou mal formée : invalide, sans autre détail.

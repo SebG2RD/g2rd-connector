@@ -17,7 +17,8 @@ final class Settings {
 	public const OPTION_KEY = 'g2rd_connector_settings';
 
 	/**
-	 * Copie au format v1 du site_token COURANT, créée à sa migration au format v2 (K4).
+	 * Copie au format v1 du site_token COURANT, créée à sa migration au format v2 (K4,
+	 * seulement si l'écriture v2 est activée, cf. TOKEN_V2_CONSTANT).
 	 * Jamais lue par le plugin, non autochargée : elle permet de remettre en service
 	 * un site dont le connecteur aurait été rétrogradé à la main vers une version
 	 * ≤ 1.12.0-rc.4, qui ne sait lire que le format v1. Une fois créée, elle suit le
@@ -31,6 +32,16 @@ final class Settings {
 	 * sert à l'écriture. Dormant par défaut (cf. strict_token_storage).
 	 */
 	public const STRICT_CONSTANT = 'G2RD_CONNECTOR_REQUIRE_AUTHENTICATED_TOKEN';
+
+	/**
+	 * Constante de wp-config.php qui active l'ÉCRITURE du format v2 (et la migration
+	 * v1 → v2). Dormante par défaut : tant qu'une version publiée pourrait encore
+	 * revenir à un code qui ne lit pas le v2 (≤ 1.12.0-rc.4), le site continue
+	 * d'écrire le format v1. La LECTURE du v2 ne dépend jamais de cette option ; la
+	 * retirer ramène un jeton v2 au format v1 à la première écriture des réglages
+	 * (cf. token_v2_enabled, migrate_token_format).
+	 */
+	public const TOKEN_V2_CONSTANT = 'G2RD_CONNECTOR_TOKEN_V2';
 
 	/** Préfixe du format v1 : AES-256-CBC, sans authentification (1.6.7 à 1.12.0-rc.4). */
 	private const PREFIX_V1 = 'enc:v1:';
@@ -166,9 +177,10 @@ final class Settings {
 			$new_token             = (string) $partial['site_token'];
 			$partial['site_token'] = '' === $new_token ? '' : self::encrypt_token( $new_token );
 		} else {
-			// K4 : un jeton encore dans un ancien format (v1, ou clair) passe au format
-			// v2 à la première écriture des réglages, jamais au démarrage.
-			$migrated = self::migrate_legacy_token();
+			// K4 : le jeton est remis au format d'écriture courant à la première écriture
+			// des réglages, jamais au démarrage (v1/clair → v2 si l'option v2 est active,
+			// v2 → v1 sinon).
+			$migrated = self::migrate_token_format();
 			if ( null !== $migrated ) {
 				$partial['site_token'] = $migrated;
 			}
@@ -218,9 +230,10 @@ final class Settings {
 	 * État du site_token stocké :
 	 *  - `none` : aucun jeton (site non enrôlé) ;
 	 *  - `ok` : jeton lisible et protégé contre l'altération (format v2, ou v1 qui
-	 *    enveloppe un v2), ou en clair sur un hébergeur qui ne peut rien faire de mieux ;
-	 *  - `legacy` : jeton lisible mais dans un ancien format non authentifié (v1 seul,
-	 *    ou clair alors qu'un algorithme authentifié est disponible). Accepté pour la
+	 *    enveloppe un v2), ou dans le format que le site écrit lui-même (v1, ou clair
+	 *    sans openssl) tant que l'écriture v2 n'est pas activée (TOKEN_V2_CONSTANT) ;
+	 *  - `legacy` : écriture v2 activée, mais jeton lisible dans un ancien format non
+	 *    authentifié (v1 seul, ou clair). Accepté pour la
 	 *    compatibilité ; normal juste après la mise à jour (la migration suit au
 	 *    prochain battement de cœur), suspect s'il dure : quelqu'un qui peut écrire en
 	 *    base a pu substituer une valeur de l'ancien format. Diagnostic seulement ;
@@ -245,10 +258,10 @@ final class Settings {
 		if ( self::strict_token_storage() ) {
 			return 'refused';
 		}
-		if ( str_starts_with( $stored, 'enc:' ) ) {
-			return 'legacy';
-		}
-		return array_intersect( [ 'sb', 'gcm' ], self::available_ciphers() ) === [] ? 'ok' : 'legacy';
+		// Un ancien format n'est suspect que si le site écrit lui-même au format
+		// authentifié (option v2 active). Sinon c'est le format qu'il écrit : `ok`.
+		$cipher = self::write_cipher();
+		return 'sb' === $cipher || 'gcm' === $cipher ? 'legacy' : 'ok';
 	}
 
 	/**
@@ -257,9 +270,9 @@ final class Settings {
 	 * la valeur v2. Activé par la constante G2RD_CONNECTOR_REQUIRE_AUTHENTICATED_TOKEN
 	 * (wp-config.php, hors base : elle ne peut pas être retirée par la même personne)
 	 * ou par le filtre `g2rd_connector_require_authenticated_token`. Inactif tant que
-	 * le site n'écrit pas lui-même au format authentifié (ni sodium ni GCM, ou filtre
-	 * `g2rd_connector_token_cipher` ramené à `v1`) : il couperait sinon le site sur
-	 * ses propres écritures. Un v1 qui enveloppe un v2 reste accepté : son contenu est
+	 * le site n'écrit pas lui-même au format authentifié (écriture v2 non activée, ni
+	 * sodium ni GCM, ou filtre `g2rd_connector_token_cipher` ramené à `v1`) : il
+	 * couperait sinon le site sur ses propres écritures. Un v1 qui enveloppe un v2 reste accepté : son contenu est
 	 * authentifié.
 	 */
 	public static function strict_token_storage(): bool {
@@ -274,6 +287,26 @@ final class Settings {
 		}
 		$cipher = self::write_cipher();
 		return 'sb' === $cipher || 'gcm' === $cipher;
+	}
+
+	/**
+	 * Écriture du format v2 activée ? Dormante par défaut (livraison en deux temps) :
+	 * cette version LIT le v2 mais continue d'ÉCRIRE le v1 que lit la 1.12.0-rc.4.
+	 * Sans cela, une version de retour arrière construite sur un code qui ne lit pas
+	 * le v2 couperait du manager tous les sites déjà migrés, sans moyen de les
+	 * rattraper par le manager. Activée par la constante G2RD_CONNECTOR_TOKEN_V2
+	 * (wp-config.php) ou le filtre `g2rd_connector_token_v2`. La retirer est un vrai
+	 * interrupteur : le jeton v2 repasse au format v1 à la première écriture des
+	 * réglages (cf. migrate_token_format).
+	 */
+	public static function token_v2_enabled(): bool {
+		$wanted = defined( self::TOKEN_V2_CONSTANT ) && (bool) constant( self::TOKEN_V2_CONSTANT );
+		/**
+		 * Active (true) ou non l'écriture du site_token au format v2 (authentifié).
+		 *
+		 * @param bool $wanted Valeur de la constante G2RD_CONNECTOR_TOKEN_V2.
+		 */
+		return (bool) apply_filters( 'g2rd_connector_token_v2', $wanted );
 	}
 
 	/**
@@ -340,6 +373,10 @@ final class Settings {
 
 	/**
 	 * Chiffre le site_token pour stockage au repos.
+	 *
+	 * Par défaut, format v1, celui de la 1.12.0-rc.4 : l'écriture du v2 est dormante
+	 * (cf. token_v2_enabled). Ce qui suit vaut quand elle est activée, ou quand
+	 * l'appelant impose `sb` ou `gcm`.
 	 *
 	 * Format v2 (K4), authentifié : `enc:v2:<alg>:` + base64( nonce ‖ chiffré ‖ tag ),
 	 * avec `<alg>` = `sb` (sodium secretbox, XSalsa20-Poly1305) ou `gcm`
@@ -453,24 +490,64 @@ final class Settings {
 	}
 
 	/**
-	 * Passage au format v2 à la première écriture des réglages (en pratique, le
-	 * battement de cœur que le manager vient d'accepter), depuis le v1 ou depuis le
-	 * clair. Renvoie la nouvelle valeur, ou null pour laisser la valeur stockée intacte
-	 * à l'octet près : rien à migrer, aucun algorithme authentifié (ou filtre ramené à
-	 * `v1`), jeton illisible ou refusé par le mode strict (jamais blanchi), aller-retour
-	 * v2 raté, ou copie de secours impossible à écrire. Un jeton n'est jamais perdu.
+	 * Remet le jeton stocké au format d'écriture courant, à la première écriture des
+	 * réglages (en pratique, le battement de cœur que le manager vient d'accepter) :
+	 *  - écriture v2 (option active) : v1 ou clair → v2 (cf. migrate_to_v2) ;
+	 *  - écriture v1 (défaut) : v2, ou v1 qui enveloppe un v2 → v1 simple, que relit
+	 *    une version ≤ 1.12.0-rc.4 (cf. revert_to_v1). C'est l'interrupteur de retour.
+	 * Sans openssl (ni v1 ni GCM), rien n'est réécrit : un v2 n'est jamais remis en
+	 * clair.
+	 *
+	 * Renvoie la nouvelle valeur, ou null pour laisser la valeur stockée intacte.
+	 */
+	private static function migrate_token_format(): ?string {
+		$cipher = self::write_cipher();
+		if ( 'v1' === $cipher ) {
+			return self::revert_to_v1( (string) self::get( 'site_token' ) );
+		}
+		if ( 'sb' === $cipher || 'gcm' === $cipher ) {
+			return self::migrate_to_v2( $cipher );
+		}
+		return null;
+	}
+
+	/**
+	 * Retour au format v1 d'un jeton dont le contenu est authentifié (v2, ou v1 qui
+	 * enveloppe un v2). Rien d'autre n'est touché : un v1 simple ou un clair est déjà
+	 * dans le format attendu, et une valeur illisible n'est jamais réécrite. Aller-retour
+	 * vérifié avant de rendre la nouvelle valeur.
+	 */
+	private static function revert_to_v1( string $stored ): ?string {
+		if ( ! str_starts_with( $stored, 'enc:' ) ) {
+			return null;
+		}
+		$decoded = self::decode( $stored );
+		$plain   = $decoded['plain'];
+		if ( ! $decoded['authenticated'] || '' === $plain || str_starts_with( $plain, 'enc:' ) ) {
+			return null;
+		}
+		$v1 = self::encrypt_v1( $plain );
+		if ( null === $v1 || ! hash_equals( $plain, self::decrypt_v1( $v1 ) ) ) {
+			return null;
+		}
+		return $v1;
+	}
+
+	/**
+	 * Passage au format v2 (option active), depuis le v1 ou depuis le clair. Renvoie
+	 * null pour laisser la valeur stockée intacte à l'octet près : rien à migrer, jeton
+	 * illisible ou refusé par le mode strict (jamais blanchi), aller-retour v2 raté, ou
+	 * copie de secours impossible à écrire. Un jeton n'est jamais perdu.
 	 *
 	 * Sans openssl (clair historique d'un hébergeur qui n'a que sodium), aucune copie
 	 * v1 n'est possible : la migration a lieu sans elle.
+	 *
+	 * @param string $cipher `sb` ou `gcm`.
 	 */
-	private static function migrate_legacy_token(): ?string {
+	private static function migrate_to_v2( string $cipher ): ?string {
 		$stored = (string) self::get( 'site_token' );
 		$is_v1  = str_starts_with( $stored, self::PREFIX_V1 );
 		if ( ! $is_v1 && ( '' === $stored || str_starts_with( $stored, 'enc:' ) ) ) {
-			return null;
-		}
-		$cipher = self::write_cipher();
-		if ( 'sb' !== $cipher && 'gcm' !== $cipher ) {
 			return null;
 		}
 		$plain = self::decrypt_token( $stored );
@@ -531,20 +608,28 @@ final class Settings {
 	}
 
 	/**
-	 * Algorithme d'écriture : le premier disponible dans l'ordre de préférence, sauf
-	 * choix contraire du filtre `g2rd_connector_token_cipher`. null = aucun (ni
-	 * sodium ni openssl : le jeton reste en clair, comme avant).
+	 * Algorithme d'écriture.
+	 *
+	 * Par défaut (écriture v2 non activée, cf. token_v2_enabled) : `v1`, le format
+	 * qu'écrivait la 1.12.0-rc.4, ou null sans openssl (le jeton reste en clair, comme
+	 * alors). Écriture v2 activée : le premier disponible dans l'ordre de préférence,
+	 * sauf choix contraire du filtre `g2rd_connector_token_cipher`.
 	 */
 	private static function write_cipher(): ?string {
 		$available = self::available_ciphers();
+		if ( ! self::token_v2_enabled() ) {
+			$available = array_values( array_intersect( $available, [ 'v1' ] ) );
+		}
 		if ( [] === $available ) {
 			return null;
 		}
 		/**
-		 * Filtre l'algorithme de chiffrement au repos du site_token : `sb` (sodium),
-		 * `gcm` (AES-256-GCM) ou `v1` (AES-256-CBC, ancien format non authentifié :
-		 * repli d'urgence qui suspend aussi la migration v1 → v2). Une valeur inconnue
-		 * ou indisponible sur l'hébergeur est ignorée. La lecture n'en dépend jamais.
+		 * Filtre l'algorithme de chiffrement au repos du site_token, parmi ceux que
+		 * permet l'hébergeur et l'option v2 : `sb` (sodium), `gcm` (AES-256-GCM) ou
+		 * `v1` (AES-256-CBC, ancien format non authentifié : repli d'urgence qui
+		 * ramène aussi un jeton v2 au format v1). Sans l'option v2, seul `v1` est
+		 * possible. Une valeur inconnue ou indisponible est ignorée. La lecture n'en
+		 * dépend jamais.
 		 *
 		 * @param string $cipher Algorithme choisi automatiquement.
 		 */

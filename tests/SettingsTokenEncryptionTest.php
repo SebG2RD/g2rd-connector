@@ -26,6 +26,9 @@ final class SettingsTokenEncryptionTest extends TestCase {
 	/** @var array{v1_lisible: array{clair: string, stocke: string}, v1_autre_cle: array{stocke: string}} */
 	private array $vectors;
 
+	/** État du filtre `g2rd_connector_token_v2` simulé (null : filtre non simulé). */
+	private ?bool $v2_enabled = null;
+
 	protected function setUp(): void {
 		parent::setUp();
 		$json = file_get_contents( __DIR__ . '/fixtures/token-v1-vectors.json' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- fichier local, WordPress non chargé.
@@ -36,6 +39,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 	// ── Écriture ────────────────────────────────────────────────────────────────
 
 	public function test_le_jeton_est_ecrit_au_format_authentifie_v2(): void {
+		$this->v2();
 		$stored = Settings::encrypt_token( self::PLAIN );
 
 		self::assertStringStartsWith( 'enc:v2:', $stored );
@@ -44,6 +48,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 
 	/** Deux chiffrements du même jeton diffèrent (nonce aléatoire). */
 	public function test_deux_chiffrements_du_meme_jeton_different(): void {
+		$this->v2();
 		self::assertNotSame( Settings::encrypt_token( self::PLAIN ), Settings::encrypt_token( self::PLAIN ) );
 	}
 
@@ -57,6 +62,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 
 	/** Le filtre de repli permet de forcer un algorithme disponible (GCM ici). */
 	public function test_le_filtre_peut_imposer_gcm(): void {
+		$this->v2();
 		Filters\expectApplied( 'g2rd_connector_token_cipher' )->andReturn( 'gcm' );
 
 		self::assertStringStartsWith( 'enc:v2:gcm:', Settings::encrypt_token( self::PLAIN ) );
@@ -64,6 +70,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 
 	/** Une valeur de filtre inconnue est ignorée : on garde le choix automatique. */
 	public function test_une_valeur_de_filtre_inconnue_est_ignoree(): void {
+		$this->v2();
 		Filters\expectApplied( 'g2rd_connector_token_cipher' )->andReturn( 'rot13' );
 
 		self::assertStringStartsWith( 'enc:v2:', Settings::encrypt_token( self::PLAIN ) );
@@ -128,6 +135,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 	}
 
 	public function test_un_jeton_v1_existant_se_lit_toujours(): void {
+		$this->v2();
 		$this->options[ Settings::OPTION_KEY ] = [
 			'site_id'    => 7,
 			'site_token' => $this->vectors['v1_lisible']['stocke'],
@@ -154,6 +162,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 	 * jeton d'origine.
 	 */
 	public function test_auto_reparation_apres_retrogradation(): void {
+		$this->v2();
 		$v2           = Settings::encrypt_token( self::PLAIN );
 		$v1_contenant = Settings::encrypt_token( $v2, 'v1' );
 
@@ -184,6 +193,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 
 	/** Non-régression du piège : une valeur v2 n'est jamais prise pour du clair. */
 	public function test_le_demarrage_ne_rechiffre_jamais_une_valeur_v2(): void {
+		$this->v2();
 		$v2                                    = Settings::encrypt_token( self::PLAIN );
 		$this->options[ Settings::OPTION_KEY ] = [
 			'site_id'    => 7,
@@ -202,6 +212,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 	 * en v2 se fait à la première écriture des réglages, avec copie de secours.
 	 */
 	public function test_le_jeton_en_clair_historique_reste_accepte_puis_chiffre_en_v2(): void {
+		$this->v2();
 		$this->options[ Settings::OPTION_KEY ] = [
 			'site_id'    => 7,
 			'site_token' => self::PLAIN,
@@ -224,6 +235,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 
 	/** Un clair qui n'est pas passé par le démarrage migre aussi à la première écriture. */
 	public function test_un_jeton_en_clair_migre_en_v2_a_la_premiere_ecriture(): void {
+		$this->v2();
 		$this->options[ Settings::OPTION_KEY ] = [
 			'site_id'    => 7,
 			'site_token' => self::PLAIN,
@@ -239,6 +251,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 	// ── Migration à la première écriture ───────────────────────────────────────
 
 	public function test_migration_v1_vers_v2_a_la_premiere_ecriture(): void {
+		$this->v2();
 		$v1                                    = $this->vectors['v1_lisible']['stocke'];
 		$this->options[ Settings::OPTION_KEY ] = [
 			'site_id'    => 7,
@@ -262,6 +275,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 
 	/** La copie de secours n'est pas chargée à chaque page (autoload désactivé). */
 	public function test_la_copie_de_secours_n_est_pas_autochargee(): void {
+		$this->v2();
 		$autoload = [];
 		Functions\when( 'update_option' )->alias(
 			function ( string $key, $value, $autoload_flag = null ) use ( &$autoload ): bool {
@@ -281,6 +295,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 	}
 
 	public function test_un_v1_illisible_n_est_jamais_ecrase(): void {
+		$this->v2();
 		$v1                                    = $this->vectors['v1_autre_cle']['stocke'];
 		$this->options[ Settings::OPTION_KEY ] = [
 			'site_id'    => 7,
@@ -296,6 +311,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 
 	/** Si la copie de secours ne peut pas être écrite, on ne migre pas. */
 	public function test_sans_copie_de_secours_le_v1_reste_en_place(): void {
+		$this->v2();
 		Functions\when( 'update_option' )->alias(
 			function ( string $key, $value ): bool {
 				if ( Settings::TOKEN_BACKUP_OPTION === $key ) {
@@ -319,6 +335,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 
 	/** Le filtre ramené à « v1 » coupe la migration (repli d'urgence). */
 	public function test_le_filtre_v1_suspend_la_migration(): void {
+		$this->v2();
 		Filters\expectApplied( 'g2rd_connector_token_cipher' )->andReturn( 'v1' );
 		$v1                                    = $this->vectors['v1_lisible']['stocke'];
 		$this->options[ Settings::OPTION_KEY ] = [
@@ -336,6 +353,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 	 * lisible par un ancien connecteur : jamais un v1 qui contiendrait du v2.
 	 */
 	public function test_la_copie_de_secours_reste_lisible_par_un_ancien_connecteur(): void {
+		$this->v2();
 		$v1_contenant                          = Settings::encrypt_token( Settings::encrypt_token( self::PLAIN ), 'v1' );
 		$this->options[ Settings::OPTION_KEY ] = [
 			'site_id'    => 7,
@@ -352,6 +370,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 
 	/** Un enrôlement écrit directement en v2 (sans copie de secours : rien à sauver). */
 	public function test_un_enrolement_ecrit_directement_en_v2(): void {
+		$this->v2();
 		Settings::update(
 			[
 				'site_id'    => 7,
@@ -386,6 +405,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 	 * base dans un format non authentifié : la copie est vidée, jamais supprimée.
 	 */
 	public function test_la_deconnexion_vide_aussi_la_copie_de_secours(): void {
+		$this->v2();
 		$this->options[ Settings::OPTION_KEY ] = [
 			'site_id'    => 7,
 			'site_token' => $this->vectors['v1_lisible']['stocke'],
@@ -409,6 +429,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 	 * procédure de rétrogradation documentée remettrait l'ancien jeton, périmé.
 	 */
 	public function test_le_reenrolement_aligne_la_copie_de_secours(): void {
+		$this->v2();
 		$this->options[ Settings::OPTION_KEY ] = [
 			'site_id'    => 7,
 			'site_token' => $this->vectors['v1_lisible']['stocke'],
@@ -431,6 +452,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 
 	/** Déconnexion puis nouvel enrôlement : la copie, vidée, reprend le nouveau jeton. */
 	public function test_la_copie_videe_reprend_le_jeton_du_nouvel_enrolement(): void {
+		$this->v2();
 		$this->options[ Settings::TOKEN_BACKUP_OPTION ] = '';
 
 		Settings::update(
@@ -446,6 +468,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 	// ── État et avis administrateur ─────────────────────────────────────────────
 
 	public function test_etat_du_jeton(): void {
+		$this->v2();
 		self::assertSame( 'none', Settings::token_state() );
 
 		$this->options[ Settings::OPTION_KEY ] = [ 'site_token' => 'jeton-historique' ];
@@ -507,6 +530,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 	 * valeurs restent acceptées (compatibilité), mais l'état n'est plus « ok ».
 	 */
 	public function test_une_valeur_v1_ou_claire_substituee_est_signalee(): void {
+		$this->v2();
 		$v1      = Settings::encrypt_token( self::PLAIN, 'v1' );
 		$raw     = (string) base64_decode( substr( $v1, 7 ), true );
 		$raw[0]  = chr( ord( $raw[0] ) ^ ( ord( 'j' ) ^ ord( 'k' ) ) );
@@ -608,6 +632,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 	#[\PHPUnit\Framework\Attributes\PreserveGlobalState( false )]
 	public function test_la_constante_de_wp_config_active_le_mode_strict(): void {
 		define( 'G2RD_CONNECTOR_REQUIRE_AUTHENTICATED_TOKEN', true );
+		define( 'G2RD_CONNECTOR_TOKEN_V2', true );
 
 		self::assertTrue( Settings::strict_token_storage() );
 		self::assertSame( '', Settings::decrypt_token( 'jeton-historique' ) );
@@ -674,6 +699,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 
 	/** Un algorithme inconnu passé en argument retombe sur le choix automatique. */
 	public function test_un_algorithme_inconnu_n_ecrit_jamais_en_clair(): void {
+		$this->v2();
 		foreach ( [ 'aes', '', 'SB', 'clair' ] as $cipher ) {
 			$stored = Settings::encrypt_token( self::PLAIN, $cipher );
 
@@ -685,6 +711,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 	// ── BootData ────────────────────────────────────────────────────────────────
 
 	public function test_boot_data_expose_l_etat_et_le_mode_strict(): void {
+		$this->v2();
 		Functions\when( 'rest_url' )->justReturn( 'https://site.test/wp-json/g2rd/v1/' );
 		Functions\when( 'wp_create_nonce' )->justReturn( 'nonce' );
 		Functions\when( 'get_site_option' )->justReturn( false );
@@ -712,6 +739,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 	 * reproduit ce que fait WordPress : il définit les fonctions manquantes.
 	 */
 	public function test_sodium_compat_est_charge_et_utilise_sans_l_extension(): void {
+		$this->v2();
 		$this->sodium_functions( 'g2rd_test_compat_secretbox', 'g2rd_test_compat_secretbox_open' );
 		$GLOBALS['g2rd_test_compat_calls'] = [];
 
@@ -735,6 +763,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 
 	/** Ni sodium ni sodium_compat : l'écriture passe en GCM, une valeur sb devient illisible et signalée. */
 	public function test_sans_sodium_ni_compat_l_ecriture_passe_en_gcm(): void {
+		$this->v2();
 		$sb = Settings::encrypt_token( self::PLAIN, 'sb' );
 		$this->sodium_functions( 'g2rd_test_sodium_absent', 'g2rd_test_sodium_absent_open' );
 
@@ -749,7 +778,153 @@ final class SettingsTokenEncryptionTest extends TestCase {
 		self::assertSame( 'unreadable', Settings::token_state() );
 	}
 
+	// ── Écriture v2 dormante et interrupteur de retour (constat de relecture) ───
+
+	/**
+	 * Par défaut, le site écrit toujours le format v1 que lit la 1.12.0-rc.4 : une
+	 * version publiée sans le lecteur v2 ne couperait aucun site.
+	 */
+	public function test_par_defaut_le_jeton_est_ecrit_en_v1_lisible_par_la_rc4(): void {
+		$stored = Settings::encrypt_token( self::PLAIN );
+
+		self::assertStringStartsWith( 'enc:v1:', $stored );
+		self::assertSame( self::PLAIN, $this->legacy_decrypt( $stored ) );
+		self::assertFalse( Settings::token_v2_enabled() );
+	}
+
+	/** Par défaut, ni le battement de cœur ni un enrôlement n'écrivent du v2. */
+	public function test_par_defaut_aucune_migration_vers_v2(): void {
+		$v1                                    = $this->vectors['v1_lisible']['stocke'];
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => $v1,
+		];
+
+		Settings::update( [ 'last_heartbeat_at' => 'x' ] );
+
+		self::assertSame( $v1, $this->options[ Settings::OPTION_KEY ]['site_token'] );
+		self::assertArrayNotHasKey( Settings::TOKEN_BACKUP_OPTION, $this->options );
+
+		Settings::update(
+			[
+				'site_id'    => 8,
+				'site_token' => 'jeton-du-reenrolement',
+			]
+		);
+		self::assertSame( 'jeton-du-reenrolement', $this->legacy_decrypt( $this->options[ Settings::OPTION_KEY ]['site_token'] ) );
+	}
+
+	/** Le format v1 écrit par choix n'est pas signalé comme suspect. */
+	public function test_par_defaut_un_jeton_v1_est_dans_l_etat_ok(): void {
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => $this->vectors['v1_lisible']['stocke'],
+		];
+
+		self::assertSame( 'ok', Settings::token_state() );
+	}
+
+	/** La constante de wp-config.php active l'écriture et la migration v2. */
+	#[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
+	#[\PHPUnit\Framework\Attributes\PreserveGlobalState( false )]
+	public function test_la_constante_de_wp_config_active_l_ecriture_v2(): void {
+		define( 'G2RD_CONNECTOR_TOKEN_V2', true );
+
+		self::assertTrue( Settings::token_v2_enabled() );
+		self::assertStringStartsWith( 'enc:v2:', Settings::encrypt_token( self::PLAIN ) );
+	}
+
+	/**
+	 * Vrai interrupteur : une fois l'option retirée, la première écriture des réglages
+	 * remet une valeur v2 au format v1, que relit une version ≤ 1.12.0-rc.4.
+	 */
+	public function test_sans_l_option_v2_une_valeur_v2_redevient_v1_a_la_premiere_ecriture(): void {
+		$this->v2();
+		$v2 = Settings::encrypt_token( self::PLAIN );
+		self::assertStringStartsWith( 'enc:v2:', $v2 );
+		$this->v2( false );
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => $v2,
+		];
+
+		Settings::update( [ 'last_heartbeat_at' => 'x' ] );
+
+		$stored = $this->options[ Settings::OPTION_KEY ]['site_token'];
+		self::assertStringStartsWith( 'enc:v1:', $stored );
+		self::assertSame( self::PLAIN, $this->legacy_decrypt( $stored ) );
+		self::assertSame( self::PLAIN, Settings::site_token() );
+		self::assertSame( 'x', $this->options[ Settings::OPTION_KEY ]['last_heartbeat_at'] );
+	}
+
+	/** Le v1 qui enveloppe un v2 (rc.4 réinstallée à la main) redevient un v1 simple. */
+	public function test_sans_l_option_v2_un_v1_qui_enveloppe_un_v2_redevient_un_v1_simple(): void {
+		$this->v2();
+		$v1_contenant = Settings::encrypt_token( Settings::encrypt_token( self::PLAIN ), 'v1' );
+		$this->v2( false );
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => $v1_contenant,
+		];
+
+		Settings::update( [ 'last_heartbeat_at' => 'x' ] );
+
+		self::assertSame( self::PLAIN, $this->legacy_decrypt( $this->options[ Settings::OPTION_KEY ]['site_token'] ) );
+	}
+
+	/** Un v2 illisible n'est jamais réécrit (rien à « déchiffrer », rien à perdre). */
+	public function test_sans_l_option_v2_un_v2_illisible_reste_intact(): void {
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => 'enc:v2:sb:illisible',
+		];
+
+		Settings::update( [ 'last_heartbeat_at' => 'x' ] );
+
+		self::assertSame( 'enc:v2:sb:illisible', $this->options[ Settings::OPTION_KEY ]['site_token'] );
+	}
+
+	/**
+	 * Le lecteur v2 ne dépend d'aucune option : toute version qui suit doit le garder
+	 * (procédure de release). Sans lui, un site migré serait coupé du manager.
+	 */
+	public function test_le_lecteur_v2_reste_actif_sans_l_option(): void {
+		$this->v2();
+		$sb  = Settings::encrypt_token( self::PLAIN, 'sb' );
+		$gcm = Settings::encrypt_token( self::PLAIN, 'gcm' );
+		$this->v2( false );
+
+		self::assertFalse( Settings::token_v2_enabled() );
+		self::assertSame( self::PLAIN, Settings::decrypt_token( $sb ) );
+		self::assertSame( self::PLAIN, Settings::decrypt_token( $gcm ) );
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => $sb,
+		];
+		self::assertSame( 'ok', Settings::token_state() );
+		self::assertTrue( Settings::token_matches( self::PLAIN ) );
+	}
+
+	/** Sans l'option v2, le mode strict reste inactif même si sa constante est posée. */
+	public function test_sans_l_option_v2_le_mode_strict_reste_inactif(): void {
+		Filters\expectApplied( 'g2rd_connector_require_authenticated_token' )->andReturn( true );
+
+		self::assertFalse( Settings::strict_token_storage() );
+		self::assertSame( self::PLAIN, Settings::decrypt_token( Settings::encrypt_token( self::PLAIN ) ) );
+	}
+
 	// ── Outils ──────────────────────────────────────────────────────────────────
+
+	/**
+	 * Active (ou désactive) l'écriture v2 par son filtre (la constante ne peut pas être
+	 * retirée d'un processus).
+	 */
+	private function v2( bool $enabled = true ): void {
+		if ( null === $this->v2_enabled ) {
+			Filters\expectApplied( 'g2rd_connector_token_v2' )->andReturnUsing( fn (): bool => (bool) $this->v2_enabled );
+		}
+		$this->v2_enabled = $enabled;
+	}
 
 	private function render_notice(): string {
 		ob_start();
@@ -770,6 +945,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 
 	/** Active le mode strict par le filtre (la constante ne peut pas être retirée d'un processus). */
 	private function strict(): void {
+		$this->v2();
 		Filters\expectApplied( 'g2rd_connector_require_authenticated_token' )->andReturn( true );
 	}
 

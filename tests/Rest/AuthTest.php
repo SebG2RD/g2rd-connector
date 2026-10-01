@@ -302,6 +302,8 @@ final class AuthTest extends TestCase {
 	 * dérivée du jeton EN CLAIR des deux côtés, passe toujours.
 	 */
 	public function test_un_site_migre_reste_authentifie_et_signe(): void {
+		// Écriture v2 activée (dormante par défaut, cf. Settings::token_v2_enabled).
+		\Brain\Monkey\Filters\expectApplied( 'g2rd_connector_token_v2' )->andReturn( true );
 		$this->options[ Settings::OPTION_KEY ]['site_token']       = Settings::encrypt_token( self::TOKEN, 'v1' );
 		$this->options[ Settings::OPTION_KEY ]['signature_policy'] = 'required';
 
@@ -314,6 +316,19 @@ final class AuthTest extends TestCase {
 		$request = $this->request();
 		$request->set_header( 'Authorization', 'Bearer mauvais-jeton' );
 		self::assertInstanceOf( WP_Error::class, Auth::require_site_token( $request ) );
+	}
+
+	/** Par défaut (écriture v2 dormante), le jeton reste en v1 et tout fonctionne comme en rc.4. */
+	public function test_par_defaut_le_jeton_reste_v1_et_le_site_authentifie(): void {
+		$v1                                                        = Settings::encrypt_token( self::TOKEN, 'v1' );
+		$this->options[ Settings::OPTION_KEY ]['site_token']       = $v1;
+		$this->options[ Settings::OPTION_KEY ]['signature_policy'] = 'required';
+
+		Settings::update( [ 'last_heartbeat_at' => 'x' ] );
+
+		self::assertSame( $v1, $this->options[ Settings::OPTION_KEY ]['site_token'] );
+		self::assertTrue( Auth::require_site_token( $this->signed_request() ) );
+		self::assertSame( [ 'status' => 'ok' ], Auth::last_signature_check() );
 	}
 
 	// ── Réglage ─────────────────────────────────────────────────────────────────

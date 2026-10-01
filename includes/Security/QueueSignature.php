@@ -74,6 +74,13 @@ final class QueueSignature {
 			return [ 'status' => RequestSignature::STATUS_ABSENT ];
 		}
 
+		// Jeton inutilisable (illisible, ou refusé par le mode strict) : la clé dérivée
+		// de '' est publique. On refuse sans rien calculer, pour que cette classe soit
+		// sûre par elle-même, quel que soit l'appelant.
+		if ( '' === $token ) {
+			return RequestSignature::failed( RequestSignature::CODE_TOKEN_UNAVAILABLE );
+		}
+
 		$signed = $entry['signed'];
 		if ( ! is_array( $signed ) ) {
 			return RequestSignature::failed( RequestSignature::CODE_INVALID );

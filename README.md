@@ -72,50 +72,71 @@ Le SiteToken est stocké chiffré dans la clé `site_token` de l'option `g2rd_co
 Les clés sont dérivées des sels de `wp-config.php` (`AUTH_KEY`, `SECURE_AUTH_KEY`, `LOGGED_IN_KEY`,
 `NONCE_KEY`) : un dump SQL seul ne suffit pas à le lire.
 
+**Livraison en deux temps.** Cette version **lit** le format `v2` mais continue d'**écrire** le `v1`
+de la 1.12.0-rc.4, tant que l'écriture `v2` n'est pas activée. Raison : le connecteur ne peut pas
+être rétrogradé par le manager (il refuse de se restaurer lui-même, et la mise à jour GitHub ne
+propose jamais une version plus basse). Si des sites étaient déjà passés en `v2`, une version de
+retour arrière construite sur un code qui ne lit pas le `v2` les couperait tous du manager (Bearer
+faux, 401/403), sans réparation possible à distance.
+
 | Format | Écrit par | Algorithme |
 | --- | --- | --- |
-| `enc:v2:sb:` | versions après 1.12.0-rc.4 (défaut) | libsodium secretbox (XSalsa20-Poly1305), authentifié |
-| `enc:v2:gcm:` | versions après 1.12.0-rc.4, sans sodium | AES-256-GCM, authentifié |
-| `enc:v1:` | 1.6.7 à 1.12.0-rc.4, et repli sans sodium ni GCM | AES-256-CBC, **non authentifié** |
+| `enc:v2:sb:` | versions après 1.12.0-rc.4, **écriture v2 activée** | libsodium secretbox (XSalsa20-Poly1305), authentifié |
+| `enc:v2:gcm:` | idem, sans sodium | AES-256-GCM, authentifié |
+| `enc:v1:` | 1.6.7 à 1.12.0-rc.4, **défaut actuel**, et repli sans sodium ni GCM | AES-256-CBC, **non authentifié** |
 | sans préfixe | avant 1.6.7, ou hébergeur sans openssl | jeton en clair |
 
+- **Écriture `v2`, dormante par défaut** : `define( 'G2RD_CONNECTOR_TOKEN_V2', true );` dans
+  `wp-config.php`, ou le filtre `g2rd_connector_token_v2`. À n'activer sur le parc qu'une fois
+  exclu tout retour à une version qui ne lit pas le `v2` (≤ 1.12.0-rc.4).
+- **Vrai interrupteur** : retirer l'option ramène un jeton `v2` (ou un `v1` qui enveloppe un `v2`)
+  au format `v1` à la première écriture des réglages (battement de cœur suivant), aller-retour
+  vérifié ; une valeur illisible n'est jamais réécrite. Sans openssl, un `v2` n'est jamais remis
+  en clair (il reste `v2`).
+- **Règle de release : aucune version publiée ne doit retirer le lecteur `v2`** (`decode`,
+  `decrypt_v2`, et le cas du `v1` qui enveloppe un `v2`). Le test
+  `test_le_lecteur_v2_reste_actif_sans_l_option` le vérifie.
 - Tous les formats restent lisibles. Une valeur `v2` altérée ne donne aucun jeton (jamais un jeton
   modifié) ; un préfixe `enc:` inconnu n'est jamais pris pour du clair.
 - **Limite : seule une valeur `v2` est protégée contre l'altération.** Le `v1` et le clair restent
   acceptés par défaut pour la compatibilité. Un accès en écriture à la base permet donc encore de
   substituer une valeur de l'ancien format : la copie de secours ci-dessous (dont l'IV peut être
-  altéré pour obtenir un jeton modifié), ou un jeton en clair choisi. Une telle valeur est signalée
-  (`tokenState: legacy`), pas refusée.
+  altéré pour obtenir un jeton modifié), ou un jeton en clair choisi. Écriture `v2` activée, une
+  telle valeur est signalée (`tokenState: legacy`), pas refusée.
 - **Mode strict, dormant par défaut** : `define( 'G2RD_CONNECTOR_REQUIRE_AUTHENTICATED_TOKEN', true );`
   dans `wp-config.php` (hors base : la même personne ne peut pas le retirer), ou le filtre
   `g2rd_connector_require_authenticated_token`. Il refuse un `v1` seul ou un clair dès que le site
-  écrit lui-même au format authentifié (sinon il reste inactif) ; un `v1` qui enveloppe un `v2`
-  reste accepté. Jeton refusé : `tokenState: refused`, avis d'erreur aux administrateurs, aucune
-  migration (une valeur refusée n'est jamais « blanchie » en `v2`). À n'activer qu'une fois
-  `tokenState: ok`, c'est-à-dire après la migration.
-- Migration vers `v2` à la **première écriture des réglages** (en pratique le battement de cœur
-  suivant), jamais au démarrage : le retour arrière automatique de WordPress relit toujours la
-  valeur. Au démarrage, un jeton historique en clair est seulement chiffré au format qu'écrivait la
-  1.12.0-rc.4 (`v1` ; laissé en clair sans openssl, comme alors). Aller-retour vérifié avant
-  écriture ; la valeur `v1` est copiée dans l'option `g2rd_connector_site_token_v1` (sans autoload,
-  jamais lue, retirée à la désinstallation ; aucune copie possible sans openssl). Un `v1` illisible
-  n'est jamais écrasé.
+  écrit lui-même au format authentifié (écriture `v2` activée ; sinon il reste inactif) ; un `v1`
+  qui enveloppe un `v2` reste accepté. Jeton refusé : `tokenState: refused`, avis d'erreur aux
+  administrateurs, aucune migration (une valeur refusée n'est jamais « blanchie » en `v2`). À
+  n'activer qu'une fois `tokenState: ok`, c'est-à-dire après la migration. Un jeton refusé ou
+  illisible n'ouvre jamais la file des commandes : aucune signature n'est acceptée sans jeton.
+- Écriture `v2` activée, migration vers `v2` à la **première écriture des réglages** (en pratique
+  le battement de cœur suivant), jamais au démarrage : le retour arrière automatique de WordPress
+  relit toujours la valeur. Au démarrage, un jeton historique en clair est seulement chiffré au
+  format qu'écrivait la 1.12.0-rc.4 (`v1` ; laissé en clair sans openssl, comme alors).
+  Aller-retour vérifié avant écriture ; la valeur `v1` est copiée dans l'option
+  `g2rd_connector_site_token_v1` (sans autoload, jamais lue, retirée à la désinstallation ; aucune
+  copie possible sans openssl). Un `v1` illisible n'est jamais écrasé.
 - La copie de secours correspond **toujours au jeton courant** : régénérée à chaque nouvel
   enrôlement, vidée (jamais supprimée) par « Déconnecter du manager ». Un site jamais migré n'en a
   pas.
 - États du jeton (`tokenState` dans les données de la page d'administration, `tokenStrict` pour le
-  mode strict) : `none`, `ok`, `legacy` (ancien format accepté : normal juste après la mise à jour,
-  suspect s'il dure), `refused`, `unreadable` (valeur altérée, sels changés). Pour `refused` et
-  `unreadable`, avis d'erreur aux administrateurs (cliquer sur « Déconnecter du manager », puis
-  réenrôler avec une nouvelle invitation) ; la page autonome du connecteur affiche cet état à la
-  place du bandeau vert « Site enrôlé ».
-- Filtre `g2rd_connector_token_cipher` (`sb`, `gcm`, `v1`) : impose l'algorithme d'écriture ; `v1`
-  sert de repli d'urgence et suspend la migration. La lecture n'en dépend jamais.
-- Rétrogradation **manuelle** vers 1.12.0-rc.4 ou avant après la migration : l'ancien code ne lit
-  pas `v2` (site déconnecté). Remettre la copie : `wp option patch update g2rd_connector_settings
-  site_token "$(wp option get g2rd_connector_site_token_v1)"` (la copie est celle du jeton courant ;
-  vide après une déconnexion, absente sans openssl), ou remettre le connecteur à jour (la valeur
-  réécrite par l'ancienne version est réparée à la lecture).
+  mode strict) : `none`, `ok` (dont le `v1` tant que l'écriture `v2` n'est pas activée), `legacy`
+  (écriture `v2` activée, ancien format accepté : normal juste après la mise à jour, suspect s'il
+  dure), `refused`, `unreadable` (valeur altérée, sels changés). Pour `refused` et `unreadable`,
+  avis d'erreur aux administrateurs (cliquer sur « Déconnecter du manager », puis réenrôler avec
+  une nouvelle invitation) ; la page autonome du connecteur affiche cet état à la place du bandeau
+  vert « Site enrôlé ».
+- Filtre `g2rd_connector_token_cipher` (`sb`, `gcm`, `v1`) : choisit l'algorithme d'écriture parmi
+  ceux que permettent l'hébergeur et l'option (sans écriture `v2`, seul `v1`) ; `v1` sert de repli
+  d'urgence et ramène aussi un `v2` au format `v1`. La lecture n'en dépend jamais.
+- Rétrogradation **manuelle** vers 1.12.0-rc.4 ou avant après une migration `v2` : l'ancien code ne
+  lit pas `v2` (site déconnecté). Mieux vaut d'abord retirer l'option `v2` et attendre un battement
+  de cœur (le jeton repasse en `v1`). À défaut, remettre la copie : `wp option patch update
+  g2rd_connector_settings site_token "$(wp option get g2rd_connector_site_token_v1)"` (la copie est
+  celle du jeton courant ; vide après une déconnexion, absente sans openssl), ou remettre le
+  connecteur à jour (la valeur réécrite par l'ancienne version est réparée à la lecture).
 - Rien ne change sur le réseau : même Bearer, même clé de signature, aucun réenrôlement.
 
 ## Routes REST exposées
@@ -166,9 +187,15 @@ règle** que par la route REST : sans enveloppe signée valide, elles ne sont pa
 soit la politique, et le site répond `failed` avec un code dans `result.code`
 (`g2rd_connector_signature_missing`, `g2rd_connector_signature_invalid`,
 `g2rd_connector_signature_replayed`, `g2rd_connector_clock_skew`, `g2rd_connector_signature_error`,
-`g2rd_connector_nonce_store_full`)
+`g2rd_connector_nonce_store_full`, `g2rd_connector_token_unavailable`)
 et un message explicite dans `error`.
 L'échec est compté dans le diagnostic de signature (page d'administration, battement de cœur).
+
+Jeton du site inutilisable (`tokenState` `unreadable` ou `refused`) : le jeton déchiffré vaut `''`,
+et la clé dérivée de `''` est calculable par n'importe qui. Aucune signature n'est alors jamais
+acceptée (`token_unavailable`, sans calcul de HMAC), ni par la file ni par `RequestSignature::verify()` :
+les trois commandes ci-dessus sont refusées, avec un message qui demande de ré-enrôler le site. Les
+commandes historiques gardent leur chemin (rapport seul).
 
 Format d'une entrée signée — la preuve voyage dans l'entrée, puisque c'est le site qui tire :
 

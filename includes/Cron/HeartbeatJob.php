@@ -81,6 +81,11 @@ final class HeartbeatJob {
 	 * - Commandes historiques : chemin inchangé (`kind` et `payload` en clair, ce
 	 *   que publie le manager aujourd'hui). Une enveloppe éventuelle n'est vérifiée
 	 *   que pour rapport : un échec est compté, la commande s'exécute quand même.
+	 * - Jeton du site inutilisable (illisible, ou refusé par le mode strict) :
+	 *   `site_token()` vaut '' et aucune enveloppe n'est jamais valide
+	 *   (`token_unavailable`, cf. QueueSignature::verify_entry) — la clé dérivée de ''
+	 *   serait publique. Les SIGNED_ONLY sont donc refusées ; les commandes
+	 *   historiques gardent leur chemin.
 	 *
 	 * @param array<mixed> $commands Entrées brutes de la file (données externes non fiables).
 	 * @return list<array{id:int, kind:string, payload:array<string,mixed>|null, refusal:array<string,mixed>|null}>
@@ -286,6 +291,14 @@ final class HeartbeatJob {
 			return sprintf(
 				/* translators: %s: nom technique de la commande refusée, par exemple rollback_plugin. */
 				__( 'La commande « %s » n’a pas été exécutée : le site a reçu trop de commandes signées en quelques minutes et son registre anti-rejeu est plein ; la commande a été refusée par précaution. Action : la relancer depuis la plateforme dans quelques minutes ; si cela se répète, contacter le support G2RD.', 'g2rd-connector' ),
+				$kind
+			);
+		}
+
+		if ( RequestSignature::CODE_TOKEN_UNAVAILABLE === $code ) {
+			return sprintf(
+				/* translators: %s: nom technique de la commande refusée, par exemple rollback_plugin. */
+				__( 'La commande « %s » n’a pas été exécutée : le jeton du connecteur est illisible ou refusé sur ce site, sa signature ne peut donc pas être vérifiée. Cause probable : valeur du jeton modifiée dans la base de données, clés de sécurité de wp-config.php changées, ou ancien format refusé par le mode strict (G2RD_CONNECTOR_REQUIRE_AUTHENTICATED_TOKEN). Action : dans l’administration du site, cliquer sur « Déconnecter du manager », puis ré-enrôler le site avec une nouvelle invitation et relancer l’opération.', 'g2rd-connector' ),
 				$kind
 			);
 		}
