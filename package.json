@@ -11,10 +11,10 @@
         "format": "wp-scripts format assets/admin/src"
     },
     "devDependencies": {
-        "@wordpress/scripts": "^35.0.0"
+        "@wordpress/scripts": "^36.0.0"
     },
     "dependencies": {
-        "@wordpress/element": "^8.6.0"
+        "@wordpress/element": "^8.8.0"
     },
     "overrides": {
         "@sentry/node": "^10.0.0",
