@@ -294,6 +294,28 @@ final class AuthTest extends TestCase {
 		self::assertSame( 'Signature de la requête absente ou invalide.', $result->get_error_message() );
 	}
 
+	// ── K4 : jeton migré du format v1 au format v2 ──────────────────────────────
+
+	/**
+	 * Le format de stockage est purement local : après la migration v1 → v2 (à la
+	 * première écriture des réglages), le même Bearer est accepté et la signature,
+	 * dérivée du jeton EN CLAIR des deux côtés, passe toujours.
+	 */
+	public function test_un_site_migre_reste_authentifie_et_signe(): void {
+		$this->options[ Settings::OPTION_KEY ]['site_token']       = Settings::encrypt_token( self::TOKEN, 'v1' );
+		$this->options[ Settings::OPTION_KEY ]['signature_policy'] = 'required';
+
+		Settings::update( [ 'last_heartbeat_at' => 'x' ] );
+
+		self::assertStringStartsWith( 'enc:v2:', $this->options[ Settings::OPTION_KEY ]['site_token'] );
+		self::assertTrue( Auth::require_site_token( $this->signed_request() ) );
+		self::assertSame( [ 'status' => 'ok' ], Auth::last_signature_check() );
+
+		$request = $this->request();
+		$request->set_header( 'Authorization', 'Bearer mauvais-jeton' );
+		self::assertInstanceOf( WP_Error::class, Auth::require_site_token( $request ) );
+	}
+
 	// ── Réglage ─────────────────────────────────────────────────────────────────
 
 	public function test_policy_defaults_to_report(): void {

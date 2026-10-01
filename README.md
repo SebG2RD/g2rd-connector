@@ -66,6 +66,36 @@ wp plugin activate g2rd-connector
 3. Coller le token, cliquer **Enrôler le site**. Le plugin POST `/api/sites/enroll`, reçoit `{ site_id, site_token }` et persiste.
 4. À partir de là : sync, heartbeat, events, commandes — tout transite via le SiteToken (révoquable à tout moment côté manager).
 
+### Stockage du SiteToken (chiffrement au repos)
+
+Le SiteToken est stocké chiffré dans la clé `site_token` de l'option `g2rd_connector_settings`.
+Les clés sont dérivées des sels de `wp-config.php` (`AUTH_KEY`, `SECURE_AUTH_KEY`, `LOGGED_IN_KEY`,
+`NONCE_KEY`) : un dump SQL seul ne suffit pas à le lire.
+
+| Format | Écrit par | Algorithme |
+| --- | --- | --- |
+| `enc:v2:sb:` | versions après 1.12.0-rc.4 (défaut) | libsodium secretbox (XSalsa20-Poly1305), authentifié |
+| `enc:v2:gcm:` | versions après 1.12.0-rc.4, sans sodium | AES-256-GCM, authentifié |
+| `enc:v1:` | 1.6.7 à 1.12.0-rc.4, et repli sans sodium ni GCM | AES-256-CBC, **non authentifié** |
+| sans préfixe | avant 1.6.7, ou hébergeur sans openssl | jeton en clair |
+
+- Tous les formats restent lisibles. Une valeur `v2` altérée ne donne aucun jeton (jamais un jeton
+  modifié) ; un préfixe `enc:` inconnu n'est jamais pris pour du clair.
+- Migration `v1` → `v2` à la **première écriture des réglages** (en pratique le battement de cœur
+  suivant), jamais au démarrage : le retour arrière automatique de WordPress relit toujours la
+  valeur. Aller-retour vérifié avant écriture ; la valeur `v1` est copiée dans l'option
+  `g2rd_connector_site_token_v1` (sans autoload, jamais lue, retirée à la désinstallation). Un `v1`
+  illisible n'est jamais écrasé.
+- Jeton stocké mais illisible (valeur altérée, sels changés) : avis d'erreur aux administrateurs,
+  `tokenState: unreadable` dans les données de la page d'administration.
+- Filtre `g2rd_connector_token_cipher` (`sb`, `gcm`, `v1`) : impose l'algorithme d'écriture ; `v1`
+  sert de repli d'urgence et suspend la migration. La lecture n'en dépend jamais.
+- Rétrogradation **manuelle** vers 1.12.0-rc.4 ou avant après la migration : l'ancien code ne lit
+  pas `v2` (site déconnecté). Remettre la copie : `wp option patch update g2rd_connector_settings
+  site_token "$(wp option get g2rd_connector_site_token_v1)"`, ou remettre le connecteur à jour
+  (la valeur réécrite par l'ancienne version est réparée à la lecture).
+- Rien ne change sur le réseau : même Bearer, même clé de signature, aucun réenrôlement.
+
 ## Routes REST exposées
 
 | Méthode | Path | Auth | Description |

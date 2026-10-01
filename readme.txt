@@ -114,6 +114,25 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   `g2rd_connector_rollback_source_unverified` action) and the result now reports
   `source_integrity` and the computed `source_sha256_actual`. Integrity failures also report
   `via` (`restore_point` or `download`). No setting, signature policy or existing key changes.
+* **Security: the site token is now encrypted at rest with authenticated encryption.** Since
+  1.6.7 it was stored as AES-256-CBC without any integrity check (`enc:v1:`): a value altered in
+  the database decrypted, without any error, into a modified token. New values use the `enc:v2:`
+  format, `enc:v2:sb:` (libsodium secretbox, XSalsa20-Poly1305) or `enc:v2:gcm:` (AES-256-GCM),
+  the algorithm being written in the value; the keys are still derived from the wp-config.php
+  salts (no new secret) and every value is read back before being stored. An altered value now
+  gives no token at all instead of a wrong one. Existing values keep working byte for byte: `v1`
+  values and the historical plaintext token are still read; a `v1` token is rewritten as `v2` on
+  the next settings write (in practice the next accepted heartbeat), never at boot, after a
+  successful round trip, and its previous value is kept in the non-autoloaded
+  `g2rd_connector_site_token_v1` option (removed on uninstall). An unreadable token is never
+  overwritten, and administrators now see an explicit notice instead of a silent disconnection
+  (altered value or changed salts). Hosts with neither sodium nor GCM keep writing `v1`; the
+  `g2rd_connector_token_cipher` filter (`sb`, `gcm`, `v1`) can force an algorithm, `v1`
+  also suspending the migration. Nothing changes on the wire: same Bearer token, same signature
+  key, no re-enrolment. If the connector is ever downgraded by hand to 1.12.0-rc.4 or older
+  after the migration, it cannot read the new value: copy `g2rd_connector_site_token_v1` back
+  into the `site_token` key of `g2rd_connector_settings`, or simply update the connector again
+  (the value written by the older version is repaired on read).
 
 = 1.12.0-rc.4 =
 

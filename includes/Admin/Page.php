@@ -25,6 +25,9 @@ final class Page {
 
 	public function register(): void {
 		add_action( 'admin_init', [ $this, 'register_settings' ] );
+		// K4 : jeton de connexion illisible (altéré en base ou sels de wp-config.php
+		// changés). Le site est alors coupé du manager ; on le dit à l'administrateur.
+		add_action( 'admin_notices', [ $this, 'render_token_notice' ] );
 
 		if ( $this->theme_supports_external_tabs() ) {
 			add_filter( 'g2rd_options_external_tabs', [ $this, 'register_as_theme_tab' ] );
@@ -49,6 +52,24 @@ final class Page {
 		$version = (string) $theme->get( 'Version' );
 		// Le filtre est introduit par le patch theme à partir de 1.19.0.
 		return version_compare( $version, '1.19.0', '>=' );
+	}
+
+	/**
+	 * Avis affiché sur tout l'administration, aux seuls administrateurs, quand le
+	 * jeton de connexion au manager est stocké mais ne peut pas être déchiffré.
+	 */
+	public function render_token_notice(): void {
+		if ( ! current_user_can( self::CAPABILITY ) || 'unreadable' !== Settings::token_state() ) {
+			return;
+		}
+		?>
+		<div class="notice notice-error">
+			<p>
+				<strong><?php echo esc_html__( 'G2RD Connector : connexion au manager interrompue.', 'g2rd-connector' ); ?></strong>
+				<?php echo esc_html__( 'Le jeton de connexion au manager G2RD ne peut pas être lu : il a été modifié dans la base de données, ou les clés de sécurité de wp-config.php (AUTH_KEY, SECURE_AUTH_KEY, LOGGED_IN_KEY, NONCE_KEY) ont changé. Le site ne communique plus avec le manager. Restaurez les clés d\'origine ou reconnectez le site avec une nouvelle invitation depuis le manager.', 'g2rd-connector' ); ?>
+			</p>
+		</div>
+		<?php
 	}
 
 	public function register_settings(): void {

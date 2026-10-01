@@ -51,6 +51,9 @@ final class BootData {
 			// Restaurations wordpress.org installées sans contrôle d'empreinte (K3) :
 			// compteur + dernier cas, pour le diagnostic (pas encore affiché).
 			'unverifiedDownloads'   => UnverifiedDownloads::stats(),
+			// État du jeton de connexion (K4) : `none`, `ok` ou `unreadable` (altéré en
+			// base ou sels changés). Pas encore affiché par l'app React.
+			'tokenState'            => Settings::token_state(),
 			'restUrl'               => rest_url( G2RD_CONNECTOR_REST_NS . '/' ),
 			'nonce'                 => wp_create_nonce( 'wp_rest' ),
 			'connectorVersion'      => G2RD_CONNECTOR_VERSION,
