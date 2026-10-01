@@ -159,11 +159,18 @@ final class HeartbeatJob {
 	private function verify( string $token, int $site_id, array $cmd, int $now ): array {
 		try {
 			$check = QueueSignature::verify_entry( $token, $site_id, $cmd, $now );
-			if (
-				RequestSignature::STATUS_OK === $check['status']
-				&& ! SignatureState::remember_nonce( (string) ( $check['nonce'] ?? '' ), $now )
-			) {
+			if ( RequestSignature::STATUS_OK !== $check['status'] ) {
+				return $check;
+			}
+
+			// Registre partagé avec la route REST. Plein, il refuse d'enregistrer
+			// plutôt que d'évincer un nonce encore rejouable (K2).
+			$outcome = SignatureState::register_nonce( (string) ( $check['nonce'] ?? '' ), $now );
+			if ( SignatureState::NONCE_REPLAYED === $outcome ) {
 				return RequestSignature::failed( RequestSignature::CODE_REPLAYED );
+			}
+			if ( SignatureState::NONCE_STORE_FULL === $outcome ) {
+				return RequestSignature::failed( RequestSignature::CODE_NONCE_STORE_FULL );
 			}
 			return $check;
 		} catch ( \Throwable ) {
@@ -271,6 +278,14 @@ final class HeartbeatJob {
 			return sprintf(
 				/* translators: %s: nom technique de la commande refusée, par exemple rollback_plugin. */
 				__( 'La commande « %s » n’a pas été exécutée : cette commande signée a déjà été reçue une première fois, rien n’a été fait. Cause probable : réponse de la plateforme rejouée. Action : si l’opération est toujours souhaitée, la relancer depuis la plateforme.', 'g2rd-connector' ),
+				$kind
+			);
+		}
+
+		if ( RequestSignature::CODE_NONCE_STORE_FULL === $code ) {
+			return sprintf(
+				/* translators: %s: nom technique de la commande refusée, par exemple rollback_plugin. */
+				__( 'La commande « %s » n’a pas été exécutée : le site a reçu trop de commandes signées en quelques minutes et son registre anti-rejeu est plein ; la commande a été refusée par précaution. Action : la relancer depuis la plateforme dans quelques minutes ; si cela se répète, contacter le support G2RD.', 'g2rd-connector' ),
 				$kind
 			);
 		}

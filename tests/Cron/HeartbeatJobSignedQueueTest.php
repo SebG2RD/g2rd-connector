@@ -455,7 +455,70 @@ final class HeartbeatJobSignedQueueTest extends TestCase {
 		self::assertSame( 0, SignatureState::stats()['failed_count'] );
 	}
 
+	// ── K2 : registre anti-rejeu plein (partagé avec la route REST) ────────────
+
+	/**
+	 * Au plafond mémoire, le registre refuse d'enregistrer au lieu d'évincer un nonce
+	 * encore vivant : une commande SIGNED_ONLY n'est alors pas exécutée, avec un
+	 * message qui dit quoi faire — et pas « ré-enrôler le site », qui serait faux.
+	 */
+	public function test_commande_signee_refusee_explicitement_si_le_registre_est_plein(): void {
+		$this->set_policy( 'report' );
+		$this->fill_registry( SignatureState::MAX_LIVE_NONCES );
+		$this->queue(
+			[
+				[
+					'id'     => 42,
+					'signed' => $this->envelope( 42, '{"command":"set_signature_policy","payload":{"policy":"required"}}' ),
+				],
+			]
+		);
+
+		$this->run_job();
+
+		self::assertSame( 'report', Settings::get( 'signature_policy' ) );
+		$post = $this->only_post();
+		self::assertSame( 'failed', $post['body']['status'] );
+		self::assertSame( 'g2rd_connector_nonce_store_full', $post['body']['result']['code'] );
+		self::assertStringContainsString( 'set_signature_policy', (string) $post['body']['error'] );
+		self::assertStringContainsString( 'registre anti-rejeu', (string) $post['body']['error'] );
+		self::assertStringNotContainsString( 'ré-enrôler', (string) $post['body']['error'] );
+		self::assertSame( 'nonce_store_full', SignatureState::stats()['last_code'] );
+	}
+
+	/** Commande historique : rapport seul, elle s'exécute comme avant. */
+	public function test_commande_historique_executee_si_le_registre_est_plein(): void {
+		$this->set_policy( 'required' );
+		$this->fill_registry( SignatureState::MAX_LIVE_NONCES );
+		$this->queue(
+			[
+				[
+					'id'     => 42,
+					'kind'   => 'clear_cache',
+					'signed' => $this->envelope( 42, '{"command":"clear_cache"}' ),
+				],
+			]
+		);
+
+		$this->run_job();
+
+		self::assertSame( 'done', $this->only_post()['body']['status'] );
+		self::assertSame( [ 'wp_cache_flush' ], $this->calls );
+		self::assertSame( 'nonce_store_full', SignatureState::stats()['last_code'] );
+	}
+
 	// ── Outils ──────────────────────────────────────────────────────────────────
+
+	/**
+	 * Registre prérempli de `$count` nonces vivants.
+	 */
+	private function fill_registry( int $count ): void {
+		$nonces = [];
+		for ( $i = 1; $i <= $count; $i++ ) {
+			$nonces[ 'vivant' . $i ] = self::NOW;
+		}
+		$this->options[ SignatureState::OPTION_KEY ] = [ 'nonces' => $nonces ];
+	}
 
 	private function run_job(): void {
 		( new HeartbeatJob( static fn (): int => self::NOW ) )->run();

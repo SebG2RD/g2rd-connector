@@ -44,6 +44,12 @@ final class RequestSignature {
 	public const CODE_SKEW     = 'clock_skew';
 
 	/**
+	 * Signature valide, mais le registre anti-rejeu est au plafond : le nonce n'a
+	 * pas pu être enregistré (cf. SignatureState::MAX_LIVE_NONCES).
+	 */
+	public const CODE_NONCE_STORE_FULL = 'nonce_store_full';
+
+	/**
 	 * Clé de signature (32 octets bruts) dérivée du SiteToken.
 	 */
 	public static function derive_key( string $site_token ): string {

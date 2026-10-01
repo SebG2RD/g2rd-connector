@@ -90,6 +90,17 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   the site answers `failed` with an explicit, translatable message and counts the failure. The
   manager never puts these commands in the queue today, so no current traffic is refused; the
   historical queue commands (cache, updates, cleanup) run exactly as before.
+* **Security: the anti-replay registry is now bounded by time, not by volume.** It used to keep
+  at most 500 nonces and evicted the oldest ones even while they could still be replayed:
+  500 signed requests within ten minutes were enough to make an earlier request replayable.
+  A nonce is now kept for as long as it can be replayed (two ±300 s windows plus one minute).
+  A memory guard of 5,000 live nonces remains; when it is reached, the new request's nonce is
+  refused (`nonce_store_full`, counted in the signature diagnostics) instead of evicting a live
+  one. In the default `report` policy the request is still accepted; it is refused only under
+  the `required` policy or for commands that always require a signature, with an explicit,
+  translatable message. The registry is now written under a MySQL advisory lock, so two
+  simultaneous requests can no longer erase each other's nonce; if the host does not allow
+  the lock, the plugin works exactly as before. Storage format unchanged: no migration.
 
 = 1.12.0-rc.4 =
 

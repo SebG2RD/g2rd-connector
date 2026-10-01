@@ -90,6 +90,22 @@ Politique, réglable dans la page d'administration (« Exiger des commandes sign
 Les commandes `rollback_plugin`, `delete_restore_point` et `set_signature_policy` exigent une
 signature valide quelle que soit la politique.
 
+#### Registre anti-rejeu
+
+Les nonces des signatures valides (route REST et file du cron) sont gardés dans l'option
+`g2rd_connector_signature_state`, sans autoload, **tant qu'ils sont rejouables** : deux fenêtres de
+±300 s plus une minute (660 s), comptées depuis leur arrivée. Le registre est borné par le temps,
+jamais par le volume : aucun nonce encore vivant n'est évincé.
+
+- Garde mémoire : 5 000 nonces vivants (environ 7,5 requêtes signées par seconde pendant 11 min).
+  Au-delà, le nouveau nonce est **refusé** plutôt qu'un ancien évincé : code `nonce_store_full`,
+  compté dans le diagnostic de signature. En politique `report`, la requête reste acceptée ; en
+  `required` ou pour les commandes ci-dessus, elle est refusée (401
+  `g2rd_connector_nonce_store_full`, ou `failed` par la file) avec un message explicite.
+- La lecture-modification-écriture de l'option se fait sous verrou consultatif MySQL
+  (`GET_LOCK`, nom propre à la base et à la table des options, 3 s au plus). Si l'hébergeur ne le
+  permet pas, le connecteur fonctionne comme avant, sans verrou.
+
 #### File des commandes (cron)
 
 Le cron horaire tire aussi des commandes de la file du manager
@@ -97,7 +113,8 @@ Le cron horaire tire aussi des commandes de la file du manager
 règle** que par la route REST : sans enveloppe signée valide, elles ne sont pas exécutées, quelle que
 soit la politique, et le site répond `failed` avec un code dans `result.code`
 (`g2rd_connector_signature_missing`, `g2rd_connector_signature_invalid`,
-`g2rd_connector_signature_replayed`, `g2rd_connector_clock_skew`, `g2rd_connector_signature_error`)
+`g2rd_connector_signature_replayed`, `g2rd_connector_clock_skew`, `g2rd_connector_signature_error`,
+`g2rd_connector_nonce_store_full`)
 et un message explicite dans `error`.
 L'échec est compté dans le diagnostic de signature (page d'administration, battement de cœur).
 
