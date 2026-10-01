@@ -101,6 +101,19 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   translatable message. The registry is now written under a MySQL advisory lock, so two
   simultaneous requests can no longer erase each other's nonce; if the host does not allow
   the lock, the plugin works exactly as before. Storage format unchanged: no migration.
+* **Security: wordpress.org rollback archives can now be verified against a SHA-256 sent by the
+  platform.** When a restore point is gone, `rollback_plugin` falls back to the archive on
+  `downloads.wordpress.org`; its content was checked by nothing but the version header. The
+  command now accepts a new `source_sha256` key (64 hexadecimal characters): the downloaded
+  archive must match it, otherwise the site answers `rollback_failed_integrity` before touching
+  anything (plugin neither moved nor deactivated, temporary file removed). A malformed value is
+  refused before downloading. `expected_sha256` keeps its meaning (the local restore point only)
+  and is never applied to the downloaded archive. Without `source_sha256`, which is the case of
+  every current manager, behaviour is unchanged; the unverified download is recorded (counter and
+  last case in the non-autoloaded `g2rd_connector_unverified_downloads` option, the
+  `g2rd_connector_rollback_source_unverified` action) and the result now reports
+  `source_integrity` and the computed `source_sha256_actual`. Integrity failures also report
+  `via` (`restore_point` or `download`). No setting, signature policy or existing key changes.
 
 = 1.12.0-rc.4 =
 

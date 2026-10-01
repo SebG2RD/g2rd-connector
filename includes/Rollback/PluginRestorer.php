@@ -44,7 +44,8 @@ final class PluginRestorer {
 	/**
 	 * Restaure `$plugin_file` depuis `$zip_path`.
 	 *
-	 * @param string      $expected_sha256          Hash attendu par le manager (chaîne vide = non vérifié, cas du zip wordpress.org).
+	 * @param string      $expected_sha256          Hash attendu par le manager (chaîne vide = non vérifié : zip wordpress.org
+	 *                                              quand la plateforme n'a pas envoyé `source_sha256`).
 	 * @param string      $expected_version         Version que le zip doit contenir.
 	 * @param string|null $expected_current_version Version censée être installée (null = non vérifié).
 	 * @return array{version_before:string, version_after:string}

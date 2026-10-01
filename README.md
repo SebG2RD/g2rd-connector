@@ -166,6 +166,27 @@ dont le loopback est impossible donne « non vérifiable », jamais « cassé »
 - Limite connue : WordPress peut envoyer son e-mail « erreur critique » avant le rollback
   automatique (au plus une fois par jour).
 
+#### Repli wordpress.org et empreinte (`source_sha256`)
+
+Si le point local a disparu, `rollback_plugin` peut retélécharger la version depuis `source_url`
+(HTTPS, hôte `downloads.wordpress.org` seulement, filtre `g2rd_connector_restore_source_hosts`).
+Deux empreintes distinctes, à ne jamais confondre :
+
+- `expected_sha256` : empreinte du zip du **point local** ; elle ne sert qu'à cette branche, même
+  quand elle arrive dans la même commande que `source_url`.
+- `source_sha256` : empreinte attendue de l'**archive téléchargée** (64 caractères hexadécimaux,
+  casse et espaces autour ignorés). Différente : `rollback_failed_integrity` avec `via: download`,
+  avant toute écriture (extension ni déplacée ni désactivée, fichier temporaire supprimé). Mal
+  formée : même refus, sans téléchargement.
+
+Sans `source_sha256` (managers actuels), l'archive est installée comme avant, mais le résultat le
+dit (`source_integrity: unverified`, `source_sha256_actual`) et le site garde une trace bornée dans
+l'option `g2rd_connector_unverified_downloads` (sans autoload : compteur et dernier cas), exposée
+dans les données de la page d'administration (`unverifiedDownloads`). L'action
+`g2rd_connector_rollback_source_unverified` reçoit `( $file, $url, $sha256 )`. En succès vérifié :
+`source_integrity: verified`. Un échec d'intégrité porte désormais `via` (`restore_point` ou
+`download`).
+
 ## Développement
 
 ```bash

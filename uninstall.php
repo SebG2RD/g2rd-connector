@@ -34,6 +34,9 @@ delete_site_option( 'g2rd_updates_snapshot' );
 // Registre des nonces de signature + compteur d'échecs (cf. Security\SignatureState).
 delete_option( 'g2rd_connector_signature_state' );
 
+// Trace des restaurations wordpress.org non vérifiées (cf. Rollback\UnverifiedDownloads).
+delete_option( 'g2rd_connector_unverified_downloads' );
+
 // Points de restauration (cf. Rollback\RestorePointStore) : on supprime UNIQUEMENT
 // les zips indexés par le plugin et ses fichiers de protection, puis le dossier s'il
 // est vide. Un fichier étranger déposé dans ce dossier n'est jamais touché.

@@ -39,9 +39,24 @@ final class RestoreCommands {
 	public function __construct( private readonly Services $services ) {
 	}
 
+	/** Repli téléchargé : empreinte fournie par la plateforme et vérifiée. */
+	public const SOURCE_VERIFIED = 'verified';
+
+	/** Repli téléchargé : aucune empreinte fournie (managers antérieurs), installé comme avant. */
+	public const SOURCE_UNVERIFIED = 'unverified';
+
 	/**
+	 * Deux empreintes distinctes, à ne jamais confondre :
+	 *   - `expected_sha256` : empreinte du zip du POINT LOCAL (fait par Snapshotter) ;
+	 *     ne s'applique qu'à la branche « point de restauration » ;
+	 *   - `source_sha256`   : empreinte de l'archive à télécharger (`source_url`) ;
+	 *     ne s'applique qu'à la branche « téléchargement ».
+	 * Le manager envoie les deux dans la même commande quand le point a pu disparaître
+	 * du site : appliquer la première à l'archive wordpress.org refuserait à tort
+	 * toutes ces restaurations.
+	 *
 	 * @param array<string, mixed> $payload file, restore_point_id?, expected_sha256?, expected_version,
-	 *                                      expected_current_version?, source_url?
+	 *                                      expected_current_version?, source_url?, source_sha256?
 	 * @return array<string, mixed>
 	 */
 	public function rollback_plugin( array $payload ): array {
@@ -74,9 +89,12 @@ final class RestoreCommands {
 		$was_active = is_plugin_active( $file );
 		$network    = is_multisite() && is_plugin_active_for_network( $file );
 		$health     = [ 'baseline' => $s->health->measure() ];
+		$attempt    = null;
+		$source_info = [];
 
 		try {
 			if ( null !== $point ) {
+				$attempt = 'restore_point';
 				if ( '' !== $expected_sha && ! hash_equals( $expected_sha, strtolower( (string) $point['sha256'] ) ) ) {
 					// L'index du site et la plateforme ne racontent pas la même histoire : on ne touche à rien.
 					throw RestoreException::integrity( 'restore point hash differs from the platform record' );
@@ -85,8 +103,19 @@ final class RestoreCommands {
 				$s->store->hold( $point['id'], time() + (int) ( $payload['hold_max_seconds'] ?? RestorePointPurgeJob::DEFAULT_HOLD_MAX_SECONDS ) );
 				$via = 'restore_point';
 			} elseif ( '' !== $source ) {
-				$restored = $this->restore_from_download( $file, $source, $expected_version, $expected_current, $was_active, $network );
-				$via      = 'download';
+				$attempt     = 'download';
+				$source_sha  = self::source_sha256( $payload );
+				$restored    = $this->restore_from_download( $file, $source, $source_sha, $expected_version, $expected_current, $was_active, $network );
+				$via         = 'download';
+				$source_info = [
+					'source_integrity'     => '' !== $source_sha ? self::SOURCE_VERIFIED : self::SOURCE_UNVERIFIED,
+					'source_sha256_actual' => $restored['sha256'],
+				];
+				if ( '' === $source_sha ) {
+					// Comportement d'avant conservé, mais plus invisible : trace bornée + crochet.
+					UnverifiedDownloads::record( $file, $source, $restored['sha256'], time() );
+					do_action( 'g2rd_connector_rollback_source_unverified', $file, $source, $restored['sha256'] );
+				}
 			} else {
 				return [
 					'outcome'      => self::OUTCOME_SNAPSHOT_MISSING,
@@ -96,11 +125,14 @@ final class RestoreCommands {
 				];
 			}
 		} catch ( RestoreException $e ) {
+			// `via` (ajout K3) : la plateforme distingue une copie locale altérée d'une
+			// archive téléchargée différente ; les clés historiques sont inchangées.
 			return [
 				'outcome'    => $e->error_code(),
 				'error_code' => $e->error_code(),
 				'error'      => $e->getMessage(),
 				'file'       => $file,
+				'via'        => $attempt,
 				'health'     => $health,
 			];
 		}
@@ -116,7 +148,28 @@ final class RestoreCommands {
 			'version_after'  => $restored['version_after'],
 			'was_active'     => $was_active,
 			'health'         => $health,
-		];
+		] + $source_info;
+	}
+
+	/**
+	 * Empreinte attendue de l'archive téléchargée (`source_sha256`), normalisée.
+	 * Absente ou vide : chaîne vide (comportement d'avant). Présente mais mal formée :
+	 * refus AVANT tout téléchargement — une empreinte illisible ne doit pas valoir
+	 * « pas d'empreinte ».
+	 *
+	 * @param array<string, mixed> $payload
+	 * @throws RestoreException
+	 */
+	private static function source_sha256( array $payload ): string {
+		$raw = $payload['source_sha256'] ?? null;
+		if ( null === $raw || '' === $raw ) {
+			return '';
+		}
+		$sha = is_string( $raw ) ? strtolower( trim( $raw ) ) : '';
+		if ( 1 !== preg_match( '/^[0-9a-f]{64}$/', $sha ) ) {
+			throw RestoreException::integrity( 'source_sha256 is not a valid SHA-256 (64 hexadecimal characters)' );
+		}
+		return $sha;
 	}
 
 	/**
@@ -150,13 +203,19 @@ final class RestoreCommands {
 	}
 
 	/**
-	 * Repli : archive téléchargée depuis un hôte autorisé (wordpress.org), sans hash
-	 * connu — la version lue dans l'archive et le confinement des entrées restent vérifiés.
+	 * Repli : archive téléchargée depuis un hôte autorisé (wordpress.org).
 	 *
-	 * @return array{version_before:string, version_after:string}
+	 * Quand la plateforme fournit `$source_sha` (K3), l'empreinte de l'archive reçue
+	 * doit lui être égale, sinon refus AVANT toute écriture (dossier ni déplacé ni
+	 * désactivé). Sans empreinte (managers antérieurs), comportement d'avant : seules
+	 * la version lue dans l'archive et le confinement des entrées sont vérifiés.
+	 * L'empreinte calculée est toujours renvoyée, pour la trace et le résultat.
+	 *
+	 * @param string $source_sha Empreinte attendue, normalisée (64 hex) ou chaîne vide.
+	 * @return array{version_before:string, version_after:string, sha256:string}
 	 * @throws RestoreException
 	 */
-	private function restore_from_download( string $file, string $url, string $expected_version, ?string $expected_current, bool $was_active, bool $network ): array {
+	private function restore_from_download( string $file, string $url, string $source_sha, string $expected_version, ?string $expected_current, bool $was_active, bool $network ): array {
 		$host  = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
 		$hosts = (array) apply_filters( 'g2rd_connector_restore_source_hosts', self::DEFAULT_SOURCE_HOSTS );
 		if ( 'https' !== strtolower( (string) wp_parse_url( $url, PHP_URL_SCHEME ) ) || ! in_array( $host, $hosts, true ) ) {
@@ -172,7 +231,12 @@ final class RestoreCommands {
 		}
 
 		try {
-			$this->services->restorer->restore_from_zip( (string) $tmp, $file, '', $expected_version, $expected_current );
+			$actual = (string) hash_file( 'sha256', (string) $tmp );
+			if ( '' !== $source_sha && ! hash_equals( $source_sha, $actual ) ) {
+				throw RestoreException::integrity( esc_html( 'downloaded archive hash does not match source_sha256 (got ' . $actual . ')' ) );
+			}
+			// Le restaurateur recompare l'empreinte (vide = non vérifiée) avant d'écrire.
+			$this->services->restorer->restore_from_zip( (string) $tmp, $file, $source_sha, $expected_version, $expected_current );
 		} finally {
 			if ( is_string( $tmp ) && file_exists( $tmp ) ) {
 				unlink( $tmp );
@@ -194,6 +258,7 @@ final class RestoreCommands {
 		return [
 			'version_before' => (string) ( $expected_current ?? '' ),
 			'version_after'  => (string) ( $plugins[ $file ]['Version'] ?? $expected_version ),
+			'sha256'         => $actual,
 		];
 	}
 }

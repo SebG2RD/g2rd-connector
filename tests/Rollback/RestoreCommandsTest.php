@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Tests\Rollback;
 
+use Brain\Monkey\Actions;
 use Brain\Monkey\Functions;
 use G2RD\Connector\Commands\CommandExecutor;
 use G2RD\Connector\Rest\Auth;
@@ -14,6 +15,7 @@ use G2RD\Connector\Rollback\RestoreCommands;
 use G2RD\Connector\Rollback\RestorePointStore;
 use G2RD\Connector\Rollback\Services;
 use G2RD\Connector\Rollback\Snapshotter;
+use G2RD\Connector\Rollback\UnverifiedDownloads;
 use G2RD\Connector\Security\RequestSignature;
 use G2RD\Connector\Settings;
 use WP_Error;
@@ -231,6 +233,182 @@ final class RestoreCommandsTest extends FilesystemTestCase {
 		self::assertFileDoesNotExist( $tmp, 'l\'archive téléchargée est nettoyée' );
 	}
 
+	/**
+	 * K3 — l'archive wordpress.org est comparée à l'empreinte envoyée par la
+	 * plateforme (`source_sha256`) : différente, rien n'est touché.
+	 */
+	public function test_download_fallback_refuses_an_archive_whose_hash_differs_from_source_sha256(): void {
+		$tmp = $this->serve_point_archive_as_download();
+
+		$r = CommandExecutor::run( 'rollback_plugin', [
+			'file'                     => self::FILE,
+			'source_url'               => 'https://downloads.wordpress.org/plugin/akismet.1.0.zip',
+			'source_sha256'            => str_repeat( 'cd', 32 ),
+			'expected_version'         => '1.0',
+			'expected_current_version' => '2.0',
+		] )['result'];
+
+		self::assertSame( 'rollback_failed_integrity', $r['outcome'] );
+		self::assertSame( 'download', $r['via'] );
+		self::assertStringContainsString( 'source_sha256', $r['error'] );
+		self::assertSame( '2.0', $this->plugins_on_disk()[ self::FILE ]['Version'], 'rien n\'est installé' );
+		self::assertFileExists( $this->plugins . '/akismet/inc/new-module.php', 'le dossier actuel n\'est pas touché' );
+		self::assertTrue( $this->active, 'pas même désactivé' );
+		self::assertFileDoesNotExist( $tmp, 'l\'archive téléchargée est nettoyée' );
+		self::assertArrayNotHasKey( 'g2rd_connector_unverified_downloads', $this->options, 'un refus n\'est pas une installation non vérifiée' );
+	}
+
+	/** L'empreinte est acceptée en majuscules ou entourée d'espaces (normalisation). */
+	public function test_download_fallback_accepts_an_archive_matching_source_sha256(): void {
+		$sha = (string) hash_file( 'sha256', (string) $this->store->path_for( $this->point ) );
+		$this->serve_point_archive_as_download();
+
+		$r = CommandExecutor::run( 'rollback_plugin', [
+			'file'                     => self::FILE,
+			'source_url'               => 'https://downloads.wordpress.org/plugin/akismet.1.0.zip',
+			'source_sha256'            => ' ' . strtoupper( $sha ) . ' ',
+			'expected_version'         => '1.0',
+			'expected_current_version' => '2.0',
+		] )['result'];
+
+		self::assertSame( RestoreCommands::OUTCOME_SUCCESS, $r['outcome'] );
+		self::assertSame( 'download', $r['via'] );
+		self::assertSame( 'verified', $r['source_integrity'] );
+		self::assertSame( $sha, $r['source_sha256_actual'] );
+		self::assertSame( '1.0', $this->plugins_on_disk()[ self::FILE ]['Version'] );
+		self::assertArrayNotHasKey( 'g2rd_connector_unverified_downloads', $this->options );
+	}
+
+	/** Empreinte mal formée : refus AVANT tout téléchargement. */
+	public function test_download_fallback_rejects_a_malformed_source_sha256_before_downloading(): void {
+		Functions\when( 'download_url' )->alias(
+			static function (): never {
+				throw new \LogicException( 'aucun téléchargement attendu' );
+			}
+		);
+
+		foreach ( [ 'pas-un-hash', str_repeat( 'g', 64 ), str_repeat( 'a', 63 ), [ 'tableau' ] ] as $bad ) {
+			$r = CommandExecutor::run( 'rollback_plugin', [
+				'file'             => self::FILE,
+				'source_url'       => 'https://downloads.wordpress.org/plugin/akismet.1.0.zip',
+				'source_sha256'    => $bad,
+				'expected_version' => '1.0',
+			] )['result'];
+
+			self::assertSame( 'rollback_failed_integrity', $r['outcome'], var_export( $bad, true ) );
+			self::assertSame( 'download', $r['via'] );
+			self::assertStringContainsString( 'source_sha256', $r['error'] );
+		}
+		self::assertSame( '2.0', $this->plugins_on_disk()[ self::FILE ]['Version'] );
+		self::assertTrue( $this->active );
+	}
+
+	/**
+	 * Payload exact du manager actuel (pas de `source_sha256`) : comportement
+	 * inchangé, mais l'installation non vérifiée est tracée (compteur borné) et
+	 * annoncée aux intégrateurs.
+	 */
+	public function test_download_fallback_without_source_sha256_keeps_current_behaviour_and_records_it(): void {
+		$sha = (string) hash_file( 'sha256', (string) $this->store->path_for( $this->point ) );
+		$this->serve_point_archive_as_download();
+		$url = 'https://downloads.wordpress.org/plugin/akismet.1.0.zip';
+		Actions\expectDone( 'g2rd_connector_rollback_source_unverified' )->twice()->with( self::FILE, $url, $sha );
+
+		$payload = [
+			'file'                     => self::FILE,
+			'source_url'               => $url,
+			'expected_version'         => '1.0',
+			'expected_current_version' => '2.0',
+		];
+		$r = CommandExecutor::run( 'rollback_plugin', $payload )['result'];
+
+		self::assertSame( RestoreCommands::OUTCOME_SUCCESS, $r['outcome'] );
+		self::assertSame( 'download', $r['via'] );
+		self::assertSame( 'unverified', $r['source_integrity'] );
+		self::assertSame( $sha, $r['source_sha256_actual'] );
+		self::assertSame( '1.0', $this->plugins_on_disk()[ self::FILE ]['Version'] );
+
+		$trace = UnverifiedDownloads::stats();
+		self::assertSame( 1, $trace['count'] );
+		self::assertSame( self::FILE, $trace['last_file'] );
+		self::assertSame( $url, $trace['last_url'] );
+		self::assertSame( $sha, $trace['last_sha256'] );
+		self::assertIsInt( $trace['last_at'] );
+
+		// Deuxième restauration : le compteur avance, la trace ne grossit pas.
+		file_put_contents( $this->plugins . '/akismet/akismet.php', "<?php\n/**\n * Plugin Name: akismet\n * Version: 2.0\n */\n" );
+		$this->serve_point_archive_as_download();
+		CommandExecutor::run( 'rollback_plugin', $payload );
+		self::assertSame( 2, UnverifiedDownloads::stats()['count'] );
+		self::assertCount( 5, (array) $this->options[ UnverifiedDownloads::OPTION_KEY ], 'trace bornée : compteur + dernier cas' );
+	}
+
+	/** Une trace impossible à écrire ne fait jamais échouer la restauration. */
+	public function test_unverified_trace_failure_never_breaks_the_restoration(): void {
+		$this->serve_point_archive_as_download();
+		Functions\when( 'update_option' )->alias(
+			function ( string $key, $value ): bool {
+				if ( 'g2rd_connector_unverified_downloads' === $key ) {
+					throw new \RuntimeException( 'base indisponible' );
+				}
+				$this->options[ $key ] = $value;
+				return true;
+			}
+		);
+
+		$r = CommandExecutor::run( 'rollback_plugin', [
+			'file'             => self::FILE,
+			'source_url'       => 'https://downloads.wordpress.org/plugin/akismet.1.0.zip',
+			'expected_version' => '1.0',
+		] )['result'];
+
+		self::assertSame( RestoreCommands::OUTCOME_SUCCESS, $r['outcome'] );
+		self::assertSame( 'unverified', $r['source_integrity'] );
+	}
+
+	/**
+	 * Verrou du piège manager : `expected_sha256` est l'empreinte du POINT LOCAL,
+	 * envoyée dans la même commande que `source_url`. Si le point a disparu, elle
+	 * ne doit jamais être appliquée à l'archive wordpress.org (sinon tout retour
+	 * arrière de ce cas serait refusé).
+	 */
+	public function test_point_hash_is_never_applied_to_the_downloaded_archive(): void {
+		$this->serve_point_archive_as_download();
+
+		$r = CommandExecutor::run( 'rollback_plugin', [
+			'file'                     => self::FILE,
+			'restore_point_id'         => 'inexistant',
+			'expected_sha256'          => str_repeat( 'ab', 32 ),
+			'source_url'               => 'https://downloads.wordpress.org/plugin/akismet.1.0.zip',
+			'expected_version'         => '1.0',
+			'expected_current_version' => '2.0',
+		] )['result'];
+
+		self::assertSame( RestoreCommands::OUTCOME_SUCCESS, $r['outcome'] );
+		self::assertSame( 'download', $r['via'] );
+		self::assertSame( 'unverified', $r['source_integrity'] );
+	}
+
+	/** Un échec d'intégrité dit d'où il vient : copie locale ou archive téléchargée. */
+	public function test_integrity_failure_reports_which_source_failed(): void {
+		$r = CommandExecutor::run( 'rollback_plugin', [
+			'file'             => self::FILE,
+			'source_url'       => 'https://evil.example/akismet.1.0.zip',
+			'expected_version' => '1.0',
+		] )['result'];
+		self::assertSame( 'rollback_failed_integrity', $r['outcome'] );
+		self::assertSame( 'download', $r['via'] );
+
+		$r = CommandExecutor::run( 'rollback_plugin', [
+			'file'             => self::FILE,
+			'restore_point_id' => $this->point['id'],
+			'expected_sha256'  => str_repeat( 'ab', 32 ),
+			'expected_version' => '1.0',
+		] )['result'];
+		self::assertSame( 'rollback_failed_integrity', $r['outcome'] );
+		self::assertSame( 'restore_point', $r['via'] );
+	}
+
 	public function test_the_connector_itself_cannot_be_rolled_back(): void {
 		Functions\when( 'plugin_basename' )->alias( static fn (): string => self::FILE );
 
@@ -302,6 +480,24 @@ final class RestoreCommandsTest extends FilesystemTestCase {
 		$request->set_header( 'X-G2RD-Nonce', $nonce );
 		$request->set_header( 'X-G2RD-Signature', 'v1=' . RequestSignature::sign( self::TOKEN, 'POST', '/g2rd/v1/command', $ts, $nonce, $request->get_body() ) );
 		return $request;
+	}
+
+	/**
+	 * Simule le téléchargement wordpress.org : `download_url()` rend une copie de
+	 * l'archive du point local (version 1.0).
+	 *
+	 * @return string Chemin du fichier temporaire « téléchargé ».
+	 */
+	private function serve_point_archive_as_download(): string {
+		$archive = (string) $this->store->path_for( $this->point );
+		$tmp     = $this->root . '/downloaded.zip';
+		Functions\when( 'download_url' )->alias(
+			static function () use ( $archive, $tmp ): string {
+				copy( $archive, $tmp );
+				return $tmp;
+			}
+		);
+		return $tmp;
 	}
 
 	/**
