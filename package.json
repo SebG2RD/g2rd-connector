@@ -1,30 +1,30 @@
 {
-    "name": "g2rd-connector",
-    "version": "1.12.0-rc.4",
-    "description": "Admin React app for the G2RD Connector WordPress plugin.",
-    "license": "GPL-2.0-or-later",
-    "private": true,
-    "scripts": {
-        "build": "wp-scripts build --webpack-src-dir=assets/admin/src --output-path=assets/admin/build",
-        "start": "wp-scripts start --webpack-src-dir=assets/admin/src --output-path=assets/admin/build",
-        "lint:js": "wp-scripts lint-js assets/admin/src",
-        "format": "wp-scripts format assets/admin/src"
-    },
-    "devDependencies": {
-        "@wordpress/scripts": "^36.0.0"
-    },
-    "dependencies": {
-        "@wordpress/element": "^8.8.0"
-    },
-    "overrides": {
-        "@sentry/node": "^10.0.0",
-        "linkify-it": "^5.0.2",
-        "markdown-it": "^14.2.0",
-        "serialize-javascript": "^7.0.5",
-        "uuid": "^11.1.1",
-        "markdownlint-cli": {
-            "minimatch": "^3.1.5"
-        },
-        "qs": "^6.16.0"
-    }
+	"name": "g2rd-connector",
+	"version": "1.12.0-rc.4",
+	"description": "Admin React app for the G2RD Connector WordPress plugin.",
+	"license": "GPL-2.0-or-later",
+	"private": true,
+	"scripts": {
+		"build": "wp-scripts build --webpack-src-dir=assets/admin/src --output-path=assets/admin/build",
+		"start": "wp-scripts start --webpack-src-dir=assets/admin/src --output-path=assets/admin/build",
+		"lint:js": "wp-scripts lint-js assets/admin/src",
+		"format": "wp-scripts format assets/admin/src"
+	},
+	"devDependencies": {
+		"@wordpress/scripts": "^36.0.0"
+	},
+	"dependencies": {
+		"@wordpress/element": "^8.8.0"
+	},
+	"overrides": {
+		"@sentry/node": "^10.0.0",
+		"linkify-it": "^5.0.2",
+		"markdown-it": "^14.2.0",
+		"serialize-javascript": "^7.0.5",
+		"uuid": "^11.1.1",
+		"markdownlint-cli": {
+			"js-yaml": "^5.4.1"
+		},
+		"qs": "^6.16.0"
+	}
 }
