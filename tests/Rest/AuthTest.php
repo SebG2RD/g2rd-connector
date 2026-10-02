@@ -231,6 +231,106 @@ final class AuthTest extends TestCase {
 		self::assertEqualsWithDelta( time(), $result->get_error_data()['server_time'], 5 );
 	}
 
+	// ── K2 : registre anti-rejeu borné par le temps ─────────────────────────────
+
+	/**
+	 * K2 — avant le correctif, un registre de plus de 500 nonces vivants évinçait
+	 * les plus anciens : le nonce de la requête tout juste acceptée pouvait sortir
+	 * du registre et redevenir rejouable.
+	 */
+	public function test_replay_after_heavy_volume_is_detected(): void {
+		$nonce = bin2hex( random_bytes( 16 ) );
+		self::assertTrue( Auth::require_site_token( $this->signed_request( $nonce ) ) );
+		self::assertSame( [ 'status' => 'ok' ], Auth::last_signature_check() );
+
+		// 600 autres requêtes signées arrivent dans la foulée (une seconde plus tard).
+		for ( $i = 1; $i <= 600; $i++ ) {
+			SignatureState::remember_nonce( 'suivant' . $i, time() + 1 );
+		}
+
+		self::assertTrue( Auth::require_site_token( $this->signed_request( $nonce ) ) );
+		self::assertSame( 'signature_replayed', Auth::last_signature_check()['code'] ?? null );
+	}
+
+	/** Politique `report` (22 sites sur 23) : un registre plein ne refuse rien, il est signalé. */
+	public function test_report_mode_accepts_when_registry_is_full_and_reports_it(): void {
+		$this->fill_registry( SignatureState::MAX_LIVE_NONCES );
+
+		self::assertTrue( Auth::require_site_token( $this->signed_request() ) );
+		self::assertSame( RequestSignature::CODE_NONCE_STORE_FULL, Auth::last_signature_check()['code'] ?? null );
+		self::assertSame( 1, SignatureState::stats()['failed_count'] );
+		self::assertSame( 'nonce_store_full', SignatureState::stats()['last_code'] );
+	}
+
+	public function test_required_mode_refuses_explicitly_when_registry_is_full(): void {
+		$this->options[ Settings::OPTION_KEY ]['signature_policy'] = 'required';
+		$this->fill_registry( SignatureState::MAX_LIVE_NONCES );
+
+		$result = Auth::require_site_token( $this->signed_request() );
+		self::assertInstanceOf( WP_Error::class, $result );
+		self::assertSame( 'g2rd_connector_nonce_store_full', $result->get_error_code() );
+		self::assertSame( [ 'status' => 401 ], $result->get_error_data() );
+		self::assertStringContainsString( 'registre anti-rejeu', $result->get_error_message() );
+		self::assertStringContainsString( 'Réessayez dans quelques minutes', $result->get_error_message() );
+	}
+
+	public function test_signed_only_command_is_refused_when_registry_is_full_even_in_report(): void {
+		$this->fill_registry( SignatureState::MAX_LIVE_NONCES );
+		$request = $this->signed_request();
+		$request->set_param( 'command', 'rollback_plugin' );
+
+		$result = Auth::require_site_token( $request );
+		self::assertInstanceOf( WP_Error::class, $result );
+		self::assertSame( 'g2rd_connector_nonce_store_full', $result->get_error_code() );
+		self::assertSame( 401, $result->get_error_data()['status'] );
+	}
+
+	/** Les autres refus gardent leur message d'avant. */
+	public function test_other_refusals_keep_the_generic_message(): void {
+		$this->options[ Settings::OPTION_KEY ]['signature_policy'] = 'required';
+
+		$result = Auth::require_site_token( $this->request() );
+		self::assertInstanceOf( WP_Error::class, $result );
+		self::assertSame( 'Signature de la requête absente ou invalide.', $result->get_error_message() );
+	}
+
+	// ── K4 : jeton migré du format v1 au format v2 ──────────────────────────────
+
+	/**
+	 * Le format de stockage est purement local : après la migration v1 → v2 (à la
+	 * première écriture des réglages), le même Bearer est accepté et la signature,
+	 * dérivée du jeton EN CLAIR des deux côtés, passe toujours.
+	 */
+	public function test_un_site_migre_reste_authentifie_et_signe(): void {
+		// Écriture v2 activée (dormante par défaut, cf. Settings::token_v2_enabled).
+		\Brain\Monkey\Filters\expectApplied( 'g2rd_connector_token_v2' )->andReturn( true );
+		$this->options[ Settings::OPTION_KEY ]['site_token']       = Settings::encrypt_token( self::TOKEN, 'v1' );
+		$this->options[ Settings::OPTION_KEY ]['signature_policy'] = 'required';
+
+		Settings::update( [ 'last_heartbeat_at' => 'x' ] );
+
+		self::assertStringStartsWith( 'enc:v2:', $this->options[ Settings::OPTION_KEY ]['site_token'] );
+		self::assertTrue( Auth::require_site_token( $this->signed_request() ) );
+		self::assertSame( [ 'status' => 'ok' ], Auth::last_signature_check() );
+
+		$request = $this->request();
+		$request->set_header( 'Authorization', 'Bearer mauvais-jeton' );
+		self::assertInstanceOf( WP_Error::class, Auth::require_site_token( $request ) );
+	}
+
+	/** Par défaut (écriture v2 dormante), le jeton reste en v1 et tout fonctionne comme en rc.4. */
+	public function test_par_defaut_le_jeton_reste_v1_et_le_site_authentifie(): void {
+		$v1                                                        = Settings::encrypt_token( self::TOKEN, 'v1' );
+		$this->options[ Settings::OPTION_KEY ]['site_token']       = $v1;
+		$this->options[ Settings::OPTION_KEY ]['signature_policy'] = 'required';
+
+		Settings::update( [ 'last_heartbeat_at' => 'x' ] );
+
+		self::assertSame( $v1, $this->options[ Settings::OPTION_KEY ]['site_token'] );
+		self::assertTrue( Auth::require_site_token( $this->signed_request() ) );
+		self::assertSame( [ 'status' => 'ok' ], Auth::last_signature_check() );
+	}
+
 	// ── Réglage ─────────────────────────────────────────────────────────────────
 
 	public function test_policy_defaults_to_report(): void {
@@ -245,6 +345,17 @@ final class AuthTest extends TestCase {
 		self::assertSame( 'required', Settings::sanitize( [ 'signature_policy' => 'required' ] )['signature_policy'] );
 		// Une sauvegarde de la page d'admin qui n'envoie pas la clé ne la modifie pas.
 		self::assertSame( 'report', Settings::sanitize( [ 'heartbeat_enabled' => false ] )['signature_policy'] );
+	}
+
+	/**
+	 * Registre prérempli de `$count` nonces vivants (vus à l'instant).
+	 */
+	private function fill_registry( int $count ): void {
+		$nonces = [];
+		for ( $i = 1; $i <= $count; $i++ ) {
+			$nonces[ 'vivant' . $i ] = time();
+		}
+		$this->options[ SignatureState::OPTION_KEY ] = [ 'nonces' => $nonces ];
 	}
 
 	private function request(): WP_REST_Request {

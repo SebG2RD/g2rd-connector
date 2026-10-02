@@ -82,6 +82,30 @@ final class RequestSignatureTest extends TestCase {
 	}
 
 	/**
+	 * Un jeton vide (illisible ou refusé par le mode strict) donnerait une clé que
+	 * tout le monde peut recalculer : aucune signature n'est jamais acceptée avec.
+	 */
+	public function test_empty_site_token_never_verifies(): void {
+		$signature = 'v1=' . RequestSignature::sign( '', 'POST', self::ROUTE, (string) self::NOW, self::NONCE, self::BODY );
+
+		$result = RequestSignature::verify( '', 'POST', self::ROUTE, self::BODY, (string) self::NOW, self::NONCE, $signature, self::NOW );
+
+		self::assertSame(
+			[
+				'status' => 'failed',
+				'code'   => 'token_unavailable',
+			],
+			$result
+		);
+	}
+
+	/** Sans en-têtes, l'absence reste une absence (aucun changement pour la route REST). */
+	public function test_empty_site_token_without_headers_is_still_absent(): void {
+		$result = RequestSignature::verify( '', 'POST', self::ROUTE, self::BODY, '', '', '', self::NOW );
+		self::assertSame( [ 'status' => 'absent' ], $result );
+	}
+
+	/**
 	 * @return iterable<string, array{string, string, string}>
 	 */
 	public static function malformed_headers(): iterable {

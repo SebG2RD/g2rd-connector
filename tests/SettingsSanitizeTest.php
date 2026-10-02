@@ -38,4 +38,33 @@ final class SettingsSanitizeTest extends TestCase {
 			self::assertSame( ! $default, $saved[ $key ], sprintf( 'L\'option « %s » est jetée par Settings::sanitize().', $key ) );
 		}
 	}
+
+	/**
+	 * K4 — l'enregistrement des réglages (filtre sanitize de register_setting, appliqué
+	 * à chaque update_option) ne doit jamais altérer un jeton v2 : son alphabet est
+	 * celui de base64 plus « : », que sanitize_text_field() laisse intact.
+	 */
+	public function test_l_enregistrement_des_reglages_conserve_un_jeton_v2(): void {
+		// Réplique des transformations de sanitize_text_field() qui pourraient toucher
+		// une chaîne ASCII : balises, octets %xx, blancs.
+		\Brain\Monkey\Functions\when( 'sanitize_text_field' )->alias(
+			static function ( string $text ): string {
+				// Le bouchon reproduit wp_strip_all_tags(), qui appelle strip_tags() ; la fonction
+				// WordPress n'est pas chargée sous PHPUnit.
+				$text = strip_tags( $text ); // phpcs:ignore WordPress.WP.AlternativeFunctions.strip_tags_strip_tags
+				$text = (string) preg_replace( '/%[a-f0-9]{2}/i', '', $text );
+				$text = (string) preg_replace( '/[\r\n\t ]+/', ' ', $text );
+				return trim( $text, " \n\r\t\v\0" );
+			}
+		);
+
+		foreach ( [ 'sb', 'gcm' ] as $cipher ) {
+			for ( $i = 0; $i < 20; $i++ ) {
+				$v2 = Settings::encrypt_token( 'jeton-' . bin2hex( random_bytes( 24 ) ), $cipher );
+
+				self::assertMatchesRegularExpression( '#^enc:v2:(sb|gcm):[A-Za-z0-9+/=]+$#', $v2 );
+				self::assertSame( $v2, Settings::sanitize( [ 'site_token' => $v2 ] )['site_token'] );
+			}
+		}
+	}
 }

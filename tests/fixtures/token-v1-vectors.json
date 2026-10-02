@@ -1,0 +1,11 @@
+{
+    "description": "Vecteurs FIGÉS du format v1 (AES-256-CBC) produits par le connecteur 1.12.0-rc.4 AVANT le correctif K4, avec la clé de repli (aucun sel WordPress n'est défini sous PHPUnit). Ne jamais les régénérer : ils prouvent que les jetons déjà stockés sur les sites restent lisibles.",
+    "v1_lisible": {
+        "clair": "a3f1c9e07b5d42e8a6c0f9b1d7e3a5c2f4b6d8e0a1c3e5f7092b4d6f8a0c2e4f6",
+        "stocke": "enc:v1:bi53NfCVavSiYRVaE+IjzKPTdOBftDnmwOoZtH3lumPKM/eOvBpaL5XvCUKkRahbNKeu/IToOscVUJr+WJviBO0LWWd6jd/fedEAz2FxPnrjLiLtanUmt4n35u8j3cmO"
+    },
+    "v1_autre_cle": {
+        "commentaire": "Même clair, chiffré avec une autre clé (sels changés) : illisible, déjà avec le code de la rc.4.",
+        "stocke": "enc:v1:6fQRsk6jzk+hAtjAkCSfViRLgFfZ6/E0wKJh6+0U9un3rPWhuzvZZrMTJHTqlvX3/x0YygBITKTHr0CTXmV1YLscxyTTWZmG+YFBvSiimxzmz2awM03rVGgRxsuwjxks"
+    }
+}

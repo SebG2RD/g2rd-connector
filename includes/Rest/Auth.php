@@ -127,7 +127,7 @@ final class Auth {
 
 		return new WP_Error(
 			'g2rd_connector_' . $code,
-			__( 'Signature de la requête absente ou invalide.', 'g2rd-connector' ),
+			self::refusal_message( $code ),
 			$data
 		);
 	}
@@ -166,8 +166,8 @@ final class Auth {
 				$now
 			);
 
-			if ( RequestSignature::STATUS_OK === $check['status'] && ! SignatureState::remember_nonce( $nonce, $now ) ) {
-				$check = RequestSignature::failed( RequestSignature::CODE_REPLAYED );
+			if ( RequestSignature::STATUS_OK === $check['status'] ) {
+				$check = self::register_nonce( $check, $nonce, $now );
 			}
 
 			if ( RequestSignature::STATUS_FAILED === $check['status'] ) {
@@ -178,6 +178,39 @@ final class Auth {
 		} catch ( \Throwable ) {
 			return RequestSignature::failed( 'signature_error' );
 		}
+	}
+
+	/**
+	 * Inscrit le nonce d'une signature valide au registre anti-rejeu. Un rejeu, ou
+	 * un registre plein (on refuse alors d'enregistrer plutôt que d'évincer un
+	 * nonce encore rejouable), devient un échec — compté, et bloquant seulement
+	 * quand la signature est exigée.
+	 *
+	 * @param array{status:string,code?:string,server_time?:int} $check
+	 * @return array{status:string,code?:string,server_time?:int}
+	 */
+	private static function register_nonce( array $check, string $nonce, int $now ): array {
+		$outcome = SignatureState::register_nonce( $nonce, $now );
+
+		if ( SignatureState::NONCE_REPLAYED === $outcome ) {
+			return RequestSignature::failed( RequestSignature::CODE_REPLAYED );
+		}
+		if ( SignatureState::NONCE_STORE_FULL === $outcome ) {
+			return RequestSignature::failed( RequestSignature::CODE_NONCE_STORE_FULL );
+		}
+
+		return $check;
+	}
+
+	/**
+	 * Message d'un refus de signature, lisible par l'administrateur.
+	 */
+	private static function refusal_message( string $code ): string {
+		if ( RequestSignature::CODE_NONCE_STORE_FULL === $code ) {
+			return __( 'Trop de requêtes signées reçues en quelques minutes : le registre anti-rejeu du connecteur est plein, la requête a été refusée par précaution. Réessayez dans quelques minutes ; si cela se répète, contactez le support G2RD.', 'g2rd-connector' );
+		}
+
+		return __( 'Signature de la requête absente ou invalide.', 'g2rd-connector' );
 	}
 
 	/**

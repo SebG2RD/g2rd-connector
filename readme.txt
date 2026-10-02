@@ -78,6 +78,107 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 
 == Changelog ==
 
+= Unreleased =
+
+* **Security: commands that require a signature now require it from the command queue too.**
+  `rollback_plugin`, `delete_restore_point` and `set_signature_policy` already required a valid
+  signature on the REST route, whatever the signature policy. The hourly cron, which pulls
+  commands from the manager's queue, executed them without any check: a single unsigned queue
+  entry could switch a site from `required` back to `report`, or delete every restore point.
+  They are now executed from the queue only with a valid signed envelope (same key, same v1
+  scheme, bound to the site and to the command, ±300 s window, replay protection); otherwise
+  the site answers `failed` with an explicit, translatable message and counts the failure. The
+  manager never puts these commands in the queue today, so no current traffic is refused; the
+  historical queue commands (cache, updates, cleanup) run exactly as before. When the stored
+  site token cannot be used (unreadable, or refused by the strict mode below), no signature is
+  ever accepted, from the queue or anywhere else (`token_unavailable`): the key derived from an
+  empty token could be computed by anyone. These commands are then refused with a message asking
+  to re-enrol the site; historical commands keep their path.
+* **Security: the anti-replay registry is now bounded by time, not by volume.** It used to keep
+  at most 500 nonces and evicted the oldest ones even while they could still be replayed:
+  500 signed requests within ten minutes were enough to make an earlier request replayable.
+  A nonce is now kept for as long as it can be replayed (two ±300 s windows plus one minute).
+  A memory guard of 5,000 live nonces remains; when it is reached, the new request's nonce is
+  refused (`nonce_store_full`, counted in the signature diagnostics) instead of evicting a live
+  one. In the default `report` policy the request is still accepted; it is refused only under
+  the `required` policy or for commands that always require a signature, with an explicit,
+  translatable message. The registry is now written under a MySQL advisory lock, so two
+  simultaneous requests can no longer erase each other's nonce; if the host does not allow
+  the lock, the plugin works exactly as before. Storage format unchanged: no migration.
+* **Security: wordpress.org rollback archives can now be verified against a SHA-256 sent by the
+  platform.** When a restore point is gone, `rollback_plugin` falls back to the archive on
+  `downloads.wordpress.org`; its content was checked by nothing but the version header. The
+  command now accepts a new `source_sha256` key (64 hexadecimal characters): the downloaded
+  archive must match it, otherwise the site answers `rollback_failed_integrity` before touching
+  anything (plugin neither moved nor deactivated, temporary file removed). A malformed value is
+  refused before downloading. `expected_sha256` keeps its meaning (the local restore point only)
+  and is never applied to the downloaded archive. Without `source_sha256`, which is the case of
+  every current manager, behaviour is unchanged; the unverified download is recorded (counter and
+  last case in the non-autoloaded `g2rd_connector_unverified_downloads` option, the
+  `g2rd_connector_rollback_source_unverified` action) and the result now reports
+  `source_integrity` and the computed `source_sha256_actual`. Integrity failures also report
+  `via` (`restore_point` or `download`). No setting, signature policy or existing key changes.
+* **Security: the site token can now be encrypted at rest with authenticated encryption,
+  delivered in two steps.** Since 1.6.7 it was stored as AES-256-CBC without any integrity check
+  (`enc:v1:`): a value altered in the database decrypted, without any error, into a modified
+  token. This version can **read** a new `enc:v2:` format, `enc:v2:sb:` (libsodium secretbox,
+  XSalsa20-Poly1305) or `enc:v2:gcm:` (AES-256-GCM), the algorithm being written in the value;
+  the keys are still derived from the wp-config.php salts (no new secret). An altered `v2` value
+  gives no token at all instead of a wrong one. **Writing** `v2` is off by default: sites keep
+  writing the `v1` format 1.12.0-rc.4 reads, because the connector cannot be downgraded from the
+  manager and a rollback release built on code unable to read `v2` would cut every migrated site
+  off. It is enabled by the new `G2RD_CONNECTOR_TOKEN_V2` wp-config.php constant (or the
+  `g2rd_connector_token_v2` filter); removing it again is a real switch: a `v2` token (or a `v1`
+  value wrapping a `v2` one) is rewritten as plain `v1` on the next settings write, after a
+  successful round trip (never rewritten as plaintext on a host without openssl). Release rule:
+  no published version may drop the `v2` reader; a test checks it. With `v2` writing enabled, a
+  `v1` or plaintext token is rewritten as `v2` on the next settings write (in practice the next
+  accepted heartbeat), never at boot, after a successful round trip; its `v1` value is then kept
+  in the non-autoloaded `g2rd_connector_site_token_v1` option (removed on uninstall; no copy is
+  possible on a host without openssl). That copy follows the current token: regenerated on every
+  new enrolment, emptied (never deleted) on "Disconnect from the manager". **Limit:** only `v2`
+  values are protected against tampering. For compatibility, `v1` values and the historical
+  plaintext token are still accepted by default, so someone with write access to the database
+  can still replace the token with an old-format value (including the backup copy, or a
+  plaintext token of their choice); with `v2` writing enabled, such a value is reported as
+  `tokenState: legacy` in the admin page data. The new `G2RD_CONNECTOR_REQUIRE_AUTHENTICATED_TOKEN`
+  wp-config.php constant (or the `g2rd_connector_require_authenticated_token` filter), off by
+  default, refuses a `v1`-only or plaintext token once the site itself writes authenticated
+  values (`tokenState: refused`, with an explicit admin notice); a `v1` value wrapping a `v2` one
+  stays accepted. Existing values keep working byte for byte: a historical plaintext token is
+  encrypted at boot as `v1`, as before (left as is without openssl). An unreadable token is never
+  overwritten, and administrators now see an explicit notice instead of a silent disconnection
+  (altered value or changed salts) telling them to disconnect then re-enrol the site; the
+  standalone connector page shows that state instead of the green "enrolled" banner. The
+  `g2rd_connector_token_cipher` filter (`sb`, `gcm`, `v1`) chooses among the algorithms the host
+  and the `v2` option allow, `v1` also bringing a `v2` token back to `v1`. Nothing changes on the
+  wire: same Bearer token, same signature key, no re-enrolment. Before downgrading the connector
+  by hand to 1.12.0-rc.4 or older after a `v2` migration, remove the `v2` option and wait for a
+  heartbeat; otherwise copy `g2rd_connector_site_token_v1` back into the `site_token` key of
+  `g2rd_connector_settings`, or simply update the connector again (the value written by the
+  older version is repaired on read).
+* **Fix: the connector loads again on PHP 8.1.** Since 1.6.7, two methods of the outbound client
+  (heartbeat and real-time events) declared the `true|WP_Error` return type; the standalone `true`
+  type only exists from PHP 8.2. On PHP 8.1, the minimum version this plugin declares, merely
+  loading that class was a fatal error, so the hourly heartbeat and every event sent to the
+  manager crashed the request. The return type is now `bool|WP_Error` (accepted since PHP 8.0);
+  the methods still only ever return `true` or a `WP_Error`, and nothing changes for callers or
+  on the wire. A new test reads every PHP file of the plugin and refuses the syntaxes PHP 8.1
+  does not know (standalone `true`, `false` or `null` types, DNF types, `readonly` classes, typed
+  class constants), and runs `php -l` on each file with the interpreter running the tests, so the
+  "PHP 8.1" CI job also catches what the reader does not.
+* **Fix: a signed-only queue command without an envelope now blames the right cause when the site
+  token is unusable.** If the stored site token cannot be read (or is refused by the strict
+  mode), such a command is now refused with `token_unavailable` and the message asking to
+  disconnect then re-enrol the site, instead of `signature_missing` and a message suggesting the
+  platform predates signed commands.
+* **Maintenance:** the `source_sha256` value of `rollback_plugin` is trimmed with an explicit
+  character list, so its behaviour does not depend on the PHP version (PHP 8.6 widens the default
+  list of `trim()`); the value is still validated as 64 hexadecimal characters. Admin screen
+  build: `@wordpress/scripts` 36 and `@wordpress/element` 8.8 (the latter is provided by
+  WordPress at runtime, not bundled); one line of the admin screen source reformatted for the
+  new code style. No change to the shipped behaviour.
+
 = 1.12.0-rc.4 =
 
 * **Fix: the "Force IPv4 to the manager" option can now be saved.** In rc.3 the box could be

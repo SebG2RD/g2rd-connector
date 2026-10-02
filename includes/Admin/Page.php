@@ -25,6 +25,9 @@ final class Page {
 
 	public function register(): void {
 		add_action( 'admin_init', [ $this, 'register_settings' ] );
+		// K4 : jeton de connexion illisible (altéré en base ou sels de wp-config.php
+		// changés). Le site est alors coupé du manager ; on le dit à l'administrateur.
+		add_action( 'admin_notices', [ $this, 'render_token_notice' ] );
 
 		if ( $this->theme_supports_external_tabs() ) {
 			add_filter( 'g2rd_options_external_tabs', [ $this, 'register_as_theme_tab' ] );
@@ -49,6 +52,44 @@ final class Page {
 		$version = (string) $theme->get( 'Version' );
 		// Le filtre est introduit par le patch theme à partir de 1.19.0.
 		return version_compare( $version, '1.19.0', '>=' );
+	}
+
+	/**
+	 * Avis affiché sur tout l'administration, aux seuls administrateurs, quand le
+	 * jeton de connexion au manager est stocké mais inutilisable : illisible, ou
+	 * refusé par le mode strict (ancien format non authentifié).
+	 */
+	public function render_token_notice(): void {
+		if ( ! current_user_can( self::CAPABILITY ) ) {
+			return;
+		}
+		$message = self::token_problem( Settings::token_state() );
+		if ( null === $message ) {
+			return;
+		}
+		?>
+		<div class="notice notice-error">
+			<p>
+				<strong><?php echo esc_html__( 'G2RD Connector : connexion au manager interrompue.', 'g2rd-connector' ); ?></strong>
+				<?php echo esc_html( $message ); ?>
+			</p>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Explication (cause et action) d'un jeton stocké mais inutilisable, ou null si
+	 * le jeton est utilisable ou absent.
+	 */
+	private static function token_problem( string $state ): ?string {
+		$action = __( 'Sur la page du connecteur G2RD, cliquez sur « Déconnecter du manager », puis enrôlez le site avec une nouvelle invitation générée depuis sa fiche dans le manager.', 'g2rd-connector' );
+		if ( 'unreadable' === $state ) {
+			return __( 'Le jeton de connexion au manager G2RD ne peut pas être lu : il a été modifié dans la base de données, ou les clés de sécurité de wp-config.php (AUTH_KEY, SECURE_AUTH_KEY, LOGGED_IN_KEY, NONCE_KEY) ont changé. Le site ne communique plus avec le manager. Si les clés ont changé, restaurez celles d\'origine. Sinon :', 'g2rd-connector' ) . ' ' . $action;
+		}
+		if ( 'refused' === $state ) {
+			return __( 'Le jeton de connexion au manager G2RD est stocké dans un ancien format non protégé contre la modification (ou en clair), que ce site refuse : la constante G2RD_CONNECTOR_REQUIRE_AUTHENTICATED_TOKEN est activée dans wp-config.php. Cause probable : la valeur a été remplacée dans la base de données, ou le jeton n\'avait pas encore été converti au nouveau format. Le site ne communique plus avec le manager.', 'g2rd-connector' ) . ' ' . $action;
+		}
+		return null;
 	}
 
 	public function register_settings(): void {
@@ -101,6 +142,9 @@ final class Page {
 		$this->maybe_handle_form();
 		$settings = Settings::all();
 		$enrolled = Settings::is_enrolled();
+		// Jeton stocké mais inutilisable : le site reste « enrôlé » (d'où le bouton
+		// Déconnecter), mais ne parle plus au manager. On montre l'état réel.
+		$problem = $enrolled ? self::token_problem( Settings::token_state() ) : null;
 		?>
 		<div class="wrap g2rd-connector-wrap">
 			<h1><?php echo esc_html__( 'G2RD Connector', 'g2rd-connector' ); ?></h1>
@@ -108,7 +152,14 @@ final class Page {
 				<?php echo esc_html__( 'Lie ce site WordPress au tableau de bord centralisé G2RD WP Manager.', 'g2rd-connector' ); ?>
 			</p>
 
-			<?php if ( $enrolled ) : ?>
+			<?php if ( null !== $problem ) : ?>
+				<div class="notice notice-error inline">
+					<p>
+						<strong><?php echo esc_html__( 'Site enrôlé, mais connexion au manager interrompue.', 'g2rd-connector' ); ?></strong>
+						<?php echo esc_html( $problem ); ?>
+					</p>
+				</div>
+			<?php elseif ( $enrolled ) : ?>
 				<div class="notice notice-success inline">
 					<p>
 						<strong><?php echo esc_html__( 'Site enrôlé.', 'g2rd-connector' ); ?></strong>
