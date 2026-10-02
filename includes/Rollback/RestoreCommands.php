@@ -165,7 +165,8 @@ final class RestoreCommands {
 		if ( null === $raw || '' === $raw ) {
 			return '';
 		}
-		$sha = is_string( $raw ) ? strtolower( trim( $raw ) ) : '';
+		// Liste explicite : le jeu par défaut de trim() s'élargit en PHP 8.6 (saut de page).
+		$sha = is_string( $raw ) ? strtolower( trim( $raw, " \n\r\t\v\0" ) ) : '';
 		if ( 1 !== preg_match( '/^[0-9a-f]{64}$/', $sha ) ) {
 			throw RestoreException::integrity( 'source_sha256 is not a valid SHA-256 (64 hexadecimal characters)' );
 		}

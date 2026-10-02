@@ -157,6 +157,27 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   heartbeat; otherwise copy `g2rd_connector_site_token_v1` back into the `site_token` key of
   `g2rd_connector_settings`, or simply update the connector again (the value written by the
   older version is repaired on read).
+* **Fix: the connector loads again on PHP 8.1.** Since 1.6.7, two methods of the outbound client
+  (heartbeat and real-time events) declared the `true|WP_Error` return type; the standalone `true`
+  type only exists from PHP 8.2. On PHP 8.1, the minimum version this plugin declares, merely
+  loading that class was a fatal error, so the hourly heartbeat and every event sent to the
+  manager crashed the request. The return type is now `bool|WP_Error` (accepted since PHP 8.0);
+  the methods still only ever return `true` or a `WP_Error`, and nothing changes for callers or
+  on the wire. A new test reads every PHP file of the plugin and refuses the syntaxes PHP 8.1
+  does not know (standalone `true`, `false` or `null` types, DNF types, `readonly` classes, typed
+  class constants), and runs `php -l` on each file with the interpreter running the tests, so the
+  "PHP 8.1" CI job also catches what the reader does not.
+* **Fix: a signed-only queue command without an envelope now blames the right cause when the site
+  token is unusable.** If the stored site token cannot be read (or is refused by the strict
+  mode), such a command is now refused with `token_unavailable` and the message asking to
+  disconnect then re-enrol the site, instead of `signature_missing` and a message suggesting the
+  platform predates signed commands.
+* **Maintenance:** the `source_sha256` value of `rollback_plugin` is trimmed with an explicit
+  character list, so its behaviour does not depend on the PHP version (PHP 8.6 widens the default
+  list of `trim()`); the value is still validated as 64 hexadecimal characters. Admin screen
+  build: `@wordpress/scripts` 36 and `@wordpress/element` 8.8 (the latter is provided by
+  WordPress at runtime, not bundled); one line of the admin screen source reformatted for the
+  new code style. No change to the shipped behaviour.
 
 = 1.12.0-rc.4 =
 

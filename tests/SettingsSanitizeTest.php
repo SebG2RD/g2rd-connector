@@ -54,7 +54,7 @@ final class SettingsSanitizeTest extends TestCase {
 				$text = strip_tags( $text ); // phpcs:ignore WordPress.WP.AlternativeFunctions.strip_tags_strip_tags
 				$text = (string) preg_replace( '/%[a-f0-9]{2}/i', '', $text );
 				$text = (string) preg_replace( '/[\r\n\t ]+/', ' ', $text );
-				return trim( $text );
+				return trim( $text, " \n\r\t\v\0" );
 			}
 		);
 

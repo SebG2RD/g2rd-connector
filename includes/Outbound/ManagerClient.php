@@ -94,8 +94,13 @@ final class ManagerClient {
 
 	/**
 	 * Heartbeat horaire : signale au manager que le site est vivant + envoie métriques légères.
+	 *
+	 * Type natif `bool` et non `true` : le type `true` n'existe qu'en PHP 8.2, et le
+	 * plugin tourne dès PHP 8.1 (le charger y serait une erreur fatale).
+	 *
+	 * @return true|WP_Error
 	 */
-	public function heartbeat(): true|WP_Error {
+	public function heartbeat(): bool|WP_Error {
 		if ( ! Settings::is_enrolled() ) {
 			return new WP_Error( 'g2rd_connector_not_enrolled', 'Site non enrôlé.' );
 		}
@@ -125,8 +130,9 @@ final class ManagerClient {
 	 * Push d'un event temps réel (login, plugin install, update fail, etc.).
 	 *
 	 * @param array<string, mixed> $context
+	 * @return true|WP_Error Type natif `bool` : `true` n'existe qu'en PHP 8.2.
 	 */
-	public function send_event( string $type, array $context = [] ): true|WP_Error {
+	public function send_event( string $type, array $context = [] ): bool|WP_Error {
 		if ( ! Settings::is_enrolled() ) {
 			return new WP_Error( 'g2rd_connector_not_enrolled', 'Site non enrôlé.' );
 		}

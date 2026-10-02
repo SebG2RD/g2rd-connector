@@ -610,6 +610,29 @@ final class HeartbeatJobSignedQueueTest extends TestCase {
 		self::assertSame( 'token_unavailable', SignatureState::stats()['last_code'] );
 	}
 
+	/**
+	 * Jeton illisible ET SIGNED_ONLY sans enveloppe : le vrai problème est le jeton,
+	 * pas la plateforme. Le message doit mener à la bonne action (déconnecter puis
+	 * ré-enrôler), et non à « plateforme antérieure aux commandes signées ».
+	 */
+	public function test_jeton_illisible_une_signed_only_sans_enveloppe_met_en_cause_le_jeton(): void {
+		$this->options[ Settings::OPTION_KEY ]['site_token'] = 'enc:v9:altere';
+		self::assertSame( '', Settings::site_token() );
+		$this->set_policy( 'required' );
+		$this->queue( [ [ 'id' => 42, 'kind' => 'set_signature_policy', 'payload' => [ 'policy' => 'report' ] ] ] );
+
+		$this->run_job();
+
+		self::assertSame( 'required', Settings::get( 'signature_policy' ) );
+		$post = $this->only_post();
+		self::assertSame( 'failed', $post['body']['status'] );
+		self::assertSame( 'g2rd_connector_token_unavailable', $post['body']['result']['code'] );
+		self::assertSame( 'token_unavailable', $post['body']['result']['signature_check']['code'] );
+		self::assertStringContainsString( 'Déconnecter du manager', (string) $post['body']['error'] );
+		self::assertStringNotContainsString( 'plateforme antérieure', (string) $post['body']['error'] );
+		self::assertSame( 'token_unavailable', SignatureState::stats()['last_code'] );
+	}
+
 	// ── Outils ──────────────────────────────────────────────────────────────────
 
 	/**

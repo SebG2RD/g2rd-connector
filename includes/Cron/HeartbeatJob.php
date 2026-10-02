@@ -84,8 +84,9 @@ final class HeartbeatJob {
 	 * - Jeton du site inutilisable (illisible, ou refusé par le mode strict) :
 	 *   `site_token()` vaut '' et aucune enveloppe n'est jamais valide
 	 *   (`token_unavailable`, cf. QueueSignature::verify_entry) — la clé dérivée de ''
-	 *   serait publique. Les SIGNED_ONLY sont donc refusées ; les commandes
-	 *   historiques gardent leur chemin.
+	 *   serait publique. Les SIGNED_ONLY sont donc refusées (code
+	 *   `token_unavailable` même sans enveloppe, pour pointer le jeton et non la
+	 *   plateforme) ; les commandes historiques gardent leur chemin.
 	 *
 	 * @param array<mixed> $commands Entrées brutes de la file (données externes non fiables).
 	 * @return list<array{id:int, kind:string, payload:array<string,mixed>|null, refusal:array<string,mixed>|null}>
@@ -126,9 +127,14 @@ final class HeartbeatJob {
 				continue;
 			}
 
-			$code = RequestSignature::STATUS_ABSENT === $check['status']
-				? QueueSignature::CODE_MISSING
-				: (string) ( $check['code'] ?? RequestSignature::CODE_INVALID );
+			// Sans enveloppe, le défaut est imputé à la plateforme… sauf si le jeton du
+			// site est inutilisable : aucune enveloppe n'aurait pu être vérifiée, et
+			// l'action utile est côté site (déconnecter, puis ré-enrôler).
+			if ( RequestSignature::STATUS_ABSENT === $check['status'] ) {
+				$code = '' === $token ? RequestSignature::CODE_TOKEN_UNAVAILABLE : QueueSignature::CODE_MISSING;
+			} else {
+				$code = (string) ( $check['code'] ?? RequestSignature::CODE_INVALID );
+			}
 
 			if ( $strict || ! $has_kind ) {
 				// Refus : signature exigée (SIGNED_ONLY), ou entrée sans `kind` dont

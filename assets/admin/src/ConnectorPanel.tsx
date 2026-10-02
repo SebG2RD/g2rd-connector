@@ -271,7 +271,7 @@ export function ConnectorPanel( { data }: Props ): JSX.Element {
 										state.signatureFailures.failed_count > 0
 											? `${ state.signatureFailures.failed_count } échec(s) de vérification constaté(s) : n'activez pas avant d'en avoir trouvé la cause.`
 											: 'Aucun échec de vérification constaté.'
-								  }`
+									}`
 						}
 						checked={ state.signatureRequired }
 						onChange={ ( v ) =>
