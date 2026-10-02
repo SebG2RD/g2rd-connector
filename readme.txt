@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.12.0-rc.4
+Stable tag: 1.12.0-rc.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -78,7 +78,7 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 
 == Changelog ==
 
-= Unreleased =
+= 1.12.0-rc.5 =
 
 * **Security: commands that require a signature now require it from the command queue too.**
   `rollback_plugin`, `delete_restore_point` and `set_signature_policy` already required a valid
@@ -157,7 +157,7 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   heartbeat; otherwise copy `g2rd_connector_site_token_v1` back into the `site_token` key of
   `g2rd_connector_settings`, or simply update the connector again (the value written by the
   older version is repaired on read).
-* **Fix: the connector loads again on PHP 8.1.** Since 1.6.7, two methods of the outbound client
+* **Fix: the connector loads again on PHP 8.1.** Since 0.1.0, two methods of the outbound client
   (heartbeat and real-time events) declared the `true|WP_Error` return type; the standalone `true`
   type only exists from PHP 8.2. On PHP 8.1, the minimum version this plugin declares, merely
   loading that class was a fatal error, so the hourly heartbeat and every event sent to the

@@ -9,7 +9,7 @@ use PHPUnit\Framework\TestCase as PHPUnitTestCase;
 /**
  * Garde-fou du plancher PHP 8.1 (« Requires PHP: 8.1 », composer.json, matrice CI).
  *
- * De la 1.6.7 à la 1.12, ManagerClient déclarait `true|WP_Error` : le type `true`
+ * De la 0.1.0 à la 1.12, ManagerClient déclarait `true|WP_Error` : le type `true`
  * n'existe qu'en PHP 8.2. Sous PHP 8.1, le simple chargement de la classe est une
  * erreur fatale de compilation, et le battement de cœur comme chaque événement
  * plantaient. Ni PHPStan (même réglé sur 8.1) ni PHPCompatibilityWP 9.x ne le voient.
