@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.12.0-rc.5
+Stable tag: 1.12.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,22 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.12.0 =
+
+Stable release of the 1.12 line, piloted as 1.12.0-rc.1 to rc.5 (details in the entries below).
+
+* **Feature: protected updates with automatic rollback.** Before a plugin update the connector
+  takes a restore point; if the site stops answering correctly afterwards, the previous version
+  is put back automatically. A restore point can also be used on demand from the manager.
+* **Security: signed commands.** Commands sent by the manager carry an HMAC signature bound to
+  the site, the command, a timestamp and a nonce (replay protection). Sensitive commands require
+  a valid signature, from the REST route and from the command queue alike.
+* **Security: the site token can be encrypted at rest with authenticated encryption** (read by
+  default, written only when enabled), and the anti-replay registry is bounded by time.
+* **Feature: two network fallbacks** for restrictive hosts: the token can travel in the
+  `X-G2RD-Token` header, and outbound calls to the manager can be forced over IPv4.
+* **Fix: the connector loads again on PHP 8.1**, the minimum version this plugin declares.
 
 = 1.12.0-rc.5 =
 
