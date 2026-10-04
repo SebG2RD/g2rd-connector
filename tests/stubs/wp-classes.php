@@ -82,6 +82,22 @@ if ( ! class_exists( 'WP_REST_Request' ) ) {
 	}
 }
 
+if ( ! class_exists( 'WP_User' ) ) {
+	/** Doublure : seules les propriétés lues par le connecteur. */
+	class WP_User {
+		/** @var int */
+		public $ID = 0;
+		/** @var string */
+		public $user_login = '';
+		/** @var string */
+		public $user_email = '';
+		/** @var string */
+		public $user_registered = '';
+		/** @var list<string> */
+		public $roles = [];
+	}
+}
+
 if ( ! class_exists( 'Automatic_Upgrader_Skin' ) ) {
 	class Automatic_Upgrader_Skin {}
 }
