@@ -1,0 +1,213 @@
+[
+  {
+    "name": "valide",
+    "site_token": "test-site-token-0123456789abcdef",
+    "site_id": 42,
+    "now": 1789000000,
+    "ticket": "v1.eyJzIjo0MiwidSI6MSwiZSI6MTc4OTAwMDA2MCwibiI6IjAwMDEwMjAzMDQwNTA2MDcwODA5MGEwYjBjMGQwZTBmIiwiYSI6N30.HNrThB5-8ApvtJ4WSh0XmYcyas8Rs3FmkaUYT0mMf_k",
+    "expected": "ok",
+    "payload": {
+      "s": 42,
+      "u": 1,
+      "e": 1789000060,
+      "n": "000102030405060708090a0b0c0d0e0f",
+      "a": 7
+    }
+  },
+  {
+    "name": "valide_jeton_utf8",
+    "site_token": "autre-jeton-é-ü-42",
+    "site_id": 7,
+    "now": 1789000500,
+    "ticket": "v1.eyJzIjo3LCJ1IjoxNSwiZSI6MTc4OTAwMDU2MCwibiI6ImZmZWVkZGNjYmJhYTk5ODg3NzY2NTU0NDMzMjIxMTAwIiwiYSI6M30.F8QwXuwh8nOKGPCOWUr_BXIpdfPGby3YH60tvk6TX4U",
+    "expected": "ok",
+    "payload": {
+      "s": 7,
+      "u": 15,
+      "e": 1789000560,
+      "n": "ffeeddccbbaa99887766554433221100",
+      "a": 3
+    }
+  },
+  {
+    "name": "valide_limite_tolerance_horloge",
+    "site_token": "test-site-token-0123456789abcdef",
+    "site_id": 42,
+    "now": 1789000090,
+    "ticket": "v1.eyJzIjo0MiwidSI6MSwiZSI6MTc4OTAwMDA2MCwibiI6IjAwMDEwMjAzMDQwNTA2MDcwODA5MGEwYjBjMGQwZTBmIiwiYSI6N30.HNrThB5-8ApvtJ4WSh0XmYcyas8Rs3FmkaUYT0mMf_k",
+    "expected": "ok",
+    "payload": {
+      "s": 42,
+      "u": 1,
+      "e": 1789000060,
+      "n": "000102030405060708090a0b0c0d0e0f",
+      "a": 7
+    }
+  },
+  {
+    "name": "expire",
+    "site_token": "test-site-token-0123456789abcdef",
+    "site_id": 42,
+    "now": 1789000091,
+    "ticket": "v1.eyJzIjo0MiwidSI6MSwiZSI6MTc4OTAwMDA2MCwibiI6IjAwMDEwMjAzMDQwNTA2MDcwODA5MGEwYjBjMGQwZTBmIiwiYSI6N30.HNrThB5-8ApvtJ4WSh0XmYcyas8Rs3FmkaUYT0mMf_k",
+    "expected": "expired",
+    "payload": {
+      "s": 42,
+      "u": 1,
+      "e": 1789000060,
+      "n": "000102030405060708090a0b0c0d0e0f",
+      "a": 7
+    }
+  },
+  {
+    "name": "valide_limite_futur",
+    "site_token": "test-site-token-0123456789abcdef",
+    "site_id": 42,
+    "now": 1789000000,
+    "ticket": "v1.eyJzIjo0MiwidSI6MSwiZSI6MTc4OTAwMDA5MCwibiI6IjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmIiwiYSI6N30.oA9_EHw3GLBCJu8dUyEQKv5EncC4vMfXzUjKDfyk0bE",
+    "expected": "ok",
+    "payload": {
+      "s": 42,
+      "u": 1,
+      "e": 1789000090,
+      "n": "0123456789abcdef0123456789abcdef",
+      "a": 7
+    }
+  },
+  {
+    "name": "trop_loin_dans_le_futur",
+    "site_token": "test-site-token-0123456789abcdef",
+    "site_id": 42,
+    "now": 1789000000,
+    "ticket": "v1.eyJzIjo0MiwidSI6MSwiZSI6MTc4OTAwMDA5MSwibiI6ImZlZGNiYTk4NzY1NDMyMTBmZWRjYmE5ODc2NTQzMjEwIiwiYSI6N30.LFhWUzCyEE9EVhsHBZQVNK-ODtzhbrPTV1foaEEcrNA",
+    "expected": "future",
+    "payload": {
+      "s": 42,
+      "u": 1,
+      "e": 1789000091,
+      "n": "fedcba9876543210fedcba9876543210",
+      "a": 7
+    }
+  },
+  {
+    "name": "autre_site",
+    "site_token": "test-site-token-0123456789abcdef",
+    "site_id": 43,
+    "now": 1789000000,
+    "ticket": "v1.eyJzIjo0MiwidSI6MSwiZSI6MTc4OTAwMDA2MCwibiI6IjAwMDEwMjAzMDQwNTA2MDcwODA5MGEwYjBjMGQwZTBmIiwiYSI6N30.HNrThB5-8ApvtJ4WSh0XmYcyas8Rs3FmkaUYT0mMf_k",
+    "expected": "wrong_site",
+    "payload": {
+      "s": 42,
+      "u": 1,
+      "e": 1789000060,
+      "n": "000102030405060708090a0b0c0d0e0f",
+      "a": 7
+    }
+  },
+  {
+    "name": "signe_avec_un_autre_jeton",
+    "site_token": "test-site-token-0123456789abcdef",
+    "site_id": 42,
+    "now": 1789000000,
+    "ticket": "v1.eyJzIjo0MiwidSI6MSwiZSI6MTc4OTAwMDA2MCwibiI6IjAwMDEwMjAzMDQwNTA2MDcwODA5MGEwYjBjMGQwZTBmIiwiYSI6N30.w4N4Ao8H3Hj1X1FfOif8ENF_EShBDX_qXjtbnKPvlBo",
+    "expected": "bad_signature",
+    "payload": {
+      "s": 42,
+      "u": 1,
+      "e": 1789000060,
+      "n": "000102030405060708090a0b0c0d0e0f",
+      "a": 7
+    }
+  },
+  {
+    "name": "contexte_des_commandes_reutilise",
+    "site_token": "test-site-token-0123456789abcdef",
+    "site_id": 42,
+    "now": 1789000000,
+    "ticket": "v1.eyJzIjo0MiwidSI6MSwiZSI6MTc4OTAwMDA2MCwibiI6IjAwMDEwMjAzMDQwNTA2MDcwODA5MGEwYjBjMGQwZTBmIiwiYSI6N30.E9a2oHakfCoGs3KHWEBJw2-QEcnuG8jBHlj3ga52cjY",
+    "expected": "bad_signature",
+    "payload": {
+      "s": 42,
+      "u": 1,
+      "e": 1789000060,
+      "n": "000102030405060708090a0b0c0d0e0f",
+      "a": 7
+    }
+  },
+  {
+    "name": "charge_modifiee",
+    "site_token": "test-site-token-0123456789abcdef",
+    "site_id": 42,
+    "now": 1789000000,
+    "ticket": "v1.eyJzIjo0MiwidSI6MiwiZSI6MTc4OTAwMDA2MCwibiI6IjAwMDEwMjAzMDQwNTA2MDcwODA5MGEwYjBjMGQwZTBmIiwiYSI6N30.HNrThB5-8ApvtJ4WSh0XmYcyas8Rs3FmkaUYT0mMf_k",
+    "expected": "bad_signature",
+    "payload": {
+      "s": 42,
+      "u": 2,
+      "e": 1789000060,
+      "n": "000102030405060708090a0b0c0d0e0f",
+      "a": 7
+    }
+  },
+  {
+    "name": "version_inconnue",
+    "site_token": "test-site-token-0123456789abcdef",
+    "site_id": 42,
+    "now": 1789000000,
+    "ticket": "v2.eyJzIjo0MiwidSI6MSwiZSI6MTc4OTAwMDA2MCwibiI6IjAwMDEwMjAzMDQwNTA2MDcwODA5MGEwYjBjMGQwZTBmIiwiYSI6N30.HNrThB5-8ApvtJ4WSh0XmYcyas8Rs3FmkaUYT0mMf_k",
+    "expected": "malformed"
+  },
+  {
+    "name": "signature_absente",
+    "site_token": "test-site-token-0123456789abcdef",
+    "site_id": 42,
+    "now": 1789000000,
+    "ticket": "v1.eyJzIjo0MiwidSI6MSwiZSI6MTc4OTAwMDA2MCwibiI6IjAwMDEwMjAzMDQwNTA2MDcwODA5MGEwYjBjMGQwZTBmIiwiYSI6N30",
+    "expected": "malformed"
+  },
+  {
+    "name": "caractere_hors_base64url",
+    "site_token": "test-site-token-0123456789abcdef",
+    "site_id": 42,
+    "now": 1789000000,
+    "ticket": "v1.eyJzIjo0MiwidSI6MSwiZSI6MTc4OTAwMDA2MCwibiI6IjAwMDEwMjAzMDQwNTA2MDcwODA5MGEwYjBjMGQwZTBmIiwiYSI6N30.HNrThB5-8ApvtJ4WSh0XmYcyas8Rs3FmkaUYT0mMf_+",
+    "expected": "malformed"
+  },
+  {
+    "name": "charge_signee_sans_nonce",
+    "site_token": "test-site-token-0123456789abcdef",
+    "site_id": 42,
+    "now": 1789000000,
+    "ticket": "v1.eyJzIjo0MiwidSI6MSwiZSI6MTc4OTAwMDA2MCwiYSI6N30.kQCGG2cx-waaVi8xKn2W0ixD8ghWsnVBzZRujRfrHro",
+    "expected": "malformed",
+    "payload": {
+      "s": 42,
+      "u": 1,
+      "e": 1789000060,
+      "a": 7
+    }
+  },
+  {
+    "name": "charge_signee_nonce_invalide",
+    "site_token": "test-site-token-0123456789abcdef",
+    "site_id": 42,
+    "now": 1789000000,
+    "ticket": "v1.eyJzIjo0MiwidSI6MSwiZSI6MTc4OTAwMDA2MCwibiI6InBhcy11bi1ub25jZSIsImEiOjd9.BHOSlhRDUfr8LRYL6q9aCzpZaSafDOvK2iZa_tuztTI",
+    "expected": "malformed",
+    "payload": {
+      "s": 42,
+      "u": 1,
+      "e": 1789000060,
+      "n": "pas-un-nonce",
+      "a": 7
+    }
+  },
+  {
+    "name": "ticket_vide",
+    "site_token": "test-site-token-0123456789abcdef",
+    "site_id": 42,
+    "now": 1789000000,
+    "ticket": "",
+    "expected": "malformed"
+  }
+]
