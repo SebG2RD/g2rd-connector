@@ -13,6 +13,8 @@ use G2RD\Connector\Admin\Page;
 use G2RD\Connector\Cron\HeartbeatJob;
 use G2RD\Connector\Cron\RestorePointPurgeJob;
 use G2RD\Connector\Cron\UpdatesDiscoveryJob;
+use G2RD\Connector\DirectLogin\Endpoint;
+use G2RD\Connector\DirectLogin\UsedTickets;
 use G2RD\Connector\Events\Listener;
 use G2RD\Connector\Outbound\ManagerIpv4Guard;
 use G2RD\Connector\Rest\AdminController;
@@ -124,6 +126,12 @@ final class Plugin {
 		// découverte des MAJ.
 		( new RestorePointPurgeJob() )->register();
 		RestorePointPurgeJob::schedule();
+
+		// Connexion directe depuis G2RD WP Manager (1.13) : point d'entrée admin-ajax
+		// `g2rd_login` (avec et sans session, comme la sonde de santé), et purge des
+		// tickets consommés sur le cron horaire local existant.
+		( new Endpoint() )->register();
+		add_action( RestorePointPurgeJob::HOOK, [ UsedTickets::class, 'purge_now' ] );
 
 		// Endpoints REST sécurisés Bearer SiteToken (consommés par le manager).
 		add_action( 'rest_api_init', [ new SnapshotController(), 'register' ] );

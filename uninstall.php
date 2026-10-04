@@ -74,6 +74,12 @@ foreach ( [ 'g2rd_restore_points', 'g2rd_update_txn', 'g2rd_pending_outcomes', '
 }
 unset( $g2rd_option );
 
+// Tickets de connexion directe consommés (cf. DirectLogin\UsedTickets) : options
+// éphémères créées par le plugin, toutes retirées.
+if ( class_exists( \G2RD\Connector\DirectLogin\UsedTickets::class ) ) {
+	\G2RD\Connector\DirectLogin\UsedTickets::purge( PHP_INT_MAX );
+}
+
 // Dé-planification des crons si encore présents.
 foreach ( [ 'g2rd_connector_heartbeat', 'g2rd_connector_refresh_updates', 'g2rd_connector_restore_points_purge' ] as $g2rd_hook ) {
     $timestamp = wp_next_scheduled( $g2rd_hook );
