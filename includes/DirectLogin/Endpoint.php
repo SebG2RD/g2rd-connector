@@ -113,22 +113,18 @@ final class Endpoint {
 		// Le lien vers la page de connexion n'est proposé que pour un ticket
 		// authentique : sur un site à connexion masquée, wp_login_url() rend l'adresse
 		// cachée, qu'un appel sans ticket (ou avec un ticket forgé) ne doit pas révéler.
-		if ( ! Refusal::allows_login_link( $code ) ) {
-			wp_die(
-				esc_html( Refusal::message( $code ) ),
-				esc_html( Refusal::title() ),
-				[ 'response' => 403 ]
-			);
+		// Un seul appel à wp_die() : même si un gestionnaire personnalisé ne s'arrêtait
+		// pas, le lien ne peut pas s'afficher pour un ticket non authentique.
+		$args = [ 'response' => 403 ];
+		if ( Refusal::allows_login_link( $code ) ) {
+			$args['link_url']  = esc_url( wp_login_url() );
+			$args['link_text'] = esc_html__( 'Aller à la page de connexion', 'g2rd-connector' );
 		}
 
 		wp_die(
 			esc_html( Refusal::message( $code ) ),
 			esc_html( Refusal::title() ),
-			[
-				'response'  => 403,
-				'link_url'  => esc_url( wp_login_url() ),
-				'link_text' => esc_html__( 'Aller à la page de connexion', 'g2rd-connector' ),
-			]
+			$args // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- valeurs échappées ci-dessus.
 		);
 	}
 
