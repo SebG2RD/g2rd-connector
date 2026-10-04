@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.12.0
+Stable tag: 1.13.0-rc.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -81,28 +81,36 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 
 == Changelog ==
 
-= 1.13.0 =
+= 1.13.0-rc.1 =
 
-Not released yet: this entry describes the direct login work in progress.
+Pre-release for the pilot: sites do not update to it automatically.
 
 * **Feature: direct login from G2RD WP Manager.** A new `admin-ajax.php?action=g2rd_login` entry
   point opens the dashboard of this site from the manager, without a password. It only accepts a
   ticket signed with the site token, bound to this site and to one administrator account, valid
   for 60 seconds and usable once. Any refusal shows a plain 403 page that says what happened,
-  the likely cause and what to do.
-* **Setting: "Allow direct login from G2RD"**, checked by default. Unchecking it refuses every
-  ticket at once.
+  the likely cause and what to do, with a link to the login page.
+* **Security: six checks, in this order.** Format and signature (constant-time comparison, with
+  a key derived from the site token in a context distinct from command signatures), site,
+  expiry (30 s clock tolerance, at most 90 s ahead), single use, the "Allow direct login from
+  G2RD" setting, and that the account still has the `manage_options` capability.
+* **Setting: "Allow direct login from G2RD"**, checked by default, in the settings page and in
+  the admin panel. Unchecking it refuses every ticket at once. The setting is kept by the
+  settings sanitizer (lesson of 1.12.0-rc.4).
 * **Snapshot: new `site` fields** `login_url` (as filtered by plugins that move the login page),
   `direct_login_enabled` and `admins` (up to 50 administrators who really hold the
   `manage_options` capability: id, login, email, registration date), plus the `direct_login`
   capability.
 * **Event: `direct_login`** (WordPress login and user id, manager user id) is sent after each
-  direct login when events are enabled.
+  direct login when events are enabled, once the response has been sent to the browser.
 * **The session is opened without firing the `wp_login` hook**, so a direct login is not
-  reported as a regular `user.login` event.
+  reported as a regular `user.login` event and a site-side two-factor plugin does not cancel it
+  (two-factor authentication is required on the manager side instead).
 * **Security: a ticket is consumed by a single atomic database insert**, so two simultaneous
   requests carrying the same ticket cannot both open a session. Consumed tickets are purged
   hourly after 10 minutes, and all removed on uninstall (on every blog of a multisite).
+* **Tests: shared ticket vectors.** The ticket vectors are produced by the manager and replayed
+  here byte for byte.
 
 = 1.12.0 =
 
