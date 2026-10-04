@@ -176,6 +176,41 @@ final class EndpointTest extends TestCase {
 		self::assertSame( 0, $this->current_user );
 	}
 
+	/**
+	 * Sur un site à connexion masquée (WPS Hide Login, Solid Security…),
+	 * wp_login_url() rend l'adresse cachée : elle ne doit jamais être montrée à qui
+	 * appelle le point d'entrée sans ticket authentique.
+	 */
+	public function test_sans_ticket_la_page_403_ne_revele_pas_la_page_de_connexion(): void {
+		$ended = $this->respond();
+
+		self::assertSame( 'die', $ended->kind );
+		self::assertSame( 403, $ended->args['response'] );
+		self::assertArrayNotHasKey( 'link_url', $ended->args );
+		self::assertArrayNotHasKey( 'link_text', $ended->args );
+	}
+
+	public function test_un_ticket_mal_signe_ne_revele_pas_la_page_de_connexion(): void {
+		$_GET['ticket'] = 'v1.abc.def';
+
+		$ended = $this->respond();
+
+		self::assertSame( esc_html( Refusal::message( Refusal::INVALID ) ), $ended->target );
+		self::assertSame( 403, $ended->args['response'] );
+		self::assertArrayNotHasKey( 'link_url', $ended->args );
+		self::assertArrayNotHasKey( 'link_text', $ended->args );
+	}
+
+	/** Signature valide (ticket authentique, case décochée) : le lien reste proposé. */
+	public function test_un_ticket_authentique_refuse_garde_le_lien_vers_la_page_de_connexion(): void {
+		$this->options[ Settings::OPTION_KEY ]['allow_direct_login'] = false;
+		$_GET['ticket'] = TicketFactory::make( time() + 60 );
+
+		$ended = $this->respond();
+
+		self::assertSame( esc_url( self::LOGIN_URL ), $ended->args['link_url'] );
+	}
+
 	public function test_la_page_d_erreur_est_la_page_html_de_wordpress_et_non_du_texte_brut(): void {
 		$_GET['ticket'] = 'v1.abc.def';
 

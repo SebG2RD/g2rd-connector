@@ -80,12 +80,19 @@ unset( $g2rd_option );
 if ( class_exists( \G2RD\Connector\DirectLogin\UsedTickets::class ) ) {
 	\G2RD\Connector\DirectLogin\UsedTickets::purge_all();
 	if ( is_multisite() ) {
-		foreach ( get_sites( [ 'fields' => 'ids' ] ) as $g2rd_blog_id ) {
+		// 'number' => 0 : tous les blogs (get_sites() n'en rend que 100 par défaut).
+		$g2rd_blog_ids = get_sites(
+			[
+				'fields' => 'ids',
+				'number' => 0,
+			]
+		);
+		foreach ( $g2rd_blog_ids as $g2rd_blog_id ) {
 			switch_to_blog( (int) $g2rd_blog_id );
 			\G2RD\Connector\DirectLogin\UsedTickets::purge_all();
 			restore_current_blog();
 		}
-		unset( $g2rd_blog_id );
+		unset( $g2rd_blog_ids, $g2rd_blog_id );
 	}
 }
 

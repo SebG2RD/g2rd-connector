@@ -290,7 +290,11 @@ authentification du site redemanderait un code ; la double authentification est 
 manager), avec `no-cache` et `Referrer-Policy: no-referrer`, puis redirection vers le tableau de
 bord. Le connecteur envoie l'événement `direct_login` (`user_login`, `wp_user_id`,
 `manager_user_id`) après la réponse, si les événements sont activés. Sinon : page WordPress en
-403 avec un message explicite et un lien vers la page de connexion.
+403 avec un message explicite. Le lien vers la page de connexion n'y figure que si le ticket est
+authentique (signature valide : autre site, expiré, en avance, déjà utilisé, case décochée,
+compte sans droits). Sans ticket, ou avec un ticket mal formé ou mal signé, aucun lien : sur un
+site à connexion masquée (WPS Hide Login, Solid Security…), `wp_login_url()` rend l'adresse
+cachée, qu'un visiteur anonyme ne doit pas pouvoir obtenir par ce point d'entrée.
 
 Le snapshot remonte `site.login_url` (`wp_login_url()`, ce qui détecte une connexion déplacée),
 `site.direct_login_enabled`, `site.admins` (50 administrateurs au plus : identifiant,

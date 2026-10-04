@@ -5,7 +5,8 @@
  * Codes propres au connecteur (le manager ne les voit pas : il ne reçoit rien
  * d'un refus). Chaque message dit ce qui se passe, la cause probable et quoi
  * faire ; il s'affiche dans une page WordPress (wp_die, HTTP 403) qui propose
- * aussi un lien vers la page de connexion du site.
+ * aussi un lien vers la page de connexion du site — uniquement quand le ticket
+ * est authentique (cf. allows_login_link()).
  *
  * @package G2RD\Connector
  */
@@ -37,6 +38,22 @@ final class Refusal {
 			DirectLoginTicket::STATUS_FUTURE     => self::FUTURE,
 			default                              => self::INVALID,
 		};
+	}
+
+	/**
+	 * Vrai si le refus concerne un ticket AUTHENTIQUE (signature valide, donc émis
+	 * par le manager) : seul ce cas autorise la page 403 à proposer la page de
+	 * connexion. Sur un site à connexion masquée (WPS Hide Login, Solid Security…),
+	 * wp_login_url() rend l'adresse cachée : la montrer pour un ticket absent, mal
+	 * formé ou mal signé la livrerait à n'importe quel visiteur. Liste fermée : un
+	 * code inconnu ne montre rien.
+	 */
+	public static function allows_login_link( string $code ): bool {
+		return in_array(
+			$code,
+			[ self::WRONG_SITE, self::EXPIRED, self::FUTURE, self::REPLAYED, self::DISABLED, self::NOT_ADMIN ],
+			true
+		);
 	}
 
 	public static function message( string $code ): string {

@@ -57,6 +57,28 @@ final class RefusalTest extends TestCase {
 		self::assertSame( $code, Refusal::from_ticket_status( $status ) );
 	}
 
+	/**
+	 * Le lien vers la page de connexion (peut-être masquée par le client) n'est
+	 * permis que pour un ticket authentique, c'est-à-dire à la signature valide.
+	 *
+	 * @return iterable<string, array{string, bool}>
+	 */
+	public static function login_links(): iterable {
+		yield 'invalide' => [ Refusal::INVALID, false ];
+		yield 'code inconnu' => [ 'inconnu', false ];
+		yield 'autre site' => [ Refusal::WRONG_SITE, true ];
+		yield 'expiré' => [ Refusal::EXPIRED, true ];
+		yield 'pas encore valable' => [ Refusal::FUTURE, true ];
+		yield 'déjà utilisé' => [ Refusal::REPLAYED, true ];
+		yield 'désactivée' => [ Refusal::DISABLED, true ];
+		yield 'plus administrateur' => [ Refusal::NOT_ADMIN, true ];
+	}
+
+	#[DataProvider( 'login_links' )]
+	public function test_le_lien_de_connexion_n_est_permis_que_pour_un_ticket_authentique( string $code, bool $expected ): void {
+		self::assertSame( $expected, Refusal::allows_login_link( $code ) );
+	}
+
 	public function test_le_titre_de_la_page(): void {
 		self::assertSame( 'Connexion directe impossible', Refusal::title() );
 	}

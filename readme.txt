@@ -89,7 +89,10 @@ Pre-release for the pilot: sites do not update to it automatically.
   point opens the dashboard of this site from the manager, without a password. It only accepts a
   ticket signed with the site token, bound to this site and to one administrator account, valid
   for 60 seconds and usable once. Any refusal shows a plain 403 page that says what happened,
-  the likely cause and what to do, with a link to the login page.
+  the likely cause and what to do. The page links to the login page only when the ticket is
+  genuine (valid signature); with no ticket, or a malformed or wrongly signed one, no link is
+  shown, so a hidden login address (WPS Hide Login, Solid Security...) is never disclosed to
+  an anonymous visitor.
 * **Security: six checks, in this order.** Format and signature (constant-time comparison, with
   a key derived from the site token in a context distinct from command signatures), site,
   expiry (30 s clock tolerance, at most 90 s ahead), single use, the "Allow direct login from

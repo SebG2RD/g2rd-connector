@@ -15,9 +15,12 @@
  * lui-même la connexion (événement `direct_login`), envoyé après la réponse pour ne
  * jamais retarder la redirection.
  *
- * Ticket refusé : page WordPress en 403, message explicite et lien vers la page de
- * connexion. Toutes les réponses interdisent le cache et le référent : le ticket
- * est dans l'adresse.
+ * Ticket refusé : page WordPress en 403 avec un message explicite. Le lien vers la
+ * page de connexion n'y figure que si le ticket est authentique (signature valide) :
+ * sans ticket, ou avec un ticket mal formé ou mal signé, l'adresse de connexion —
+ * peut-être masquée par le client — n'est pas révélée (écart volontaire avec la
+ * lettre de la spec §5.5). Toutes les réponses interdisent le cache et le référent :
+ * le ticket est dans l'adresse.
  *
  * @package G2RD\Connector
  */
@@ -66,7 +69,7 @@ final class Endpoint {
 	/**
 	 * Dans admin-ajax, wp_die() rend du texte brut (`_ajax_wp_die_handler`). Ce point
 	 * d'entrée est ouvert dans un onglet : on veut la page d'erreur WordPress
-	 * habituelle, avec son lien vers la page de connexion.
+	 * habituelle (et son lien vers la page de connexion quand il est permis).
 	 */
 	public static function html_die_handler(): string {
 		return '_default_wp_die_handler';
@@ -106,6 +109,18 @@ final class Endpoint {
 
 	private static function refuse( string $code ): void {
 		add_filter( 'wp_die_ajax_handler', [ self::class, 'html_die_handler' ] );
+
+		// Le lien vers la page de connexion n'est proposé que pour un ticket
+		// authentique : sur un site à connexion masquée, wp_login_url() rend l'adresse
+		// cachée, qu'un appel sans ticket (ou avec un ticket forgé) ne doit pas révéler.
+		if ( ! Refusal::allows_login_link( $code ) ) {
+			wp_die(
+				esc_html( Refusal::message( $code ) ),
+				esc_html( Refusal::title() ),
+				[ 'response' => 403 ]
+			);
+		}
+
 		wp_die(
 			esc_html( Refusal::message( $code ) ),
 			esc_html( Refusal::title() ),
