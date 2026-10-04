@@ -21,6 +21,9 @@ final class SnapshotFieldsTest extends TestCase {
 	/** @var array<string, mixed> */
 	private array $user_query = [];
 
+	/** @var list<int> Comptes dont le rôle a perdu la capacité manage_options. */
+	private array $sans_capacite = [];
+
 	protected function setUp(): void {
 		parent::setUp();
 		// wp_login_url() est filtrée par les extensions qui déplacent la connexion :
@@ -31,6 +34,10 @@ final class SnapshotFieldsTest extends TestCase {
 				$this->user_query = $args;
 				return $this->rows;
 			}
+		);
+		// Critère du contrôle fait à l'usage (Gate::REQUIRED_CAPABILITY).
+		Functions\when( 'user_can' )->alias(
+			fn ( $user, string $capability ): bool => 'manage_options' === $capability && ! in_array( (int) $user, $this->sans_capacite, true )
 		);
 		$this->rows = [
 			(object) [
@@ -95,6 +102,14 @@ final class SnapshotFieldsTest extends TestCase {
 
 	public function test_une_ligne_illisible_est_ignoree(): void {
 		$this->rows = [ 'pas un compte', (object) [ 'user_login' => 'sans-identifiant' ], $this->rows[0] ];
+
+		self::assertSame( [ 1 ], array_column( SnapshotFields::admins(), 'id' ) );
+	}
+
+	public function test_un_administrateur_prive_de_la_capacite_n_est_pas_propose(): void {
+		// Une extension a retiré manage_options au rôle : le compte serait refusé à
+		// l'usage (« not_admin »), il n'est donc pas proposé au manager.
+		$this->sans_capacite = [ 3 ];
 
 		self::assertSame( [ 1 ], array_column( SnapshotFields::admins(), 'id' ) );
 	}

@@ -7,7 +7,12 @@
  *     détecte sans saisie ;
  *   - `direct_login_enabled` : la case « Autoriser la connexion directe depuis G2RD » ;
  *   - `admins` : les administrateurs du site, du plus ancien au plus récent, 50 au
- *     plus, parmi lesquels le manager choisit le compte ouvert.
+ *     plus, parmi lesquels le manager choisit le compte ouvert. Seuls ceux qui
+ *     ont réellement la capacité contrôlée à l'usage (Gate::REQUIRED_CAPABILITY)
+ *     sont remontés : un compte proposé n'est pas refusé ensuite (« not_admin »)
+ *     parce qu'une extension a retiré la capacité au rôle. Limite assumée : un rôle
+ *     personnalisé qui possède cette capacité sans être « administrator » n'est
+ *     pas proposé (la spec parle des administrateurs du site).
  * La capacité `direct_login` est annoncée par SnapshotController::capabilities().
  *
  * @package G2RD\Connector
@@ -53,6 +58,10 @@ final class SnapshotFields {
 		foreach ( (array) $users as $user ) {
 			$row = is_object( $user ) ? get_object_vars( $user ) : [];
 			if ( empty( $row['ID'] ) || ! isset( $row['user_login'] ) ) {
+				continue;
+			}
+			// Même critère que le contrôle fait à l'usage (Gate, contrôle 6).
+			if ( ! user_can( (int) $row['ID'], Gate::REQUIRED_CAPABILITY ) ) {
 				continue;
 			}
 			$admins[] = [

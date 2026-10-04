@@ -52,13 +52,11 @@ final class EndpointTest extends TestCase {
 		Functions\when( 'wp_login_url' )->justReturn( self::LOGIN_URL );
 		Functions\when( 'admin_url' )->justReturn( self::ADMIN_URL );
 		Functions\when( 'is_ssl' )->justReturn( true );
-		Functions\when( 'add_option' )->alias(
-			function ( string $key, $value = '' ): bool {
-				if ( array_key_exists( $key, $this->options ) ) {
-					return false;
-				}
-				$this->options[ $key ] = $value;
-				return true;
+		// Usage unique : UsedTickets écrit le nonce par un INSERT atomique ($wpdb).
+		$GLOBALS['wpdb'] = new FakeWpdb(
+			fn (): array => array_map( 'strval', array_keys( $this->options ) ),
+			function ( string $name, string $value ): void {
+				$this->options[ $name ] = $value;
 			}
 		);
 		Functions\when( 'get_userdata' )->alias( static fn ( int $id ) => 1 === $id ? $admin : false );
@@ -101,6 +99,7 @@ final class EndpointTest extends TestCase {
 	}
 
 	protected function tearDown(): void {
+		unset( $GLOBALS['wpdb'] );
 		unset( $_GET['ticket'] );
 		parent::tearDown();
 	}

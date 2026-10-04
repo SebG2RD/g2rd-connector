@@ -81,6 +81,29 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 
 == Changelog ==
 
+= 1.13.0 =
+
+Not released yet: this entry describes the direct login work in progress.
+
+* **Feature: direct login from G2RD WP Manager.** A new `admin-ajax.php?action=g2rd_login` entry
+  point opens the dashboard of this site from the manager, without a password. It only accepts a
+  ticket signed with the site token, bound to this site and to one administrator account, valid
+  for 60 seconds and usable once. Any refusal shows a plain 403 page that says what happened,
+  the likely cause and what to do.
+* **Setting: "Allow direct login from G2RD"**, checked by default. Unchecking it refuses every
+  ticket at once.
+* **Snapshot: new `site` fields** `login_url` (as filtered by plugins that move the login page),
+  `direct_login_enabled` and `admins` (up to 50 administrators who really hold the
+  `manage_options` capability: id, login, email, registration date), plus the `direct_login`
+  capability.
+* **Event: `direct_login`** (WordPress login and user id, manager user id) is sent after each
+  direct login when events are enabled.
+* **The session is opened without firing the `wp_login` hook**, so a direct login is not
+  reported as a regular `user.login` event.
+* **Security: a ticket is consumed by a single atomic database insert**, so two simultaneous
+  requests carrying the same ticket cannot both open a session. Consumed tickets are purged
+  hourly after 10 minutes, and all removed on uninstall (on every blog of a multisite).
+
 = 1.12.0 =
 
 Stable release of the 1.12 line, piloted as 1.12.0-rc.1 to rc.5 (details in the entries below).

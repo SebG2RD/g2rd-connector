@@ -37,17 +37,20 @@ final class GateTest extends TestCase {
 		$admin->user_login = 'admin-g2rd';
 		$this->users[1]    = $admin;
 
-		Functions\when( 'add_option' )->alias(
-			function ( string $key, $value = '' ): bool {
-				if ( array_key_exists( $key, $this->options ) ) {
-					return false;
-				}
-				$this->options[ $key ] = $value;
-				return true;
+		// Usage unique : UsedTickets écrit le nonce par un INSERT atomique ($wpdb).
+		$GLOBALS['wpdb'] = new FakeWpdb(
+			fn (): array => array_map( 'strval', array_keys( $this->options ) ),
+			function ( string $name, string $value ): void {
+				$this->options[ $name ] = $value;
 			}
 		);
 		Functions\when( 'get_userdata' )->alias( fn ( int $id ) => $this->users[ $id ] ?? false );
 		Functions\when( 'user_can' )->alias( fn ( $user, string $capability ): bool => 'manage_options' === $capability && $this->is_admin );
+	}
+
+	protected function tearDown(): void {
+		unset( $GLOBALS['wpdb'] );
+		parent::tearDown();
 	}
 
 	public function test_un_ticket_valide_ouvre_le_compte_demande(): void {
@@ -56,7 +59,7 @@ final class GateTest extends TestCase {
 		self::assertSame( 'ok', $decision['status'] );
 		self::assertSame( 1, $decision['user']->ID );
 		self::assertSame( 7, $decision['payload']['a'], 'L\'utilisateur du manager part dans l\'événement du site.' );
-		self::assertSame( self::NOW, $this->options[ UsedTickets::OPTION_PREFIX . TicketFactory::NONCE ] );
+		self::assertSame( (string) self::NOW, $this->options[ UsedTickets::OPTION_PREFIX . TicketFactory::NONCE ] );
 	}
 
 	public function test_un_ticket_mal_forme_n_est_pas_valide(): void {
