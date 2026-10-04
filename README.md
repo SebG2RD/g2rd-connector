@@ -14,6 +14,7 @@
 | **Heartbeat** | WP-Cron horaire `POST {manager}/api/sites/{id}/heartbeat` — métriques légères (espace disque, utilisateurs, plugins actifs). |
 | **Webhook events** | Push temps réel au manager : `user.login`, `user.login_failed`, `plugin.activated/deactivated`, `core.updated`, `core.auto_update`. |
 | **Commandes distantes** | `POST /wp-json/g2rd/v1/command` (Bearer auth) — `clear_cache`, `check_updates`, `update_core` déclenchables depuis le manager. |
+| **Connexion directe** | `admin-ajax.php?action=g2rd_login&ticket=…` — ouvre l'administration sans mot de passe depuis le manager (ticket signé, 60 s, usage unique). Case « Autoriser la connexion directe depuis G2RD », cochée par défaut. |
 | **Intégration thème** | Si le thème [`g2rd-theme`](https://github.com/SebG2RD/g2rd-theme) ≥ v1.19 est actif, le plugin s'enregistre comme **onglet dans Apparence → Options G2RD**. Sinon, menu top-level autonome. |
 
 ## Architecture
@@ -36,6 +37,10 @@ g2rd-connector/
 │   │   └── HeartbeatJob        hourly wp_schedule_event
 │   ├── Events/
 │   │   └── Listener            wp_login, activated_plugin, etc.
+│   ├── DirectLogin/            connexion directe : point d'entrée, contrôles, snapshot
+│   ├── Security/
+│   │   ├── RequestSignature    signature des requêtes du manager
+│   │   └── DirectLoginTicket   ticket de connexion directe (classe pure)
 │   └── Admin/
 │       └── Page                tab thème OU menu top-level
 └── assets/admin/src/           React app (page admin)
@@ -265,6 +270,33 @@ dans les données de la page d'administration (`unverifiedDownloads`). L'action
 `g2rd_connector_rollback_source_unverified` reçoit `( $file, $url, $sha256 )`. En succès vérifié :
 `source_integrity: verified`. Un échec d'intégrité porte désormais `via` (`restore_point` ou
 `download`).
+
+### Connexion directe depuis G2RD WP Manager
+
+Le bouton « Se connecter à WordPress » du manager ouvre un onglet sur
+`/wp-admin/admin-ajax.php?action=g2rd_login&ticket=…`. Le ticket est fabriqué par le manager
+au moment du clic (aucun appel du manager vers le site) :
+`v1.<charge base64url>.<signature base64url>`, signature HMAC-SHA256 avec une clé dérivée du
+SiteToken et du contexte `g2rd-login-v1` (distinct de celui des commandes), charge
+`{s, u, e, n, a}` = site, compte WordPress, expiration (60 s), nonce, utilisateur du manager.
+
+Contrôles, dans l'ordre : forme et signature (temps constant) ; site ; expiration (30 s de
+tolérance d'horloge, 90 s d'avance au plus) ; usage unique (option `g2rd_login_used_<nonce>`,
+purgée après 10 minutes par le cron horaire local) ; case « Autoriser la connexion directe
+depuis G2RD » (absente = cochée) ; le compte existe et a toujours `manage_options`.
+
+Si tout passe, la session est ouverte **sans déclencher `wp_login`** (une extension de double
+authentification du site redemanderait un code ; la double authentification est exigée côté
+manager), avec `no-cache` et `Referrer-Policy: no-referrer`, puis redirection vers le tableau de
+bord. Le connecteur envoie l'événement `direct_login` (`user_login`, `wp_user_id`,
+`manager_user_id`) après la réponse, si les événements sont activés. Sinon : page WordPress en
+403 avec un message explicite et un lien vers la page de connexion.
+
+Le snapshot remonte `site.login_url` (`wp_login_url()`, ce qui détecte une connexion déplacée),
+`site.direct_login_enabled`, `site.admins` (50 administrateurs au plus : identifiant,
+identifiant de connexion, e-mail, date de création) et la capacité `direct_login`. Les vecteurs
+de test du ticket (`tests/fixtures/direct-login-ticket-vectors.json`) sont une copie exacte de
+ceux du manager.
 
 ## Développement
 

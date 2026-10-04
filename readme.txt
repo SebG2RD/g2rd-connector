@@ -20,6 +20,7 @@ Connects this WordPress site to the centralized G2RD WP Manager dashboard (https
 * **Optional hourly heartbeat** — light telemetry payload (disk usage, active plugin count, user count) sent to your manager instance via WP-Cron. Disabled until you opt in.
 * **Optional event stream** — push real-time notifications (user logins, login failures, plugin activations, core/plugin/theme updates, auto-update failures) to the manager. Disabled until you opt in.
 * **Optional remote commands** — let the manager trigger cache clearing, update checks, core/plugin/theme updates and database maintenance (delete spam comments, delete post revisions, empty trash, delete expired transients, optimize database) remotely. Disabled until you opt in.
+* **Direct login from the manager** — the manager can open this site's dashboard without a password, through a signed one-time link valid for one minute, for staff whose manager account uses two-factor authentication. On by default; can be turned off in the plugin settings ("Allow direct login from G2RD").
 * **Theme integration** — when the optional companion theme `g2rd-theme` (>= 1.19) is active, the plugin registers itself as a tab in *Appearance → G2RD Options* instead of adding a top-level menu, for a tidy admin UX.
 
 = External service =
@@ -35,6 +36,8 @@ This plugin relies on the **G2RD WP Manager** service operated by G2RD Agence We
 * On every manager-initiated `/snapshot` call: WordPress version, list of installed/active plugins and themes (names, versions, slugs), PHP/MySQL versions, memory limit.
 * On every hourly heartbeat (if enabled): WordPress/PHP/connector version, free disk space, active plugin count, registered user count.
 * On every webhook event (if enabled): event type (e.g. `user.login`, `plugin.activated`) and a small context payload (user id, plugin file name, IP for failed logins).
+* Since 1.13, the `/snapshot` answer also contains the login page address, the state of the "Allow direct login from G2RD" setting and the site's administrators (up to 50: user id, login, email, registration date), so the manager can offer direct login with the account chosen by the agency.
+* Since 1.13, a `direct_login` event (WordPress login and user id, manager user id) is sent after each direct login, if events are enabled.
 
 **Nothing is sent before enrollment.** Enrollment is a manual one-shot action that requires an invitation token obtained from your manager admin.
 
