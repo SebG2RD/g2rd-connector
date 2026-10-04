@@ -43,6 +43,7 @@ export function ConnectorPanel( { data }: Props ): JSX.Element {
 		events_enabled: state.eventsEnabled,
 		remote_commands_enabled: state.remoteCommandsEnabled,
 		force_ipv4_to_manager: state.forceIpv4ToManager,
+		allow_direct_login: state.allowDirectLogin,
 		signature_required: state.signatureRequired,
 	} );
 
@@ -258,6 +259,20 @@ export function ConnectorPanel( { data }: Props ): JSX.Element {
 								...state,
 								forceIpv4ToManager: v,
 							} )
+						}
+						disabled={ anyBusy }
+					/>
+
+					<ToggleControl
+						label="Autoriser la connexion directe depuis G2RD"
+						help={
+							state.allowDirectLogin
+								? "G2RD WP Manager peut ouvrir l'administration de ce site sans mot de passe, avec le compte administrateur choisi dans la fiche du site (lien à usage unique valable une minute, réservé aux comptes protégés par double authentification)."
+								: 'Connexion directe désactivée : le bouton du manager ouvre la page de connexion habituelle du site.'
+						}
+						checked={ state.allowDirectLogin }
+						onChange={ ( v ) =>
+							setState( { ...state, allowDirectLogin: v } )
 						}
 						disabled={ anyBusy }
 					/>
