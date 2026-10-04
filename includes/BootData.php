@@ -45,6 +45,7 @@ final class BootData {
 			'eventsEnabled'         => (bool) $s['events_enabled'],
 			'remoteCommandsEnabled' => (bool) $s['remote_commands_enabled'],
 			'forceIpv4ToManager'    => (bool) ( $s['force_ipv4_to_manager'] ?? false ),
+			'allowDirectLogin'      => (bool) ( $s['allow_direct_login'] ?? true ),
 			'signatureRequired'     => 'required' === ( $s['signature_policy'] ?? 'report' ),
 			'signatureFailures'     => SignatureState::stats(),
 			'restorePoints'         => RestorePointInventory::describe(),

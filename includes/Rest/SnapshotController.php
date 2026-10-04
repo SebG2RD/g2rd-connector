@@ -14,6 +14,7 @@ declare(strict_types=1);
 namespace G2RD\Connector\Rest;
 
 use G2RD\Connector\Cron\UpdatesDiscoveryJob;
+use G2RD\Connector\DirectLogin\SnapshotFields;
 use G2RD\Connector\Rollback\PendingOutcomes;
 use G2RD\Connector\Rollback\RestorePointInventory;
 use G2RD\Connector\Rollback\Services;
@@ -199,11 +200,16 @@ final class SnapshotController {
 	 * Capacités du connecteur, pour que la plateforme n'ait pas à comparer des
 	 * numéros de version. `restore_points` n'est annoncée que si le module peut
 	 * réellement fonctionner ici (système de fichiers direct + bibliothèque zip).
+	 * `direct_login` (1.13) : le site accepte les tickets de connexion directe ; la
+	 * case du réglage est remontée à part (`site.direct_login_enabled`), pour que le
+	 * manager distingue « connecteur trop ancien » de « désactivée sur ce site ».
+	 *
+	 * Publique pour les tests.
 	 *
 	 * @return list<string>
 	 */
-	private function capabilities(): array {
-		$capabilities = [ 'signed_commands' ];
+	public function capabilities(): array {
+		$capabilities = [ 'signed_commands', SnapshotFields::CAPABILITY ];
 		if ( Services::supported() ) {
 			$capabilities[] = 'restore_points';
 		}
@@ -235,18 +241,23 @@ final class SnapshotController {
 	 * @return array<string, mixed>
 	 */
 	private function site_info(): array {
-		return [
-			'name'              => (string) get_bloginfo( 'name' ),
-			'url'               => (string) home_url( '/' ),
-			'admin_email'       => (string) get_bloginfo( 'admin_email' ),
-			'language'          => (string) get_bloginfo( 'language' ),
-			'timezone'          => (string) wp_timezone_string(),
-			'multisite'         => is_multisite(),
-			// Vrai favicon WP (Site Icon réglé dans l'admin), '' si non défini.
-			// Le manager l'affiche dans ses pages de gestion (repli sur l'icône).
-			'site_icon_url'     => (string) get_site_icon_url( 192 ),
-			'connector_version' => G2RD_CONNECTOR_VERSION,
-		];
+		return array_merge(
+			[
+				'name'              => (string) get_bloginfo( 'name' ),
+				'url'               => (string) home_url( '/' ),
+				'admin_email'       => (string) get_bloginfo( 'admin_email' ),
+				'language'          => (string) get_bloginfo( 'language' ),
+				'timezone'          => (string) wp_timezone_string(),
+				'multisite'         => is_multisite(),
+				// Vrai favicon WP (Site Icon réglé dans l'admin), '' si non défini.
+				// Le manager l'affiche dans ses pages de gestion (repli sur l'icône).
+				'site_icon_url'     => (string) get_site_icon_url( 192 ),
+				'connector_version' => G2RD_CONNECTOR_VERSION,
+			],
+			// Connexion directe (1.13) : page de connexion effective, case du réglage,
+			// administrateurs du site (cf. DirectLogin\SnapshotFields).
+			SnapshotFields::site_fields()
+		);
 	}
 
 	/**

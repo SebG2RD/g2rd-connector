@@ -57,6 +57,11 @@ final class AdminController {
 				'required' => false,
 				'type'     => 'boolean',
 			],
+			// Connexion directe depuis G2RD WP Manager (1.13) : cochée par défaut.
+			'allow_direct_login'      => [
+				'required' => false,
+				'type'     => 'boolean',
+			],
 		];
 
 		$url_arg = [
@@ -175,12 +180,15 @@ final class AdminController {
 	 * PAS forcés à false : seules les clés réellement soumises sont mises à jour
 	 * (l'app React les envoie toujours, mais on reste défensif).
 	 *
+	 * Publique pour les tests : une case oubliée ici serait enregistrée par la page
+	 * PHP mais pas par le panneau React.
+	 *
 	 * @return array<string, mixed>
 	 */
-	private function collect_settings( WP_REST_Request $request ): array {
+	public function collect_settings( WP_REST_Request $request ): array {
 		$settings = [ 'manager_url' => (string) $request->get_param( 'manager_url' ) ];
 
-		foreach ( [ 'heartbeat_enabled', 'events_enabled', 'remote_commands_enabled', 'force_ipv4_to_manager' ] as $flag ) {
+		foreach ( [ 'heartbeat_enabled', 'events_enabled', 'remote_commands_enabled', 'force_ipv4_to_manager', 'allow_direct_login' ] as $flag ) {
 			$value = $request->get_param( $flag );
 			if ( null !== $value ) {
 				$settings[ $flag ] = (bool) $value;

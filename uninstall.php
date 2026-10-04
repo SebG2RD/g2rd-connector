@@ -74,6 +74,28 @@ foreach ( [ 'g2rd_restore_points', 'g2rd_update_txn', 'g2rd_pending_outcomes', '
 }
 unset( $g2rd_option );
 
+// Tickets de connexion directe consommés (cf. DirectLogin\UsedTickets) : options
+// éphémères créées par le plugin, toutes retirées — lot après lot, et sur chaque
+// blog en multisite (chaque blog a sa propre table d'options).
+if ( class_exists( \G2RD\Connector\DirectLogin\UsedTickets::class ) ) {
+	\G2RD\Connector\DirectLogin\UsedTickets::purge_all();
+	if ( is_multisite() ) {
+		// 'number' => 0 : tous les blogs (get_sites() n'en rend que 100 par défaut).
+		$g2rd_blog_ids = get_sites(
+			[
+				'fields' => 'ids',
+				'number' => 0,
+			]
+		);
+		foreach ( $g2rd_blog_ids as $g2rd_blog_id ) {
+			switch_to_blog( (int) $g2rd_blog_id );
+			\G2RD\Connector\DirectLogin\UsedTickets::purge_all();
+			restore_current_blog();
+		}
+		unset( $g2rd_blog_ids, $g2rd_blog_id );
+	}
+}
+
 // Dé-planification des crons si encore présents.
 foreach ( [ 'g2rd_connector_heartbeat', 'g2rd_connector_refresh_updates', 'g2rd_connector_restore_points_purge' ] as $g2rd_hook ) {
     $timestamp = wp_next_scheduled( $g2rd_hook );

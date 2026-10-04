@@ -258,6 +258,17 @@ final class Page {
 							</label>
 						</td>
 					</tr>
+					<tr>
+						<th scope="row"><?php echo esc_html__( 'Connexion directe', 'g2rd-connector' ); ?></th>
+						<td>
+							<label>
+								<input type="checkbox" name="g2rd_allow_direct_login" value="1"
+									<?php checked( (bool) ( $settings['allow_direct_login'] ?? true ) ); ?>>
+								<?php echo esc_html__( 'Autoriser la connexion directe depuis G2RD', 'g2rd-connector' ); ?>
+							</label>
+							<p class="description"><?php echo esc_html__( 'G2RD WP Manager peut ouvrir l\'administration de ce site sans mot de passe, avec le compte administrateur choisi dans la fiche du site (lien à usage unique valable une minute, réservé aux comptes protégés par double authentification). Décochée : le manager ouvre la page de connexion habituelle.', 'g2rd-connector' ); ?></p>
+						</td>
+					</tr>
 				</table>
 
 				<p class="submit">
@@ -297,6 +308,7 @@ final class Page {
 				'events_enabled'          => ! empty( $_POST['g2rd_events_enabled'] ),
 				'remote_commands_enabled' => ! empty( $_POST['g2rd_remote_commands_enabled'] ),
 				'force_ipv4_to_manager'   => ! empty( $_POST['g2rd_force_ipv4_to_manager'] ),
+				'allow_direct_login'      => ! empty( $_POST['g2rd_allow_direct_login'] ),
 			]
 		);
 

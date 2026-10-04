@@ -100,6 +100,12 @@ final class Settings {
 			// (403) : battements de cœur, événements et enrôlement mouraient en route
 			// alors que le site répondait à ses visiteurs. Dormant par défaut.
 			'force_ipv4_to_manager'   => false,
+			// Connexion directe depuis G2RD WP Manager (1.13) : un ticket signé à usage
+			// unique, présenté à admin-ajax.php?action=g2rd_login, ouvre l'administration
+			// sans mot de passe. Cochée par défaut (décision du 27/09) : un site venu d'une
+			// version antérieure, sans la clé en base, en hérite aussi. Décochée, le
+			// manager ouvre la page de connexion habituelle.
+			'allow_direct_login'      => true,
 			// `report` : signature vérifiée, échec remonté, requête acceptée.
 			// `required` : toute requête non signée ou mal signée est refusée.
 			'signature_policy'        => 'report',
@@ -135,7 +141,7 @@ final class Settings {
 		}
 		// Toute case à cocher déclarée dans defaults() doit figurer ici : une clé absente
 		// est jetée à chaque enregistrement (défaut de la 1.12.0-rc.3 sur l'option IPv4).
-		foreach ( [ 'heartbeat_enabled', 'events_enabled', 'remote_commands_enabled', 'force_ipv4_to_manager' ] as $flag ) {
+		foreach ( [ 'heartbeat_enabled', 'events_enabled', 'remote_commands_enabled', 'force_ipv4_to_manager', 'allow_direct_login' ] as $flag ) {
 			if ( isset( $value[ $flag ] ) ) {
 				$clean[ $flag ] = (bool) $value[ $flag ];
 			}

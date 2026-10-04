@@ -36,6 +36,12 @@ export interface ConnectorBootData {
 	 */
 	forceIpv4ToManager: boolean;
 	/**
+	 * Connexion directe depuis G2RD WP Manager (1.13) : le manager peut ouvrir
+	 * l'administration de ce site sans mot de passe, par un lien signé à usage
+	 * unique valable une minute. Cochée par défaut.
+	 */
+	allowDirectLogin: boolean;
+	/**
 	 * Politique de signature des commandes du manager : true = toute requête non
 	 * signée est refusée (`required`), false = vérifiée et remontée, mais acceptée
 	 * (`report`). Issue de secours locale si le manager cessait de signer.

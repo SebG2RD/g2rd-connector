@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.12.0
+Stable tag: 1.13.0-rc.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -20,6 +20,7 @@ Connects this WordPress site to the centralized G2RD WP Manager dashboard (https
 * **Optional hourly heartbeat** — light telemetry payload (disk usage, active plugin count, user count) sent to your manager instance via WP-Cron. Disabled until you opt in.
 * **Optional event stream** — push real-time notifications (user logins, login failures, plugin activations, core/plugin/theme updates, auto-update failures) to the manager. Disabled until you opt in.
 * **Optional remote commands** — let the manager trigger cache clearing, update checks, core/plugin/theme updates and database maintenance (delete spam comments, delete post revisions, empty trash, delete expired transients, optimize database) remotely. Disabled until you opt in.
+* **Direct login from the manager** — the manager can open this site's dashboard without a password, through a signed one-time link valid for one minute, for staff whose manager account uses two-factor authentication. On by default; can be turned off in the plugin settings ("Allow direct login from G2RD").
 * **Theme integration** — when the optional companion theme `g2rd-theme` (>= 1.19) is active, the plugin registers itself as a tab in *Appearance → G2RD Options* instead of adding a top-level menu, for a tidy admin UX.
 
 = External service =
@@ -35,6 +36,8 @@ This plugin relies on the **G2RD WP Manager** service operated by G2RD Agence We
 * On every manager-initiated `/snapshot` call: WordPress version, list of installed/active plugins and themes (names, versions, slugs), PHP/MySQL versions, memory limit.
 * On every hourly heartbeat (if enabled): WordPress/PHP/connector version, free disk space, active plugin count, registered user count.
 * On every webhook event (if enabled): event type (e.g. `user.login`, `plugin.activated`) and a small context payload (user id, plugin file name, IP for failed logins).
+* Since 1.13, the `/snapshot` answer also contains the login page address, the state of the "Allow direct login from G2RD" setting and the site's administrators (up to 50: user id, login, email, registration date), so the manager can offer direct login with the account chosen by the agency.
+* Since 1.13, a `direct_login` event (WordPress login and user id, manager user id) is sent after each direct login, if events are enabled.
 
 **Nothing is sent before enrollment.** Enrollment is a manual one-shot action that requires an invitation token obtained from your manager admin.
 
@@ -77,6 +80,40 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.13.0-rc.1 =
+
+Pre-release for the pilot: sites do not update to it automatically.
+
+* **Feature: direct login from G2RD WP Manager.** A new `admin-ajax.php?action=g2rd_login` entry
+  point opens the dashboard of this site from the manager, without a password. It only accepts a
+  ticket signed with the site token, bound to this site and to one administrator account, valid
+  for 60 seconds and usable once. Any refusal shows a plain 403 page that says what happened,
+  the likely cause and what to do. The page links to the login page only when the ticket is
+  genuine (valid signature); with no ticket, or a malformed or wrongly signed one, no link is
+  shown, so a hidden login address (WPS Hide Login, Solid Security...) is never disclosed to
+  an anonymous visitor.
+* **Security: six checks, in this order.** Format and signature (constant-time comparison, with
+  a key derived from the site token in a context distinct from command signatures), site,
+  expiry (30 s clock tolerance, at most 90 s ahead), single use, the "Allow direct login from
+  G2RD" setting, and that the account still has the `manage_options` capability.
+* **Setting: "Allow direct login from G2RD"**, checked by default, in the settings page and in
+  the admin panel. Unchecking it refuses every ticket at once. The setting is kept by the
+  settings sanitizer (lesson of 1.12.0-rc.4).
+* **Snapshot: new `site` fields** `login_url` (as filtered by plugins that move the login page),
+  `direct_login_enabled` and `admins` (up to 50 administrators who really hold the
+  `manage_options` capability: id, login, email, registration date), plus the `direct_login`
+  capability.
+* **Event: `direct_login`** (WordPress login and user id, manager user id) is sent after each
+  direct login when events are enabled, once the response has been sent to the browser.
+* **The session is opened without firing the `wp_login` hook**, so a direct login is not
+  reported as a regular `user.login` event and a site-side two-factor plugin does not cancel it
+  (two-factor authentication is required on the manager side instead).
+* **Security: a ticket is consumed by a single atomic database insert**, so two simultaneous
+  requests carrying the same ticket cannot both open a session. Consumed tickets are purged
+  hourly after 10 minutes, and all removed on uninstall (on every blog of a multisite).
+* **Tests: shared ticket vectors.** The ticket vectors are produced by the manager and replayed
+  here byte for byte.
 
 = 1.12.0 =
 
