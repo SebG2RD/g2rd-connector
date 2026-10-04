@@ -67,4 +67,33 @@ final class SettingsSanitizeTest extends TestCase {
 			}
 		}
 	}
+
+	// ── Connexion directe depuis G2RD (1.13, spec connexion WordPress §5.5 et §5.6) ──
+
+	public function test_la_connexion_directe_est_autorisee_par_defaut(): void {
+		self::assertTrue( Settings::get( 'allow_direct_login' ) );
+	}
+
+	/** Un site passé de la 1.12 à la 1.13 n'a pas la clé en base : « absente = cochée ». */
+	public function test_une_installation_anterieure_sans_la_cle_reste_autorisee(): void {
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'           => 7,
+			'heartbeat_enabled' => false,
+		];
+
+		self::assertTrue( Settings::get( 'allow_direct_login' ) );
+	}
+
+	public function test_la_case_connexion_directe_se_decoche_et_se_recoche(): void {
+		self::assertFalse( Settings::sanitize( [ 'allow_direct_login' => false ] )['allow_direct_login'] );
+
+		$this->options[ Settings::OPTION_KEY ] = [ 'allow_direct_login' => false ];
+		self::assertTrue( Settings::sanitize( [ 'allow_direct_login' => true ] )['allow_direct_login'] );
+	}
+
+	public function test_un_enregistrement_qui_ne_porte_pas_la_case_la_laisse_telle_quelle(): void {
+		$this->options[ Settings::OPTION_KEY ] = [ 'allow_direct_login' => false ];
+
+		self::assertFalse( Settings::sanitize( [ 'heartbeat_enabled' => true ] )['allow_direct_login'] );
+	}
 }
