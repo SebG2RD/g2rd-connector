@@ -18,7 +18,7 @@ Connects this WordPress site to the centralized G2RD WP Manager dashboard (https
 
 * **Inventory snapshot** — secure REST endpoint exposing WordPress core, plugins, themes and server info to the manager.
 * **Optional hourly heartbeat** — light telemetry payload (disk usage, active plugin count, user count) sent to your manager instance via WP-Cron. Disabled until you opt in.
-* **Optional event stream** — push real-time notifications (user logins, login failures, plugin activations, core/plugin/theme updates, auto-update failures) to the manager. Disabled until you opt in.
+* **Optional event stream** — push real-time notifications (user logins, login failures, plugin activations, core/plugin/theme updates, auto-update failures) to the manager. Login failures are sent without blocking the page, at most 30 per minute. Disabled until you opt in.
 * **Optional remote commands** — let the manager trigger cache clearing, update checks, core/plugin/theme updates and database maintenance (delete spam comments, delete post revisions, empty trash, delete expired transients, optimize database) remotely. Disabled until you opt in.
 * **Direct login from the manager** — the manager can open this site's dashboard without a password, through a signed one-time link valid for one minute, for staff whose manager account uses two-factor authentication. On by default; can be turned off in the plugin settings ("Allow direct login from G2RD").
 * **Theme integration** — when the optional companion theme `g2rd-theme` (>= 1.19) is active, the plugin registers itself as a tab in *Appearance → G2RD Options* instead of adding a top-level menu, for a tidy admin UX.
@@ -80,6 +80,36 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= Unreleased =
+
+Lighter on the server: fewer WordPress boots and fewer calls to the manager, same features.
+
+* **Performance: the snapshot no longer restarts WP-Cron at almost every sync.** Update
+  discovery runs twice a day. The snapshot used to wake WP-Cron (`spawn_cron()`: a second
+  WordPress boot and a full update check) whenever the last capture was older than 6 hours,
+  which was nearly every sync since the manager syncs about every 7 hours. The threshold is now
+  13 hours: WP-Cron is woken only when the scheduled discovery is late (WP-Cron disabled or
+  stuck, site without visits). With no capture at all, nothing changes.
+* **Performance: a failed login no longer holds a WordPress page.** The `user.login_failed`
+  event is sent without blocking (2-second timeout instead of 15, response not read; same
+  address, headers and body), and at most 30 of them are sent per minute and per site, counted
+  in a transient that expires by itself. Beyond that, attempts are only counted, and sending
+  resumes the next minute. No summary event is sent: the existing event format has none, and
+  adding one needs a change on the manager side. Other events (successful logins, plugins,
+  updates) are unchanged.
+* **Performance: the local purge of restore points and used direct-login tickets runs twice a
+  day instead of hourly.** The hourly schedule is migrated once, on load and on activation,
+  keeping its next run time. Ticket validation does not depend on the purge: expiry is checked
+  before single use, so an expired ticket is refused whether or not it was purged (covered by
+  tests). The purge also recovers a protected update whose request was killed without reaching
+  the shutdown handler: a one-off check is now scheduled 11 minutes after such an update starts,
+  and again while it stays open, so this recovery happens sooner than with the hourly run.
+  Expired restore points may stay on disk up to 12 hours longer, still within the per-plugin cap
+  and the disk budget. Deactivation now also removes a pending one-off check.
+* **Performance: one SQL query less per page view.** The `g2rd_connector_settings` option
+  (about 0.5 KB) is now autoloaded. Existing installs are switched once with
+  `wp_set_option_autoload()`, without rewriting the value.
 
 = 1.13.0-rc.1 =
 
