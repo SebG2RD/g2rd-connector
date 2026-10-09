@@ -12,7 +12,9 @@
  * du site serait de toute façon morte.
  *
  * Un journal de transaction (UpdateTransaction) permet de rejouer une requête
- * morte en route : par le filet de shutdown, puis par le cron (recover()).
+ * morte en route : par le filet de shutdown, puis par le cron (recover()), ou au
+ * plus tard par la mise à jour protégée suivante, qui la reprend avant d'ouvrir la
+ * sienne.
  *
  * Résultat : la forme historique d'update_plugin, plus `outcome`, `health`,
  * `restore_point` (et `error_code` / `error` quand pertinent). Les cas prévus
@@ -48,6 +50,25 @@ final class ProtectedUpdate {
 	 * @throws \RuntimeException Échec de la mise à jour elle-même (comportement historique conservé).
 	 */
 	public function run( string $plugin_file, array $payload, callable $perform_upgrade ): array {
+		// Filet de shutdown armé d'abord : il couvre aussi la reprise ci-dessous. Il
+		// n'agit que sur la transaction que tient ce processus (cf. recover_on_shutdown()).
+		register_shutdown_function( [ self::class, 'recover_on_shutdown' ] );
+
+		// ── Reprise d'une mise à jour morte, AVANT d'ouvrir ──────────────────────
+		// Une transaction morte que ni le filet de shutdown ni le contrôle du cron n'ont
+		// encore reprise (requête tuée pendant la mise à jour : extension désactivée,
+		// fichiers à moitié remplacés) serait sinon écrasée par open() : l'extension
+		// resterait cassée, sans résultat pour la plateforme (incident du 2026-09-23).
+		// Elle est reprise une fois, quelle que soit son extension, puis la nouvelle
+		// mise à jour s'ouvre. Une reprise déjà en cours dans un autre processus fait
+		// refuser l'ouverture ci-dessous.
+		if ( self::recover( time() ) && function_exists( 'wp_clean_plugins_cache' ) ) {
+			// Fichiers peut-être restaurés : la liste des extensions en cache (lue par
+			// la commande) ne reflète plus le disque. `false` : le transient des mises
+			// à jour reste (entrées des updaters tiers, cf. CommandExecutor).
+			wp_clean_plugins_cache( false );
+		}
+
 		$now     = time();
 		$s       = $this->services;
 		$version = $this->installed_version( $plugin_file );
@@ -61,9 +82,10 @@ final class ProtectedUpdate {
 			],
 			$now
 		) ) {
-			throw new \RuntimeException( 'another protected update is still running on this site' );
+			// Refus avant tout changement, déjà connu de la plateforme (échec de
+			// l'élément, message affiché tel quel) : même début de phrase qu'avant.
+			throw new \RuntimeException( 'another protected update is still running on this site (or an interrupted one is being recovered); nothing was changed, retry in a few minutes' );
 		}
-		register_shutdown_function( [ self::class, 'recover_on_shutdown' ] );
 		// Filet du filet : un processus tué par le serveur ne passe pas par le
 		// shutdown. La purge locale (qui reprend aussi les transactions mortes) ne
 		// passant que deux fois par jour, un contrôle de reprise ponctuel (reprise
@@ -76,7 +98,8 @@ final class ProtectedUpdate {
 		// l'étape suivante (autre processus) ne prend pas cette requête vivante pour
 		// morte, tant qu'aucune étape ne dépasse la durée supposée (cf.
 		// RestorePointPurgeJob::RECOVERY_CHECK_DELAY). Au-delà, si un contrôle a fermé
-		// la transaction entre-temps, step() et touch() ne la recréent pas.
+		// ou réservé la transaction entre-temps, step() et touch() ne la recréent pas,
+		// et la mise à jour s'arrête avant de toucher à l'extension (cf. plus bas).
 
 		// ── Référence de santé, AVANT tout changement ────────────────────────────
 		$baseline = $s->health->measure();
@@ -108,7 +131,22 @@ final class ProtectedUpdate {
 				'restore_point' => null,
 			];
 		}
-		UpdateTransaction::step( UpdateTransaction::STEP_UPGRADING, [ 'restore_point_id' => $point['id'] ] );
+		if ( ! UpdateTransaction::step( UpdateTransaction::STEP_UPGRADING, [ 'restore_point_id' => $point['id'] ] ) ) {
+			// La transaction a été fermée, remplacée ou réservée par un autre processus
+			// pendant la création du point (étape de plus de 10 minutes, prise pour
+			// morte par un contrôle de reprise). Pas de mise à jour sans transaction :
+			// si cette requête mourait en route, personne ne remettrait l'extension en
+			// état. Rien n'a changé sur l'extension. Le point reste : son délai le fait
+			// purger, et le retirer ici pourrait réécrire l'index des points en même
+			// temps qu'une autre mise à jour.
+			UpdateTransaction::close();
+			throw new \RuntimeException( 'protected update stopped before updating the plugin: its transaction was closed by another process (a step took more than 10 minutes); the plugin was not updated, retry in a few minutes' );
+		}
+		// Les fichiers vont changer : le contrôle de reprise programmé à l'ouverture doit
+		// être en attente. S'il a été perdu (liste des tâches réécrite en même temps par
+		// un autre processus), une requête tuée maintenant ne serait reprise qu'à la purge
+		// biquotidienne, jusqu'à 12 h plus tard. Lecture seule s'il est là.
+		RestorePointPurgeJob::ensure_recovery_check( time() );
 
 		// ── Mise à jour (chemin historique, inchangé) ────────────────────────────
 		try {
@@ -253,40 +291,61 @@ final class ProtectedUpdate {
 	}
 
 	/**
-	 * Reprise d'une transaction interrompue (shutdown ou cron) : si les fichiers
-	 * peuvent être dans un état intermédiaire, on restaure le point ; sinon on
-	 * consigne seulement ce qui s'est passé. Toujours silencieuse.
+	 * Reprise d'une transaction interrompue (shutdown, cron, ou mise à jour suivante) :
+	 * si les fichiers peuvent être dans un état intermédiaire, on restaure le point ;
+	 * sinon on consigne seulement ce qui s'est passé. Toujours silencieuse.
+	 *
+	 * La transaction est d'abord réservée (UpdateTransaction::reserve()) : une seule
+	 * reprise à la fois, et aucune mise à jour ne s'ouvre par-dessus pendant la
+	 * restauration. Une transaction déjà réservée par un autre processus, ou changée
+	 * depuis sa lecture, n'est pas reprise ici.
 	 *
 	 * Une reprise par transaction : si close() n'a pas pu la retirer (delete_option()
 	 * en échec), la reprise est tracée (UpdateTransaction::RECOVERY_TRACE_KEY) et les
 	 * passages suivants ne font que retenter la fermeture — sans quoi chacun
 	 * restaurerait l'extension à nouveau et consignerait un nouveau résultat.
+	 *
+	 * @param bool $force Filet de shutdown : reprend la transaction que tient ce
+	 *                    processus, même fraîche — et aucune autre.
+	 * @return bool Vrai si une transaction a été reprise (fichiers peut-être restaurés).
 	 */
-	public static function recover( int $now, bool $force = false ): void {
+	public static function recover( int $now, bool $force = false ): bool {
 		$txn = UpdateTransaction::current();
-		if ( null === $txn || ( ! $force && ! UpdateTransaction::is_stale( $txn, $now ) ) ) {
-			return;
+		if ( null === $txn ) {
+			return false;
 		}
 
+		// Avant le contrôle de fraîcheur : une transaction réservée puis tracée (close()
+		// en échec) est fraîche, mais sa reprise est faite.
 		if ( UpdateTransaction::recovery_already_attempted( $txn ) ) {
-			UpdateTransaction::close();
-			return;
+			UpdateTransaction::discard( $txn );
+			return false;
 		}
 
-		$plugin_file = (string) $txn['plugin_file'];
-		$point_id    = (string) ( $txn['restore_point_id'] ?? '' );
+		if ( ! $force && ! UpdateTransaction::is_stale( $txn, $now ) ) {
+			return false;
+		}
+
+		$reserved = UpdateTransaction::reserve( $txn, $now, $force );
+		if ( null === $reserved ) {
+			return false;
+		}
+
+		$plugin_file = (string) $reserved['plugin_file'];
+		$point_id    = (string) ( $reserved['restore_point_id'] ?? '' );
 		$outcome     = [
 			'plugin_file'      => $plugin_file,
 			'restore_point_id' => '' !== $point_id ? $point_id : null,
-			'step'             => $txn['step'],
+			// Ce que faisait la mise à jour quand elle est morte (pas l'étape de reprise).
+			'step'             => $reserved['recovering_from'] ?? $reserved['step'],
 		];
 
 		try {
-			if ( UpdateTransaction::files_may_be_dirty( $txn ) && '' !== $point_id ) {
+			if ( UpdateTransaction::files_may_be_dirty( $reserved ) && '' !== $point_id ) {
 				$services = Services::make();
 				$point    = $services->store->get( $point_id );
 				if ( null !== $point ) {
-					( new self( $services ) )->restore( $plugin_file, $point, (string) $point['version'], null, ! empty( $txn['was_active'] ), ! empty( $txn['network_active'] ) );
+					( new self( $services ) )->restore( $plugin_file, $point, (string) $point['version'], null, ! empty( $reserved['was_active'] ), ! empty( $reserved['network_active'] ) );
 					$services->store->hold( $point_id, $now + RestorePointPurgeJob::DEFAULT_HOLD_MAX_SECONDS );
 					$outcome['outcome'] = 'recovered_rolled_back';
 				} else {
@@ -306,17 +365,22 @@ final class ProtectedUpdate {
 
 		// Trace écrite seulement si la transaction est toujours là : le cas courant
 		// (fermeture réussie) ne coûte aucune écriture de plus.
-		if ( null !== UpdateTransaction::current() ) {
-			UpdateTransaction::record_recovery_attempt( $txn, (string) $outcome['outcome'], $now );
+		$left = UpdateTransaction::current();
+		if ( null !== $left && UpdateTransaction::identity( $left ) === UpdateTransaction::identity( $reserved ) ) {
+			UpdateTransaction::record_recovery_attempt( $reserved, (string) $outcome['outcome'], $now );
 		}
+		return true;
 	}
 
 	/**
-	 * Filet de shutdown : si la transaction est encore ouverte à la fin du cycle PHP,
-	 * la requête est morte en route (fatale, délai dépassé). On rejoue tout de suite.
+	 * Filet de shutdown : si la transaction que tient ce processus est encore ouverte
+	 * à la fin du cycle PHP, la requête est morte en route (fatale, délai dépassé). On
+	 * rejoue tout de suite. Jamais la transaction d'une autre mise à jour, ni celle
+	 * qu'une reprise a réservée entre-temps : le cron et la mise à jour suivante s'en
+	 * chargent.
 	 */
 	public static function recover_on_shutdown(): void {
-		if ( null === UpdateTransaction::current() ) {
+		if ( null === UpdateTransaction::held() ) {
 			return;
 		}
 		self::recover( time(), true );

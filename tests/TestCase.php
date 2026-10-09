@@ -11,6 +11,7 @@ namespace G2RD\Connector\Tests;
 
 use Brain\Monkey;
 use Brain\Monkey\Functions;
+use G2RD\Connector\Rollback\UpdateTransaction;
 use PHPUnit\Framework\TestCase as PHPUnitTestCase;
 
 abstract class TestCase extends PHPUnitTestCase {
@@ -48,6 +49,11 @@ abstract class TestCase extends PHPUnitTestCase {
 		// Pas de cache d'options simulé par défaut : le vider ne change rien
 		// (cf. Rollback\UpdateTransactionTest pour un cache simulé).
 		Functions\when( 'wp_cache_delete' )->justReturn( true );
+
+		// Aucune transaction tenue par « ce processus » au début du test : elle est
+		// statique (propre à chaque processus PHP), un test précédent a pu la laisser
+		// — quel que soit l'ordre des tests.
+		( new \ReflectionProperty( UpdateTransaction::class, 'held' ) )->setValue( null, null );
 	}
 
 	protected function tearDown(): void {

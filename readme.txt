@@ -110,14 +110,25 @@ Lighter on the server: fewer WordPress boots and fewer calls to the manager, sam
   so the restore point and archive of an update in progress are never deleted under it. The
   update refreshes its transaction after each long step (health measures, restore), so a check
   does not take a live update for a dead one unless a single step lasts more than 10 minutes.
-  A request still running never recreates a transaction that a check has closed: it re-reads
-  the transaction, bypassing the options cache, before each refresh. A dead update is recovered
-  once: if its transaction cannot be removed, the check is not scheduled again (never at a past
-  date), the plugin is not restored again, and the attempt is recorded in the
+  A request still running does not recreate a transaction that a check has closed (it re-reads
+  the transaction, bypassing the options cache, before each refresh), except in a window of a
+  few milliseconds with a persistent object cache. A dead update is recovered once: if its
+  transaction cannot be removed, the check is not scheduled again (never at a past date), the
+  plugin is not restored again, and the attempt is recorded in the
   `g2rd_update_txn_recovery` option. Expired restore points may stay on disk up to 12 hours
   longer (24 hours if an update was running at purge time), still within the per-plugin cap
   and the disk budget. Deactivation and uninstall also remove a pending one-off check;
   uninstall also removes the recovery record.
+* **Fix: a new protected update recovers a dead one first instead of overwriting it.** An update
+  killed mid-way (plugin deactivated, files half replaced) and not yet recovered is restored once
+  before the new update opens; the recovery reserves the transaction (`recovering` step) before
+  restoring, so a check running at the same time does not restore again and a protected update
+  requested meanwhile is refused with the existing message ("another protected update is still
+  running on this site…", now ending with "retry in a few minutes"). Closing and the shutdown
+  handler only touch the transaction of their own process, an update whose transaction was taken
+  over during a step longer than 10 minutes stops before updating the plugin with an explicit
+  error, and a lost recovery check is scheduled again right before the plugin files change
+  instead of waiting up to 12 hours for the purge.
 * **Uninstall also removes the failed-login counter** (`g2rd_connector_login_failed_window`
   transient), on every site of a multisite network.
 * **Performance: one SQL query less per page view.** The `g2rd_connector_settings` option

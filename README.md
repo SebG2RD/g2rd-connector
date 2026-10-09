@@ -250,11 +250,21 @@ dont le loopback est impossible donne « non vérifiable », jamais « cassé »
   11 minutes après son ouverture puis suivi tant qu'elle reste ouverte. La mise à jour rafraîchit
   sa transaction après chaque étape longue : aucune étape ne doit dépasser 10 minutes d'horloge,
   sans quoi un contrôle la prendrait pour morte et la reprendrait. Une requête encore vivante ne
-  recrée jamais une transaction fermée par un contrôle (relecture sans cache avant chaque
-  rafraîchissement). Une mise à jour morte n'est reprise qu'une fois : si sa transaction ne peut
+  recrée pas une transaction fermée par un contrôle (relecture sans cache avant chaque
+  rafraîchissement), sauf dans une fenêtre de quelques millisecondes avec un cache objet
+  persistant. Une mise à jour morte n'est reprise qu'une fois : si sa transaction ne peut
   pas être retirée, le contrôle n'est pas reprogrammé (jamais à une date passée), l'extension
   n'est pas restaurée à nouveau, et la tentative est tracée dans l'option
   `g2rd_update_txn_recovery`.
+- Une nouvelle mise à jour protégée reprend d'abord une transaction morte pas encore reprise
+  (extension désactivée, fichiers à moitié remplacés), au lieu de l'écraser. La reprise réserve
+  la transaction (étape `recovering`) avant de restaurer : un contrôle simultané ne restaure pas
+  une seconde fois, et une mise à jour protégée demandée pendant ce temps est refusée avec le
+  message déjà connu de la plateforme (« another protected update is still running on this
+  site… retry in a few minutes »). La fermeture et le filet de shutdown ne touchent qu'à la
+  transaction de leur processus ; une mise à jour dont la transaction a été reprise pendant une
+  étape de plus de 10 minutes s'arrête avant de toucher à l'extension, avec une erreur explicite ;
+  un contrôle de reprise perdu est reprogrammé juste avant que les fichiers changent.
 - Après un rollback, la version retirée est bloquée pour les mises à jour automatiques de
   WordPress jusqu'à la version suivante.
 - Le plugin ne se rollback jamais lui-même. La capacité `restore_points` n'est annoncée dans

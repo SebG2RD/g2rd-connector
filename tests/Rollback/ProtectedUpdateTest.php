@@ -41,6 +41,8 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 	private array $single_events = [];
 	/** @var (\Closure(int): void)|null Appelé à chaque sonde loopback, avec son rang (0, 1, 2…). */
 	private ?\Closure $on_probe = null;
+	/** @var array<string, array<string, string>>|null Liste des extensions en cache (cf. cache_plugin_list()). */
+	private ?array $plugin_list = null;
 
 	protected function setUp(): void {
 		parent::setUp();
@@ -53,6 +55,7 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		$this->activated       = [];
 		$this->single_events   = [];
 		$this->on_probe        = null;
+		$this->plugin_list     = null;
 
 		// ── WordPress simulé ────────────────────────────────────────────────────
 		Functions\when( 'get_plugins' )->alias( fn (): array => $this->plugins_on_disk() );
@@ -66,6 +69,16 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 			function ( int $timestamp, string $hook ): bool {
 				$this->single_events[] = [ $timestamp, $hook ];
 				return true;
+			}
+		);
+		Functions\when( 'wp_next_scheduled' )->alias(
+			function ( string $hook ) {
+				foreach ( $this->single_events as [ $timestamp, $event_hook ] ) {
+					if ( $event_hook === $hook ) {
+						return $timestamp;
+					}
+				}
+				return false;
 			}
 		);
 		Functions\when( 'plugin_basename' )->alias( static fn ( string $f ): string => 'g2rd-connector/g2rd-connector.php' );
@@ -441,7 +454,328 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		self::assertSame( 'interrupted_unverified', PendingOutcomes::all()[0]['outcome'] );
 	}
 
+	// ── Une transaction morte est reprise avant d'en ouvrir une nouvelle ─────
+
+	/**
+	 * Incident du 23/09 : mise à jour tuée pendant l'étape « mise à jour » (extension
+	 * désactivée, fichiers à moitié remplacés), puis une autre mise à jour lancée plus
+	 * de 10 min après, avant tout contrôle du cron. La transaction morte n'est plus
+	 * écrasée : elle est reprise une fois, puis la nouvelle mise à jour s'ouvre.
+	 */
+	public function test_a_dead_transaction_of_another_plugin_is_recovered_once_before_the_update_opens(): void {
+		$file        = $this->make_plugin( 'autre', '1.0', [ 'assets/a.css' => 'a' ] );
+		$point       = ( new Snapshotter( $this->store, $this->plugins ) )->create( $file, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
+		$tree_before = $this->tree( $this->plugins . '/autre' );
+		$this->half_upgrade( 'autre' );
+		$this->dead_transaction( $file, $point['id'] );
+		$this->script_health( ok: 2, then_ok: 2 );
+
+		$outcome = CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+
+		self::assertSame( 'done', $outcome['status'] );
+		self::assertSame( ProtectedUpdate::OUTCOME_UPDATED, $outcome['result']['outcome'] );
+		self::assertSame( '2.0', $this->plugins_on_disk()[ self::FILE ]['Version'] );
+		self::assertSame( $tree_before, $this->tree( $this->plugins . '/autre' ), 'Extension de la mise à jour morte restaurée.' );
+		self::assertSame( [ $file ], $this->deactivated, 'Restaurée une fois.' );
+		self::assertTrue( $this->active, 'Réactivée.' );
+		self::assertSame( [ [ $file, 'recovered_rolled_back' ] ], $this->pending_outcomes(), 'Résultat consigné pour la plateforme.' );
+		self::assertTrue( $this->store->get( $point['id'] )['hold'] );
+		self::assertNull( UpdateTransaction::current() );
+
+		ProtectedUpdate::recover( time() + 3600 ); // Le contrôle du cron, plus tard.
+		self::assertSame( [ $file ], $this->deactivated, 'Pas de seconde restauration.' );
+		self::assertCount( 1, PendingOutcomes::all() );
+	}
+
+	/**
+	 * Même extension : la reprise rétablit la version d'origine, la mise à jour relancée
+	 * part de cette version. La liste des extensions, en cache comme dans WordPress,
+	 * est relue après la restauration.
+	 */
+	public function test_a_dead_transaction_of_the_same_plugin_is_recovered_before_the_update(): void {
+		$this->cache_plugin_list();
+		$point = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
+		( Plugin_Upgrader::$on_upgrade )(); // Mise à jour morte à moitié : en-tête 2.0, extension désactivée.
+		$this->dead_transaction( self::FILE, $point['id'] );
+		$this->script_health( ok: 2, then_ok: 2 );
+
+		$r = CommandExecutor::run( 'update_plugin', $this->payload( [] ) )['result'];
+
+		self::assertSame( ProtectedUpdate::OUTCOME_UPDATED, $r['outcome'] );
+		self::assertTrue( $r['updated'] );
+		self::assertSame( '1.0', $r['version_before'], 'Version rétablie par la reprise, pas celle de la mise à jour morte.' );
+		self::assertSame( '2.0', $r['version_after'] );
+		self::assertSame( [ self::FILE ], $this->deactivated, 'Une restauration.' );
+		self::assertSame( [ [ self::FILE, 'recovered_rolled_back' ] ], $this->pending_outcomes() );
+		self::assertNull( UpdateTransaction::current() );
+	}
+
+	/** Reprise en cours dans un autre processus (contrôle du cron) : la mise à jour est refusée, rien n'est touché. */
+	public function test_the_update_is_refused_while_a_recovery_is_running(): void {
+		$recovering = [
+			'id'               => 'morte',
+			'plugin_file'      => 'autre/autre.php',
+			'was_active'       => true,
+			'step'             => UpdateTransaction::STEP_RECOVERING,
+			'recovering_from'  => UpdateTransaction::STEP_UPGRADING,
+			'recovery_token'   => 'jeton-du-cron',
+			'restore_point_id' => 'p-autre',
+			'started_at'       => time() - 1000,
+			'updated_at'       => time() - 20,
+		];
+		$this->options[ UpdateTransaction::OPTION_KEY ] = $recovering;
+
+		$outcome = CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assertStringStartsWith( 'another protected update is still running on this site', $outcome['error'], 'Refus déjà connu de la plateforme.' );
+		self::assertStringContainsString( 'retry in a few minutes', $outcome['error'] );
+		self::assertSame( [], Plugin_Upgrader::$upgraded );
+		self::assertSame( [], $this->deactivated );
+		self::assertSame( $recovering, $this->options[ UpdateTransaction::OPTION_KEY ] );
+		self::assertSame( [], PendingOutcomes::all() );
+		self::assertSame( [], $this->single_events );
+	}
+
+	/** Le contrôle du cron tombe pendant la reprise que mène la mise à jour : une seule restauration. */
+	public function test_a_recovery_check_during_the_update_s_own_recovery_does_not_restore_again(): void {
+		$file = $this->make_plugin( 'autre', '1.0', [ 'assets/a.css' => 'a' ] );
+		$point = ( new Snapshotter( $this->store, $this->plugins ) )->create( $file, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
+		$this->half_upgrade( 'autre' );
+		$this->dead_transaction( $file, $point['id'] );
+		$this->script_health( ok: 2, then_ok: 2 );
+		$checked         = false;
+		$this->on_filter = function ( string $hook ) use ( &$checked ): void {
+			if ( ! $checked && 'g2rd_connector_snapshots_dir' === $hook && $this->recovery_running() ) {
+				$checked = true;
+				$this->as_another_process( static fn () => ProtectedUpdate::recover( time() + 30 ) );
+			}
+		};
+
+		$r = CommandExecutor::run( 'update_plugin', $this->payload( [] ) )['result'];
+
+		self::assertTrue( $checked, 'Le contrôle est bien tombé pendant la reprise.' );
+		self::assertSame( ProtectedUpdate::OUTCOME_UPDATED, $r['outcome'] );
+		self::assertSame( [ $file ], $this->deactivated, 'Une seule restauration.' );
+		self::assertSame( [ [ $file, 'recovered_rolled_back' ] ], $this->pending_outcomes() );
+	}
+
+	/** Une mise à jour demandée pendant la reprise du cron est refusée ; l'extension est restaurée une fois. */
+	public function test_an_update_requested_during_a_cron_recovery_is_refused(): void {
+		$file        = $this->make_plugin( 'autre', '1.0', [ 'assets/a.css' => 'a' ] );
+		$point       = ( new Snapshotter( $this->store, $this->plugins ) )->create( $file, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
+		$tree_before = $this->tree( $this->plugins . '/autre' );
+		$this->half_upgrade( 'autre' );
+		$this->dead_transaction( $file, $point['id'] );
+		$outcome         = null;
+		$this->on_filter = function ( string $hook ) use ( &$outcome ): void {
+			if ( null === $outcome && 'g2rd_connector_snapshots_dir' === $hook && $this->recovery_running() ) {
+				$this->as_another_process(
+					function () use ( &$outcome ): void {
+						$outcome = CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+					}
+				);
+			}
+		};
+
+		ProtectedUpdate::recover( time() ); // Le contrôle du cron.
+
+		self::assertIsArray( $outcome, 'La mise à jour a bien été demandée pendant la reprise.' );
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assertStringContainsString( 'still running', $outcome['error'] );
+		self::assertSame( [], Plugin_Upgrader::$upgraded );
+		self::assertSame( [ $file ], $this->deactivated, 'Une seule restauration.' );
+		self::assertSame( $tree_before, $this->tree( $this->plugins . '/autre' ) );
+		self::assertSame( [ [ $file, 'recovered_rolled_back' ] ], $this->pending_outcomes() );
+		self::assertNull( UpdateTransaction::current() );
+	}
+
+	// ── Seule la transaction du processus ───────────────────────────────────
+
+	/**
+	 * Création du point plus longue que 10 min : un contrôle du cron prend la mise à
+	 * jour pour morte et ferme sa transaction. Pas de mise à jour sans transaction :
+	 * la requête s'arrête avant de toucher à l'extension, avec un résultat explicite.
+	 */
+	public function test_the_update_stops_before_upgrading_when_its_transaction_was_taken_over(): void {
+		$this->script_health( ok: 2, then_ok: 2 );
+		$taken_over      = false;
+		$this->on_filter = function ( string $hook ) use ( &$taken_over ): void {
+			if ( ! $taken_over && 'g2rd_connector_snapshots_dir' === $hook && 2 === $this->response_index ) {
+				$taken_over = true;
+				$this->age_transaction( UpdateTransaction::STALE_AFTER_SECONDS + 100 );
+				$this->as_another_process( static fn () => ProtectedUpdate::recover( time() ) );
+			}
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', $this->payload( [ 'keep_on_success' => true, 'grace_seconds' => 3600 ] ) );
+
+		self::assertTrue( $taken_over );
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assertStringContainsString( 'the plugin was not updated', $outcome['error'] );
+		self::assertSame( [], Plugin_Upgrader::$upgraded, 'Aucune mise à jour sans transaction.' );
+		self::assertSame( '1.0', $this->plugins_on_disk()[ self::FILE ]['Version'] );
+		self::assertSame( [], $this->deactivated );
+		self::assertNull( UpdateTransaction::current() );
+		self::assertNull( UpdateTransaction::held() );
+	}
+
+	/** Filet de shutdown : jamais la transaction d'un autre processus. */
+	public function test_the_shutdown_net_leaves_alone_a_transaction_this_process_did_not_open(): void {
+		$other = [
+			'id'               => 'autre',
+			'plugin_file'      => 'autre/autre.php',
+			'was_active'       => true,
+			'step'             => UpdateTransaction::STEP_UPGRADING,
+			'restore_point_id' => 'p-autre',
+			'started_at'       => time() - 30,
+			'updated_at'       => time() - 10,
+		];
+		$this->options[ UpdateTransaction::OPTION_KEY ] = $other;
+
+		ProtectedUpdate::recover_on_shutdown();
+
+		self::assertSame( $other, $this->options[ UpdateTransaction::OPTION_KEY ] );
+		self::assertSame( [], PendingOutcomes::all() );
+		self::assertSame( [], $this->deactivated );
+	}
+
+	/** Ouverte par ce processus, mais reprise par le cron entre-temps : le filet ne la reprend pas une seconde fois. */
+	public function test_the_shutdown_net_leaves_alone_its_transaction_once_taken_over_by_a_recovery(): void {
+		UpdateTransaction::open( [ 'plugin_file' => self::FILE, 'was_active' => true ], time() - 1000 );
+		$reserved = array_merge(
+			$this->options[ UpdateTransaction::OPTION_KEY ],
+			[
+				'step'            => UpdateTransaction::STEP_RECOVERING,
+				'recovering_from' => UpdateTransaction::STEP_SNAPSHOT,
+				'recovery_token'  => 'jeton-du-cron',
+				'updated_at'      => time() - 5,
+			]
+		);
+		$this->options[ UpdateTransaction::OPTION_KEY ] = $reserved;
+
+		ProtectedUpdate::recover_on_shutdown();
+
+		self::assertSame( $reserved, $this->options[ UpdateTransaction::OPTION_KEY ] );
+		self::assertSame( [], PendingOutcomes::all() );
+	}
+
+	/** Et toujours la sienne : requête morte en route (erreur fatale pendant la mise à jour). */
+	public function test_the_shutdown_net_recovers_the_transaction_this_process_opened(): void {
+		$point       = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() );
+		$tree_before = $this->tree( $this->plugins . '/akismet' );
+		UpdateTransaction::open( [ 'plugin_file' => self::FILE, 'was_active' => true ], time() );
+		UpdateTransaction::step( UpdateTransaction::STEP_UPGRADING, [ 'restore_point_id' => $point['id'] ] );
+		( Plugin_Upgrader::$on_upgrade )();
+
+		ProtectedUpdate::recover_on_shutdown();
+
+		self::assertSame( $tree_before, $this->tree( $this->plugins . '/akismet' ) );
+		self::assertSame( [ [ self::FILE, 'recovered_rolled_back' ] ], $this->pending_outcomes() );
+		self::assertNull( UpdateTransaction::current() );
+	}
+
+	// ── Contrôle de reprise perdu ──────────────────────────────────────────
+
+	/**
+	 * Le contrôle programmé à l'ouverture a été perdu (liste des tâches réécrite en
+	 * même temps par un autre processus) : il est reprogrammé juste avant de toucher
+	 * aux fichiers, au lieu d'attendre la purge biquotidienne (jusqu'à 12 h).
+	 */
+	public function test_a_lost_recovery_check_is_scheduled_again_before_the_files_change(): void {
+		$this->script_health( ok: 2, then_ok: 2 );
+		$lost            = false;
+		$this->on_filter = function ( string $hook ) use ( &$lost ): void {
+			if ( ! $lost && 'g2rd_connector_snapshots_dir' === $hook && 2 === $this->response_index ) {
+				$lost                = true;
+				$this->single_events = [];
+			}
+		};
+		$before = time();
+
+		CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+
+		self::assertTrue( $lost );
+		self::assertCount( 1, $this->single_events, 'Reprogrammé, une fois.' );
+		[ $timestamp, $hook ] = $this->single_events[0];
+		self::assertSame( RestorePointPurgeJob::RECOVERY_HOOK, $hook );
+		self::assertGreaterThanOrEqual( $before + RestorePointPurgeJob::RECOVERY_CHECK_DELAY, $timestamp );
+		self::assertLessThanOrEqual( time() + RestorePointPurgeJob::RECOVERY_CHECK_DELAY, $timestamp );
+	}
+
 	// ── Outils ────────────────────────────────────────────────────────────────
+
+	/**
+	 * Mise à jour morte à moitié : en-tête 2.0, fichier ajouté, fichier retiré,
+	 * extension désactivée par le cœur.
+	 */
+	private function half_upgrade( string $slug ): void {
+		$dir = $this->plugins . '/' . $slug;
+		file_put_contents( $dir . '/' . $slug . '.php', "<?php\n/**\n * Plugin Name: $slug\n * Version: 2.0\n */\n" );
+		file_put_contents( $dir . '/inc/new-module.php', "<?php\n" );
+		unlink( $dir . '/assets/a.css' );
+		$this->active = false;
+	}
+
+	/**
+	 * Transaction d'une mise à jour morte pendant l'étape « mise à jour », écrite par
+	 * un autre processus (celui de la requête tuée), plus de 10 min plus tôt.
+	 */
+	private function dead_transaction( string $plugin_file, string $point_id ): void {
+		$this->options[ UpdateTransaction::OPTION_KEY ] = [
+			'plugin_file'      => $plugin_file,
+			'version_before'   => '1.0',
+			'was_active'       => true,
+			'network_active'   => false,
+			'id'               => 'transaction-morte',
+			'step'             => UpdateTransaction::STEP_UPGRADING,
+			'restore_point_id' => $point_id,
+			'started_at'       => time() - 1000,
+			'updated_at'       => time() - 900,
+		];
+	}
+
+	private function recovery_running(): bool {
+		$txn = UpdateTransaction::current();
+		return null !== $txn && UpdateTransaction::STEP_RECOVERING === $txn['step'];
+	}
+
+	/**
+	 * Exécute `$fn` comme un autre processus PHP : sans la transaction que tient
+	 * celui du test (statique, propre à chaque processus).
+	 */
+	private function as_another_process( callable $fn ): void {
+		$held = new \ReflectionProperty( UpdateTransaction::class, 'held' );
+		$mine = $held->getValue();
+		$held->setValue( null, null );
+		try {
+			$fn();
+		} finally {
+			$held->setValue( null, $mine );
+		}
+	}
+
+	/** Liste des extensions en cache, comme get_plugins() : relue après wp_clean_plugins_cache() seulement. */
+	private function cache_plugin_list(): void {
+		Functions\when( 'get_plugins' )->alias(
+			function (): array {
+				$this->plugin_list ??= $this->plugins_on_disk();
+				return $this->plugin_list;
+			}
+		);
+		Functions\when( 'wp_clean_plugins_cache' )->alias(
+			function (): void {
+				$this->plugin_list = null;
+			}
+		);
+	}
+
+	/**
+	 * @return list<array{0:string, 1:string}> Résultats consignés pour la plateforme (extension, résultat).
+	 */
+	private function pending_outcomes(): array {
+		return array_map( static fn ( array $o ): array => [ (string) $o['plugin_file'], (string) $o['outcome'] ], PendingOutcomes::all() );
+	}
 
 	/**
 	 * @param array<string, mixed> $extra

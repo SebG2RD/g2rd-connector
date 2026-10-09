@@ -184,7 +184,11 @@ final class CommandExecutor {
 			return ( new ProtectedUpdate( Services::make() ) )->run(
 				$file,
 				$payload,
-				static fn (): array => self::perform_plugin_upgrade( $file, $plugins )
+				// Liste relue au moment de la mise à jour : la reprise d'une mise à jour
+				// morte (ProtectedUpdate::run()) a pu restaurer cette extension entre-temps,
+				// et la version « avant » doit être celle restaurée. Sans reprise, get_plugins()
+				// rend la liste déjà en cache, identique à `$plugins`.
+				static fn (): array => self::perform_plugin_upgrade( $file, get_plugins() )
 			);
 		}
 

@@ -192,6 +192,35 @@ final class RestorePointPurgeScheduleTest extends TestCase {
 		self::assertLessThan( 3600, RestorePointPurgeJob::RECOVERY_CHECK_DELAY, 'Jamais plus tard que l\'ancien passage horaire.' );
 	}
 
+	/**
+	 * Contrôle de reprise perdu (liste des tâches réécrite en même temps par un autre
+	 * processus) : reprogrammé quand la mise à jour protégée va toucher aux fichiers.
+	 */
+	public function test_un_controle_de_reprise_perdu_est_reprogramme(): void {
+		RestorePointPurgeJob::ensure_recovery_check( self::T );
+
+		self::assertSame(
+			[
+				[
+					'hook'      => RestorePointPurgeJob::RECOVERY_HOOK,
+					'timestamp' => self::T + RestorePointPurgeJob::RECOVERY_CHECK_DELAY,
+					'schedule'  => false,
+				],
+			],
+			$this->events
+		);
+	}
+
+	/** Un contrôle déjà en attente : rien n'est écrit (il suit la transaction de lui-même). */
+	public function test_un_controle_de_reprise_en_attente_n_est_pas_reecrit(): void {
+		$this->add( self::T + RestorePointPurgeJob::RECOVERY_CHECK_DELAY, false, RestorePointPurgeJob::RECOVERY_HOOK );
+		Functions\expect( 'wp_schedule_single_event' )->never();
+
+		RestorePointPurgeJob::ensure_recovery_check( self::T + 300 );
+
+		self::assertSame( [ self::T + RestorePointPurgeJob::RECOVERY_CHECK_DELAY ], array_column( $this->events, 'timestamp' ) );
+	}
+
 	/** Un contrôle de reprise en attente ne retarde pas la migration de l'événement horaire. */
 	public function test_un_controle_de_reprise_en_attente_ne_retarde_pas_la_migration(): void {
 		$this->add( self::T, 'hourly' );

@@ -6,8 +6,9 @@
  * fonctionner même si le site n'est plus joignable ou plus enrôlé. À chaque
  * passage :
  *   1. reprise d'une transaction de mise à jour restée ouverte (requête morte) ;
- *   2. si une mise à jour protégée est EN COURS (transaction encore fraîche), arrêt
- *      ici : rien n'est supprimé, seul le contrôle de reprise est reprogrammé ;
+ *   2. si une mise à jour protégée, ou une reprise, est EN COURS (transaction
+ *      encore vivante), arrêt ici : rien n'est supprimé, seul le contrôle de reprise
+ *      est reprogrammé ;
  *   3. suppression des points dont le délai de grâce est écoulé ;
  *   4. suppression des points retenus (`hold`) au-delà de leur plafond ;
  *   5. plafond absolu par plugin ;
@@ -34,10 +35,11 @@
  *     avant l'usage unique ; cf. tests DirectLogin\GateTest) ;
  *   - la reprise d'une mise à jour protégée morte sans passer par le filet de
  *     shutdown (processus tué) : un contrôle ponctuel est programmé à l'ouverture
- *     de la transaction (schedule_recovery_check()), puis suivi tant qu'elle reste
- *     ouverte sans être morte — au plus RECOVERY_CHECK_DELAY après, au lieu d'une
- *     heure avant. Jamais reprogrammé dans le passé, ni pour une transaction morte
- *     que la reprise n'a pas pu retirer (cf. follow_open_transaction()).
+ *     de la transaction (schedule_recovery_check()), reprogrammé s'il a été perdu
+ *     quand les fichiers vont changer (ensure_recovery_check()), puis suivi tant
+ *     qu'elle reste ouverte sans être morte — au plus RECOVERY_CHECK_DELAY après, au
+ *     lieu d'une heure avant. Jamais reprogrammé dans le passé, ni pour une
+ *     transaction morte que la reprise n'a pas pu retirer (cf. follow_open_transaction()).
  *     Ce contrôle a son propre hook (RECOVERY_HOOK) et ne fait que la reprise :
  *     ni purge des points, ni purge des tickets.
  * Les points expirés restent jusqu'à 12 h de plus sur le disque (24 h si une mise
@@ -137,13 +139,14 @@ final class RestorePointPurgeJob {
 		ProtectedUpdate::recover( $now );
 
 		// recover() vient de reprendre une transaction morte : une transaction encore
-		// là et fraîche est une mise à jour protégée en cours dans un autre processus.
-		// Ses fichiers (point à `expires_at = now`, zip pas encore indexé) et l'index
-		// des points ne se touchent pas tant qu'elle n'est pas terminée. Une
-		// transaction morte encore là (reprise faite, mais close() n'a pas pu la
-		// retirer) ne protège plus rien : elle ne reporte pas la purge indéfiniment.
+		// là et vivante est une mise à jour protégée (ou une reprise) en cours dans un
+		// autre processus. Ses fichiers (point à `expires_at = now`, zip pas encore
+		// indexé, archive en cours de restauration) et l'index des points ne se
+		// touchent pas tant qu'elle n'est pas terminée. Une transaction déjà reprise
+		// mais encore là (close() n'a pas pu la retirer) ne protège plus rien : elle ne
+		// reporte pas la purge indéfiniment (cf. UpdateTransaction::is_live()).
 		$txn = UpdateTransaction::current();
-		if ( null !== $txn && ! UpdateTransaction::is_stale( $txn, $now ) ) {
+		if ( null !== $txn && UpdateTransaction::is_live( $txn, $now ) ) {
 			return null;
 		}
 
@@ -240,6 +243,24 @@ final class RestorePointPurgeJob {
 	}
 
 	/**
+	 * Reprogramme le contrôle de reprise s'il n'y en a plus en attente : l'événement
+	 * programmé à l'ouverture de la transaction a pu être perdu (la liste des tâches
+	 * planifiées est une seule option, qu'un autre processus peut réécrire en même
+	 * temps). Appelé quand la mise à jour protégée va toucher aux fichiers
+	 * (ProtectedUpdate::run()) : sans contrôle en attente, une requête tuée à ce
+	 * moment-là ne serait reprise qu'à la purge biquotidienne, jusqu'à 12 h plus tard.
+	 *
+	 * Rien n'est écrit si un contrôle attend déjà (il suit la transaction de lui-même,
+	 * cf. follow_open_transaction()) : lecture du tableau des tâches, déjà en mémoire.
+	 */
+	public static function ensure_recovery_check( int $from ): void {
+		if ( false !== wp_next_scheduled( self::RECOVERY_HOOK ) ) {
+			return;
+		}
+		self::schedule_recovery_check( $from );
+	}
+
+	/**
 	 * Désactivation : retire la purge et un contrôle de reprise en attente.
 	 */
 	public static function unschedule(): void {
@@ -248,15 +269,17 @@ final class RestorePointPurgeJob {
 	}
 
 	/**
-	 * Transaction encore ouverte mais pas encore déclarée morte : on repasse dès
-	 * qu'elle pourra l'être (contrôle de reprise seul).
+	 * Transaction encore ouverte mais pas encore déclarée morte (mise à jour, ou
+	 * reprise menée par un autre processus) : on repasse dès qu'elle pourra l'être
+	 * (contrôle de reprise seul).
 	 *
-	 * Rien n'est reprogrammé pour une transaction déjà morte : la reprise vient d'y
-	 * passer, et si elle est toujours là, c'est que close() n'a pas pu la retirer
-	 * (delete_option() en échec). Sa date `updated_at + RECOVERY_CHECK_DELAY` serait
-	 * déjà passée, WP-Cron relancerait le contrôle à chaque passage (environ une fois
-	 * par minute). La purge biquotidienne reste son filet (sans nouvelle restauration,
-	 * cf. ProtectedUpdate::recover()).
+	 * Rien n'est reprogrammé pour une transaction déjà morte ou déjà reprise (cf.
+	 * UpdateTransaction::is_live()) : la reprise vient d'y passer, et si elle est
+	 * toujours là, c'est que close() n'a pas pu la retirer (delete_option() en échec).
+	 * Sa date `updated_at + RECOVERY_CHECK_DELAY` serait déjà passée, WP-Cron
+	 * relancerait le contrôle à chaque passage (environ une fois par minute). La purge
+	 * biquotidienne reste son filet (sans nouvelle restauration, cf.
+	 * ProtectedUpdate::recover()).
 	 *
 	 * La date est aussi bornée à au moins une minute dans le futur. Avec la garde
 	 * ci-dessus, la borne ne joue que si RECOVERY_CHECK_DELAY venait à descendre
@@ -265,7 +288,7 @@ final class RestorePointPurgeJob {
 	 */
 	private static function follow_open_transaction( int $now ): void {
 		$txn = UpdateTransaction::current();
-		if ( null === $txn || UpdateTransaction::is_stale( $txn, $now ) ) {
+		if ( null === $txn || ! UpdateTransaction::is_live( $txn, $now ) ) {
 			return;
 		}
 		$from = (int) ( $txn['updated_at'] ?? $now );
