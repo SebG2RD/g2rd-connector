@@ -28,6 +28,15 @@ abstract class FilesystemTestCase extends TestCase {
 	 */
 	protected ?\Closure $on_filter = null;
 
+	/**
+	 * Rappels réellement exécutés par apply_filters() simulé, par filtre puis par
+	 * priorité. Vide par défaut : un test y branche les filtres qu'il veut voir agir
+	 * (cf. ProtectedUpdateTest, `upgrader_pre_install`).
+	 *
+	 * @var array<string, array<int, array<int, callable>>>
+	 */
+	protected array $filters = [];
+
 	protected function setUp(): void {
 		parent::setUp();
 
@@ -35,14 +44,25 @@ abstract class FilesystemTestCase extends TestCase {
 		$this->snapshots = $this->root . '/snapshots';
 		$this->plugins   = $this->root . '/plugins';
 		$this->on_filter = null;
+		$this->filters   = [];
 		mkdir( $this->plugins, 0777, true );
 
 		Functions\when( 'apply_filters' )->alias(
-			function ( string $hook, $value ) {
+			function ( string $hook, $value, ...$args ) {
 				if ( null !== $this->on_filter ) {
 					( $this->on_filter )( $hook );
 				}
-				return 'g2rd_connector_snapshots_dir' === $hook ? $this->snapshots : $value;
+				if ( 'g2rd_connector_snapshots_dir' === $hook ) {
+					return $this->snapshots;
+				}
+				$by_priority = $this->filters[ $hook ] ?? [];
+				ksort( $by_priority );
+				foreach ( $by_priority as $callbacks ) {
+					foreach ( $callbacks as $callback ) {
+						$value = $callback( $value, ...$args );
+					}
+				}
+				return $value;
 			}
 		);
 		Functions\when( 'wp_mkdir_p' )->alias( static fn ( string $dir ): bool => is_dir( $dir ) || mkdir( $dir, 0777, true ) );

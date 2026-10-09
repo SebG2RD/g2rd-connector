@@ -104,14 +104,26 @@ if ( ! class_exists( 'Automatic_Upgrader_Skin' ) ) {
 
 if ( ! class_exists( 'Plugin_Upgrader' ) ) {
 	/**
-	 * Doublure : le résultat de upgrade() est fixé par le test ; un callable permet
-	 * de simuler l'effet de bord réel (remplacement des fichiers du plugin).
+	 * Doublure : le résultat de upgrade() est fixé par le test ; des callables
+	 * permettent de simuler le téléchargement (sa durée) et l'effet de bord réel
+	 * (remplacement des fichiers du plugin). Entre les deux, comme
+	 * WP_Upgrader::install_package(), le filtre `upgrader_pre_install` : une WP_Error
+	 * arrête la mise à jour avant tout changement des fichiers.
 	 */
 	class Plugin_Upgrader {
 		/** @var mixed */
 		public static $next_result = true;
-		/** @var callable|null */
+		/** @var callable|null Téléchargement et décompression : avant le filtre `upgrader_pre_install`. */
+		public static $on_download = null;
+		/** @var callable|null Remplacement des fichiers : après le filtre, s'il n'a pas rendu de WP_Error. */
 		public static $on_upgrade = null;
+		/**
+		 * @var mixed Retour de upgrade() quand le filtre rend une WP_Error. Null : la
+		 *            WP_Error elle-même. WordPress ne garde le résultat d'install_package()
+		 *            qu'après une installation réussie : selon la version, upgrade() peut
+		 *            rendre autre chose (tableau vide).
+		 */
+		public static $result_on_pre_install_error = null;
 		/** @var list<string> */
 		public static array $upgraded = [];
 
@@ -120,6 +132,21 @@ if ( ! class_exists( 'Plugin_Upgrader' ) ) {
 		/** @return mixed */
 		public function upgrade( string $file ) {
 			self::$upgraded[] = $file;
+			if ( null !== self::$on_download ) {
+				( self::$on_download )( $file );
+			}
+			$pre_install = apply_filters(
+				'upgrader_pre_install',
+				true,
+				[
+					'plugin' => $file,
+					'type'   => 'plugin',
+					'action' => 'update',
+				]
+			);
+			if ( $pre_install instanceof WP_Error ) {
+				return self::$result_on_pre_install_error ?? $pre_install;
+			}
 			if ( null !== self::$on_upgrade ) {
 				( self::$on_upgrade )( $file );
 			}
@@ -127,9 +154,11 @@ if ( ! class_exists( 'Plugin_Upgrader' ) ) {
 		}
 
 		public static function reset(): void {
-			self::$next_result = true;
-			self::$on_upgrade  = null;
-			self::$upgraded    = [];
+			self::$next_result                 = true;
+			self::$on_download                 = null;
+			self::$on_upgrade                  = null;
+			self::$result_on_pre_install_error = null;
+			self::$upgraded                    = [];
 		}
 	}
 }

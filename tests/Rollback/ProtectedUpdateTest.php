@@ -16,6 +16,7 @@ use G2RD\Connector\Rollback\RestorePointStore;
 use G2RD\Connector\Rollback\Services;
 use G2RD\Connector\Rollback\Snapshotter;
 use G2RD\Connector\Rollback\UpdateTransaction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Plugin_Upgrader;
 use WP_Error;
 
@@ -100,7 +101,27 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		Functions\when( 'wp_update_themes' )->justReturn( null );
 		Functions\when( 'get_site_transient' )->justReturn( false );
 		Functions\when( 'delete_site_transient' )->justReturn( true );
-		Functions\when( 'add_filter' )->justReturn( true );
+		// Seul `upgrader_pre_install` agit vraiment (Plugin_Upgrader simulé l'applique
+		// avant de remplacer les fichiers) ; les autres filtres restent sans effet.
+		Functions\when( 'add_filter' )->alias(
+			function ( string $hook, $callback, int $priority = 10 ): bool {
+				if ( 'upgrader_pre_install' === $hook ) {
+					$this->filters[ $hook ][ $priority ][] = $callback;
+				}
+				return true;
+			}
+		);
+		Functions\when( 'remove_filter' )->alias(
+			function ( string $hook, $callback, int $priority = 10 ): bool {
+				foreach ( $this->filters[ $hook ][ $priority ] ?? [] as $i => $registered ) {
+					if ( $registered === $callback ) {
+						unset( $this->filters[ $hook ][ $priority ][ $i ] );
+						return true;
+					}
+				}
+				return false;
+			}
+		);
 		// HealthChecker
 		Functions\when( 'home_url' )->alias( static fn ( string $p = '' ): string => 'https://site.test' . $p );
 		Functions\when( 'admin_url' )->alias( static fn ( string $p = '' ): string => 'https://site.test/wp-admin/' . $p );
@@ -879,6 +900,196 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		$points = array_values( $this->store->all() );
 		self::assertCount( 1, $points );
 		self::assertTrue( $points[0]['hold'], 'Point gardé pour un rollback depuis la plateforme.' );
+	}
+
+	/**
+	 * Le téléchargement (ou le rafraîchissement des transients qui le précède) dure
+	 * plus de 10 min : un contrôle du cron prend la transaction AVANT que les fichiers
+	 * changent, restaure l'ancienne version (déjà en place), consigne
+	 * recovered_rolled_back et ferme. Juste avant de remplacer les fichiers, la mise à
+	 * jour voit que sa transaction n'est plus la sienne : Plugin_Upgrader s'arrête sans
+	 * rien toucher. Sans ce contrôle, la nouvelle version restait installée sans
+	 * contrôle de santé, et la reprise annonçait à tort l'ancienne.
+	 *
+	 * WordPress ne garde le résultat d'install_package() qu'après une installation
+	 * réussie : upgrade() peut rendre la WP_Error du filtre, ou autre chose (tableau
+	 * vide). Les deux cas s'arrêtent de la même façon.
+	 *
+	 * @param mixed $result_on_error Retour de Plugin_Upgrader::upgrade() quand le filtre rend une WP_Error (null : la WP_Error).
+	 */
+	#[DataProvider( 'pre_install_error_results' )]
+	public function test_an_update_taken_over_before_the_files_change_leaves_them_untouched( $result_on_error ): void {
+		$this->script_health( ok: 2, then_ok: 2 );
+		$tree_before                                  = $this->tree( $this->plugins . '/akismet' );
+		Plugin_Upgrader::$result_on_pre_install_error = $result_on_error;
+		Plugin_Upgrader::$on_download                 = function (): void {
+			$this->age_transaction( UpdateTransaction::STALE_AFTER_SECONDS + 100 ); // Le téléchargement dure plus de 10 min.
+			$this->as_another_process( static fn () => ProtectedUpdate::recover( time() ) );
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assertSame( 'protected update stopped before replacing the plugin files: its transaction was taken over by a recovery (a step took more than 10 minutes); the plugin was not updated, retry in a few minutes', $outcome['error'] );
+		self::assertSame( '1.0', $this->plugins_on_disk()[ self::FILE ]['Version'], 'Version 2.0 jamais copiée.' );
+		self::assertSame( $tree_before, $this->tree( $this->plugins . '/akismet' ) );
+		self::assertSame( [ self::FILE ], $this->deactivated, 'Une seule restauration : celle de la reprise.' );
+		self::assertTrue( $this->active );
+		self::assertSame( [ [ self::FILE, 'recovered_rolled_back' ] ], $this->pending_outcomes(), 'Un seul résultat, juste : l\'ancienne version est en place.' );
+		self::assertSame( 2, $this->response_index, 'Aucune mesure de santé.' );
+		$points = array_values( $this->store->all() );
+		self::assertCount( 1, $points );
+		self::assertTrue( $points[0]['hold'] );
+		self::assertNull( UpdateTransaction::current() );
+		self::assertSame( [], array_filter( $this->filters['upgrader_pre_install'] ?? [] ), 'Filtre retiré après la mise à jour.' );
+	}
+
+	/** @return array<string, array{0: mixed}> */
+	public static function pre_install_error_results(): array {
+		return [
+			'upgrade() rend la WP_Error' => [ null ],
+			'upgrade() rend un tableau vide' => [ [] ],
+		];
+	}
+
+	/**
+	 * Même prise avant la copie, mais la reprise restaure encore (autre processus) :
+	 * la mise à jour ne déplace pas le même dossier qu'elle en même temps. Ni copie, ni
+	 * désactivation par la requête ; la réservation de la reprise reste en place.
+	 */
+	public function test_an_update_taken_over_by_a_running_recovery_before_the_files_change_does_not_touch_them(): void {
+		$this->script_health( ok: 2, then_ok: 2 );
+		$tree_before                  = $this->tree( $this->plugins . '/akismet' );
+		$reserved                     = null;
+		Plugin_Upgrader::$on_download = function () use ( &$reserved ): void {
+			$this->age_transaction( UpdateTransaction::STALE_AFTER_SECONDS + 100 );
+			$this->as_another_process(
+				static function () use ( &$reserved ): void {
+					$reserved = UpdateTransaction::reserve( (array) UpdateTransaction::current(), time() );
+				}
+			);
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+
+		self::assertIsArray( $reserved, 'La reprise a bien réservé la transaction.' );
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assertStringContainsString( 'stopped before replacing the plugin files', $outcome['error'] );
+		self::assertSame( $tree_before, $this->tree( $this->plugins . '/akismet' ), 'Fichiers intacts.' );
+		self::assertSame( [], $this->deactivated );
+		self::assertTrue( $this->active );
+		self::assertSame( $reserved, $this->options[ UpdateTransaction::OPTION_KEY ] ?? null );
+		self::assertSame( [], PendingOutcomes::all(), 'Le résultat est celui de la reprise, à venir.' );
+		self::assertSame( 2, $this->response_index );
+	}
+
+	/** Téléchargement lent sans reprise : le contrôle d'avant la copie rafraîchit la transaction, la mise à jour continue. */
+	public function test_the_check_before_the_files_change_refreshes_a_live_update(): void {
+		$this->script_health( ok: 2, then_ok: 2 );
+		$refreshed                    = null;
+		Plugin_Upgrader::$on_download = function (): void {
+			$this->age_transaction( UpdateTransaction::STALE_AFTER_SECONDS - 10 );
+		};
+		$upgrade                     = Plugin_Upgrader::$on_upgrade;
+		Plugin_Upgrader::$on_upgrade = function () use ( $upgrade, &$refreshed ): void {
+			$refreshed = UpdateTransaction::current();
+			$upgrade();
+		};
+
+		$r = CommandExecutor::run( 'update_plugin', $this->payload( [] ) )['result'];
+
+		self::assertSame( ProtectedUpdate::OUTCOME_UPDATED, $r['outcome'] );
+		self::assertIsArray( $refreshed );
+		self::assertSame( UpdateTransaction::STEP_UPGRADING, $refreshed['step'] );
+		self::assertGreaterThanOrEqual( time() - 5, $refreshed['updated_at'], 'Rafraîchie juste avant la copie.' );
+		self::assertNotEmpty( $refreshed['restore_point_id'], 'Le point reste attaché à la transaction.' );
+		self::assertSame( [], array_filter( $this->filters['upgrader_pre_install'] ?? [] ) );
+	}
+
+	/**
+	 * La copie elle-même dépasse 10 min : la reprise prend la transaction, puis le cœur
+	 * échoue. L'erreur du cœur remonte, avec la prise : la plateforme reçoit aussi le
+	 * résultat de la reprise et doit pouvoir relier les deux.
+	 */
+	public function test_an_upgrade_error_after_a_takeover_says_so(): void {
+		$this->script_health( ok: 2, then_ok: 2 );
+		Plugin_Upgrader::$next_result = new WP_Error( 'copy_failed', 'Could not copy file.' );
+		$upgrade                      = Plugin_Upgrader::$on_upgrade;
+		Plugin_Upgrader::$on_upgrade  = function () use ( $upgrade ): void {
+			$upgrade();
+			$this->age_transaction( UpdateTransaction::STALE_AFTER_SECONDS + 100 );
+			$this->as_another_process( static fn () => ProtectedUpdate::recover( time() ) );
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assertSame( 'Could not copy file. (its transaction was taken over by a recovery, which reports its own result)', $outcome['error'] );
+		self::assertSame( [ [ self::FILE, 'recovered_rolled_back' ] ], $this->pending_outcomes() );
+		self::assertSame( [ self::FILE ], $this->deactivated, 'Une seule restauration : celle de la reprise.' );
+	}
+
+	// ── Reprise qui meurt à chaque tentative ─────────────────────────────────
+
+	/**
+	 * Chaque reprise meurt pendant la restauration (erreur fatale : code tiers lancé par
+	 * la désactivation, archive qui fait planter l'extraction) : son `finally` ne
+	 * s'exécute pas, aucun résultat n'est consigné, l'extension reste désactivée, et le
+	 * contrôle reprogrammé la relance environ toutes les 11 min. Après
+	 * MAX_RECOVERY_ATTEMPTS reprises commencées, la suivante ne restaure plus : elle
+	 * consigne recovery_failed, ferme la transaction et réactive l'extension telle quelle.
+	 */
+	public function test_a_recovery_that_keeps_dying_gives_up_reports_and_reactivates(): void {
+		$point = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
+		( Plugin_Upgrader::$on_upgrade )(); // Mise à jour morte à moitié : en-tête 2.0, extension désactivée.
+		$this->dead_transaction( self::FILE, $point['id'] );
+		$tree_before = $this->tree( $this->plugins . '/akismet' );
+		// Chaque reprise réserve la transaction, puis son processus meurt : rien d'autre n'est écrit.
+		for ( $i = 0; $i < UpdateTransaction::MAX_RECOVERY_ATTEMPTS; $i++ ) {
+			$this->as_another_process(
+				static function (): void {
+					self::assertNotNull( UpdateTransaction::reserve( (array) UpdateTransaction::current(), time() ) );
+				}
+			);
+			$this->age_transaction( UpdateTransaction::STALE_AFTER_SECONDS + 100 );
+		}
+
+		ProtectedUpdate::recover( time() ); // Le contrôle suivant.
+
+		self::assertSame( [], $this->deactivated, 'Plus de restauration : elle rejouerait la même erreur fatale.' );
+		self::assertSame( $tree_before, $this->tree( $this->plugins . '/akismet' ), 'Fichiers laissés tels quels.' );
+		self::assertSame( [ self::FILE ], $this->activated, 'Extension réactivée telle quelle.' );
+		self::assertTrue( $this->active );
+		$pending = PendingOutcomes::all();
+		self::assertCount( 1, $pending );
+		self::assertSame( 'recovery_failed', $pending[0]['outcome'] );
+		self::assertSame( UpdateTransaction::STEP_UPGRADING, $pending[0]['step'] );
+		self::assertStringContainsString( 'gave up after ' . UpdateTransaction::MAX_RECOVERY_ATTEMPTS . ' recovery attempts', $pending[0]['detail'] );
+		self::assertStringContainsString( 'roll it back from the platform', $pending[0]['detail'] );
+		self::assertTrue( $this->store->get( $point['id'] )['hold'], 'Point gardé pour un rollback manuel.' );
+		self::assertNull( UpdateTransaction::current() );
+
+		ProtectedUpdate::recover( time() + 3600 ); // Le contrôle reprogrammé : plus rien à faire.
+		self::assertCount( 1, PendingOutcomes::all() );
+	}
+
+	/** Jusqu'à MAX_RECOVERY_ATTEMPTS reprises commencées, la restauration est tentée (délai dépassé passager, par exemple). */
+	public function test_a_recovery_still_restores_up_to_the_last_allowed_attempt(): void {
+		$point       = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
+		$tree_before = $this->tree( $this->plugins . '/akismet' );
+		( Plugin_Upgrader::$on_upgrade )();
+		$this->dead_transaction( self::FILE, $point['id'] );
+		for ( $i = 1; $i < UpdateTransaction::MAX_RECOVERY_ATTEMPTS; $i++ ) {
+			$this->as_another_process( static fn () => UpdateTransaction::reserve( (array) UpdateTransaction::current(), time() ) );
+			$this->age_transaction( UpdateTransaction::STALE_AFTER_SECONDS + 100 );
+		}
+
+		ProtectedUpdate::recover( time() );
+
+		self::assertSame( $tree_before, $this->tree( $this->plugins . '/akismet' ) );
+		self::assertSame( [ self::FILE ], $this->deactivated );
+		self::assertSame( [ [ self::FILE, 'recovered_rolled_back' ] ], $this->pending_outcomes() );
+		self::assertNull( UpdateTransaction::current() );
 	}
 
 	// ── Trace de reprise : seulement sur sa propre réservation ───────────────

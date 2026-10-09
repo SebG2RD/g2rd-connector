@@ -351,6 +351,33 @@ final class UpdateTransactionTest extends TestCase {
 		self::assertTrue( UpdateTransaction::files_may_be_dirty( $stored ), 'La restauration interrompue a pu laisser des fichiers à moitié remplacés.' );
 	}
 
+	/**
+	 * Chaque réservation compte une reprise commencée, y compris celle d'une reprise
+	 * morte en route : au-delà de MAX_RECOVERY_ATTEMPTS, la reprise ne restaure plus
+	 * (cf. ProtectedUpdate::recover()).
+	 */
+	public function test_chaque_reservation_compte_une_reprise_commencee(): void {
+		$dead = $this->dead_transaction();
+		$this->options[ UpdateTransaction::OPTION_KEY ] = $dead;
+		self::assertSame( 0, UpdateTransaction::recovery_attempts( $dead ), 'Transaction jamais reprise (ou écrite par une version d\'avant).' );
+
+		$first = UpdateTransaction::reserve( $dead, self::NOW );
+		self::assertNotNull( $first );
+		self::assertSame( 1, UpdateTransaction::recovery_attempts( $first ) );
+
+		// La reprise meurt en route ; le contrôle suivant la voit morte et la reprend.
+		$later  = self::NOW + UpdateTransaction::STALE_AFTER_SECONDS + 100;
+		$second = UpdateTransaction::reserve( $first, $later );
+		self::assertNotNull( $second );
+		self::assertSame( 2, UpdateTransaction::recovery_attempts( $second ) );
+		self::assertSame( 2, UpdateTransaction::recovery_attempts( $this->stored() ), 'Compté en base, pas seulement dans la copie rendue.' );
+
+		// Le filet de shutdown reprend de force la réservation de ce processus : une tentative de plus.
+		$third = UpdateTransaction::reserve( $second, $later + 1, true );
+		self::assertNotNull( $third );
+		self::assertSame( 3, UpdateTransaction::recovery_attempts( $third ) );
+	}
+
 	public function test_une_reprise_compte_comme_fichiers_peut_etre_modifies_selon_l_etape_reprise(): void {
 		$recovering = [
 			'plugin_file' => 'a/a.php',

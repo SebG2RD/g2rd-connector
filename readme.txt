@@ -132,17 +132,30 @@ Lighter on the server: fewer WordPress boots and fewer calls to the manager, sam
 * **Fix: recoveries, protected updates and manual rollbacks no longer cross each other.** A
   recovery run by the cron arms the shutdown handler and keeps a one-off check pending before it
   restores anything: a recovery killed mid-way is taken over in about 11 minutes instead of
-  waiting up to 12 hours for the purge. A protected update whose transaction was taken over while
-  it was updating stops right after the update with an explicit error: no health measure, no
-  second restore at the same time, no `updated` or `not_updated` result (the recovery restores the
-  previous version and reports its own result). Taken over during the health check, it does not
-  roll back without its transaction: it fails with an explicit error and keeps the restore point
-  for a rollback from the platform. A manual rollback (`rollback_plugin`) is refused with the same
-  "another protected update is still running on this site… retry in a few minutes" message while
-  a protected update or a recovery is running; a dead transaction does not block it. A recovery
-  that outlived its reservation no longer marks the next recovery as done. The transaction is
-  re-read even when it was read as missing earlier in the request (WordPress `notoptions` cache),
-  and the `g2rd_update_txn_recovery` record is removed along with its transaction.
+  waiting up to 12 hours for the purge. Right before WordPress replaces the plugin files
+  (`upgrader_pre_install` filter, before the plugin is deactivated), a protected update refreshes
+  its transaction; if a recovery took it over during a download or transient refresh longer than
+  10 minutes, the update stops there with an explicit error ("protected update stopped before
+  replacing the plugin files… the plugin was not updated, retry in a few minutes"): the new
+  version is never copied after the recovery put the previous one back, nor while it is still
+  restoring. A protected update whose transaction was taken over while the files were being
+  replaced stops right after the update with an explicit error: no health measure, no second
+  restore at the same time, no `updated` or `not_updated` result (the recovery restores the
+  previous version and reports its own result); if the update itself fails after such a takeover,
+  its error says so ("its transaction was taken over by a recovery, which reports its own
+  result"). Taken over during the health check, it does not roll back without its transaction: it
+  fails with an explicit error and keeps the restore point for a rollback from the platform (known
+  limit: it takes a health measure longer than 10 minutes). A recovery that died while restoring
+  is no longer retried forever: after 3 recovery attempts that did not finish (a fatal error
+  replayed each time), the next one does not restore, reports `recovery_failed` with an explicit
+  detail, keeps the restore point and reactivates the plugin as it is if it was active, instead of
+  leaving it deactivated with no result for the platform. A manual rollback (`rollback_plugin`)
+  is refused with the same "another protected update is still running on this site… retry in a
+  few minutes" message while a protected update or a recovery is running; a dead transaction
+  does not block it. A recovery that outlived its reservation no longer marks the next recovery
+  as done. The transaction is re-read even when it was read as missing earlier in the request
+  (WordPress `notoptions` cache), and the `g2rd_update_txn_recovery` record is removed along
+  with its transaction.
 * **Uninstall also removes the failed-login counter** (`g2rd_connector_login_failed_window`
   transient), on every site of a multisite network.
 * **Performance: one SQL query less per page view.** The `g2rd_connector_settings` option

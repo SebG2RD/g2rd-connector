@@ -53,6 +53,34 @@ final class ProtectedUpdate {
 	 */
 	private const TAKEN_OVER_BEFORE_ROLLBACK = 'protected update found the site broken after updating the plugin, but a recovery took over its transaction (a step took more than 10 minutes); the plugin was not rolled back automatically: its restore point is kept, roll it back from the platform';
 
+	/**
+	 * La transaction a été prise par une reprise AVANT le remplacement des fichiers
+	 * (téléchargement, ou rafraîchissement des transients, de plus de 10 minutes) :
+	 * Plugin_Upgrader s'est arrêté sans toucher à l'extension (cf. run()).
+	 */
+	private const TAKEN_OVER_BEFORE_INSTALL = 'protected update stopped before replacing the plugin files: its transaction was taken over by a recovery (a step took more than 10 minutes); the plugin was not updated, retry in a few minutes';
+
+	/**
+	 * Ajouté à l'erreur de la mise à jour elle-même quand une reprise a pris la
+	 * transaction entre-temps : la plateforme reçoit aussi le résultat de la reprise,
+	 * et doit pouvoir relier les deux.
+	 */
+	private const TAKEN_OVER_SUFFIX = ' (its transaction was taken over by a recovery, which reports its own result)';
+
+	/**
+	 * Détail du résultat `recovery_failed` quand les reprises précédentes sont toutes
+	 * mortes en route (cf. recover()). `%1$d` : nombre de reprises, `%2$s` : ce qui est
+	 * fait de l'extension.
+	 */
+	private const RECOVERY_GAVE_UP = 'recovery gave up after %1$d recovery attempts that did not finish (each one stopped while restoring the plugin from its restore point, probably on a fatal error or a time limit); the plugin was not restored and %2$s; check its files and the PHP error log, then roll it back from the platform: its restore point is kept';
+
+	/**
+	 * Priorité du contrôle d'avant remplacement des fichiers sur `upgrader_pre_install` :
+	 * avant Plugin_Upgrader::deactivate_plugin_before_upgrade() (10), qui laisse passer
+	 * une WP_Error sans désactiver l'extension.
+	 */
+	private const PRE_INSTALL_PRIORITY = 9;
+
 	/** Filet de shutdown déjà armé dans ce processus (cf. arm_shutdown_net()). */
 	private static bool $shutdown_net_armed = false;
 
@@ -116,9 +144,10 @@ final class ProtectedUpdate {
 		// morte, tant qu'aucune étape ne dépasse la durée supposée (cf.
 		// RestorePointPurgeJob::RECOVERY_CHECK_DELAY). Au-delà, si un contrôle a fermé
 		// ou réservé la transaction entre-temps, step() et touch() ne la recréent pas,
-		// et la mise à jour s'arrête : avant de toucher à l'extension, ou, après la
-		// mise à jour, sans plus rien mesurer ni restaurer — la reprise s'en charge
-		// (cf. plus bas et stop_taken_over()).
+		// et la mise à jour s'arrête : avant de toucher à l'extension (avant la mise à
+		// jour, ou juste avant le remplacement des fichiers, cf. PreInstallGuard), ou,
+		// après la mise à jour, sans plus rien mesurer ni restaurer — la reprise s'en
+		// charge (cf. plus bas et stop_taken_over()).
 
 		// ── Référence de santé, AVANT tout changement ────────────────────────────
 		$baseline = $s->health->measure();
@@ -168,21 +197,50 @@ final class ProtectedUpdate {
 		RestorePointPurgeJob::ensure_recovery_check( time() );
 
 		// ── Mise à jour (chemin historique, inchangé) ────────────────────────────
+		// Le rafraîchissement des transients, le téléchargement et la décompression
+		// peuvent dépasser 10 minutes à eux seuls : une reprise prend alors la
+		// transaction AVANT que les fichiers changent, et restaure l'ancienne version,
+		// encore en place. Copier la nouvelle ensuite la laisserait installée sans
+		// contrôle de santé (la reprise annonçant l'ancienne), ou déplacerait le même
+		// dossier que la reprise en même temps. D'où un dernier contrôle juste avant le
+		// remplacement des fichiers (cf. PreInstallGuard) : il rafraîchit la
+		// transaction, ou arrête Plugin_Upgrader sans rien toucher si elle n'est plus
+		// celle de cette requête.
+		$guard = new PreInstallGuard( $plugin_file, self::TAKEN_OVER_BEFORE_INSTALL );
+		add_filter( 'upgrader_pre_install', $guard, self::PRE_INSTALL_PRIORITY, 2 );
 		try {
 			$result = $perform_upgrade();
 		} catch ( \Throwable $e ) {
+			if ( $guard->stopped ) {
+				$this->stop_taken_over( $point['id'], $hold_until, self::TAKEN_OVER_BEFORE_INSTALL );
+			}
+			// Lue avant close(), qui oublie la transaction tenue.
+			$taken_over = null === UpdateTransaction::held();
 			// WordPress ≥ 6.3 remet lui-même les fichiers d'origine quand l'upgrade échoue ;
 			// le point est retenu jusqu'à résolution (design §5.6), l'erreur remonte comme avant.
 			$s->store->hold( $point['id'], $hold_until );
 			UpdateTransaction::close();
+			if ( $taken_over ) {
+				// Message déjà échappé par celui qui l'a levé (CommandExecutor), suffixe fixe.
+				throw new \RuntimeException( $e->getMessage() . self::TAKEN_OVER_SUFFIX, 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- cf. ci-dessus.
+			}
 			throw $e;
+		} finally {
+			remove_filter( 'upgrader_pre_install', $guard, self::PRE_INSTALL_PRIORITY );
+		}
+		if ( $guard->stopped ) {
+			// Plugin_Upgrader ne rend pas toujours l'erreur du contrôle (WordPress ne garde
+			// le résultat d'install_package() qu'après une installation réussie) : même
+			// arrêt que ci-dessus, rien n'a changé sur l'extension.
+			$this->stop_taken_over( $point['id'], $hold_until, self::TAKEN_OVER_BEFORE_INSTALL );
 		}
 
 		if ( true !== ( $result['updated'] ?? false ) ) {
 			if ( null === UpdateTransaction::held() ) {
-				// Prise par une reprise pendant la mise à jour : la version relue est
-				// peut-être déjà celle que la reprise a restaurée. Son point lui sert :
-				// ni suppression, ni résultat « not_updated ».
+				// Prise par une reprise pendant le remplacement des fichiers (après le
+				// contrôle d'avant copie) : la version relue est peut-être déjà celle que
+				// la reprise a restaurée. Son point lui sert : ni suppression, ni résultat
+				// « not_updated ».
 				$this->stop_taken_over( $point['id'], $hold_until, self::TAKEN_OVER_WHILE_UPDATING );
 			}
 			// Rien n'a changé (version inchangée, licence premium…) : le point n'a pas de raison d'être.
@@ -197,10 +255,11 @@ final class ProtectedUpdate {
 
 		// ── Contrôle de santé, sur le NOUVEAU code ───────────────────────────────
 		if ( ! UpdateTransaction::step( UpdateTransaction::STEP_HEALTH ) ) {
-			// Prise par une reprise pendant la mise à jour (étape d'origine `upgrading`) :
-			// elle restaure l'ancienne version. Mesurer, rendre « updated » ou restaurer
-			// à notre tour contredirait son résultat, ou déplacerait le même dossier
-			// qu'elle en même temps.
+			// Prise par une reprise pendant le remplacement des fichiers (après le
+			// contrôle d'avant copie, étape d'origine `upgrading`) : elle restaure
+			// l'ancienne version. Mesurer, rendre « updated » ou restaurer à notre tour
+			// contredirait son résultat, ou déplacerait le même dossier qu'elle en même
+			// temps.
 			$this->stop_taken_over( $point['id'], $hold_until, self::TAKEN_OVER_WHILE_UPDATING );
 		}
 		$this->invalidate_opcache( $plugin_file );
@@ -238,6 +297,15 @@ final class ProtectedUpdate {
 			// ne touche pas aux fichiers. Pas de restauration sans transaction pour
 			// autant : si cette requête mourait en route, personne ne remettrait
 			// l'extension en état, et la plateforme a pu passer à la commande suivante.
+			//
+			// Limite connue et acceptée (relecture du 2026-10-09) : une version mesurée
+			// comme cassée reste alors en place, la reprise ne consigne
+			// qu'`interrupted_unverified` et la plateforme reçoit l'erreur ci-dessous,
+			// qui demande un rollback manuel. Il faut que la mesure d'après mise à jour
+			// (deux sondes de 15 s au plus) dépasse 10 minutes. Attendre la fin de la
+			// reprise puis rouvrir une transaction ferait rendre deux résultats
+			// contradictoires (`interrupted_unverified` et `auto_rolled_back`) pour la
+			// même mise à jour.
 			$this->stop_taken_over( $point['id'], $hold_until, self::TAKEN_OVER_BEFORE_ROLLBACK );
 		}
 		$version_after = (string) ( $result['version_after'] ?? '' );
@@ -342,6 +410,11 @@ final class ProtectedUpdate {
 	 * passages suivants ne font que retenter la fermeture — sans quoi chacun
 	 * restaurerait l'extension à nouveau et consignerait un nouveau résultat.
 	 *
+	 * Au-delà de UpdateTransaction::MAX_RECOVERY_ATTEMPTS reprises commencées sur la
+	 * même transaction (toutes mortes en route, sans résultat), la reprise ne restaure
+	 * plus : elle consigne `recovery_failed`, ferme la transaction, puis réactive
+	 * l'extension telle quelle si elle était active.
+	 *
 	 * @param bool $force Filet de shutdown : reprend la transaction que tient ce
 	 *                    processus, même fraîche — et aucune autre.
 	 * @return bool Vrai si une transaction a été reprise (fichiers peut-être restaurés).
@@ -397,16 +470,34 @@ final class ProtectedUpdate {
 			'step'             => $reserved['recovering_from'] ?? $reserved['step'],
 		];
 
+		// Réactivation sans restauration, une fois le résultat consigné (cf. plus bas).
+		$reactivate_as_is = false;
 		try {
 			if ( UpdateTransaction::files_may_be_dirty( $reserved ) && '' !== $point_id ) {
 				$services = Services::make();
 				$point    = $services->store->get( $point_id );
-				if ( null !== $point ) {
+				if ( null === $point ) {
+					$outcome['outcome'] = 'recovered_no_restore_point';
+				} elseif ( UpdateTransaction::recovery_attempts( $reserved ) > UpdateTransaction::MAX_RECOVERY_ATTEMPTS ) {
+					// Les reprises précédentes sont toutes mortes en route, sans doute sur la
+					// même erreur fatale (code tiers lancé par la désactivation, archive qui
+					// fait planter l'extraction) : leur `finally` ne s'est pas exécuté, rien
+					// n'a été consigné, et l'extension est restée désactivée. Restaurer encore
+					// rejouerait la même fin, toutes les 11 minutes environ. On s'arrête :
+					// résultat explicite, point gardé pour un rollback manuel, extension
+					// réactivée telle quelle si elle était active.
+					$reactivate_as_is   = ! empty( $reserved['was_active'] );
+					$outcome['outcome'] = 'recovery_failed';
+					$outcome['detail']  = sprintf(
+						self::RECOVERY_GAVE_UP,
+						UpdateTransaction::recovery_attempts( $reserved ) - 1, // Celle-ci exclue.
+						$reactivate_as_is ? 'is reactivated as it is' : 'is left inactive, as it was before the update'
+					);
+					$services->store->hold( $point_id, $now + RestorePointPurgeJob::DEFAULT_HOLD_MAX_SECONDS );
+				} else {
 					( new self( $services ) )->restore( $plugin_file, $point, (string) $point['version'], null, ! empty( $reserved['was_active'] ), ! empty( $reserved['network_active'] ) );
 					$services->store->hold( $point_id, $now + RestorePointPurgeJob::DEFAULT_HOLD_MAX_SECONDS );
 					$outcome['outcome'] = 'recovered_rolled_back';
-				} else {
-					$outcome['outcome'] = 'recovered_no_restore_point';
 				}
 			} else {
 				// Rien à restaurer : la mise à jour a été interrompue avant de toucher à
@@ -420,7 +511,8 @@ final class ProtectedUpdate {
 			}
 		} catch ( \Throwable $e ) {
 			$outcome['outcome'] = 'recovery_failed';
-			$outcome['detail']  = $e->getMessage();
+			// Abandon (ci-dessus) : son explication reste, l'erreur du point la complète.
+			$outcome['detail'] = isset( $outcome['detail'] ) ? $outcome['detail'] . ' (' . $e->getMessage() . ')' : $e->getMessage();
 		}
 
 		PendingOutcomes::add( $outcome, $now );
@@ -435,6 +527,17 @@ final class ProtectedUpdate {
 		$left = UpdateTransaction::current();
 		if ( null !== $left && UpdateTransaction::same_reservation( $left, $reserved ) ) {
 			UpdateTransaction::record_recovery_attempt( $reserved, (string) $outcome['outcome'], $now );
+		}
+
+		if ( $reactivate_as_is ) {
+			// APRÈS le résultat, la fermeture et la trace : si la réactivation mourait à
+			// son tour (code de l'extension chargé par activate_plugin()), la plateforme
+			// est déjà prévenue, et aucune reprise ne rejouera cette fin.
+			try {
+				CommandExecutor::force_reactivate( $plugin_file, ! empty( $reserved['network_active'] ) );
+			} catch ( \Throwable $e ) {
+				unset( $e );
+			}
 		}
 		return true;
 	}
@@ -467,9 +570,9 @@ final class ProtectedUpdate {
 	}
 
 	/**
-	 * Arrêt d'une mise à jour dont une reprise a pris la transaction, APRÈS la mise à
-	 * jour : plus rien n'est mesuré ni restauré ici, la reprise s'en charge et
-	 * consigne son résultat. Le point est retenu (la reprise peut en avoir besoin,
+	 * Arrêt d'une mise à jour dont une reprise a pris la transaction, juste avant le
+	 * remplacement des fichiers ou après la mise à jour : plus rien n'est copié,
+	 * mesuré ni restauré ici, la reprise s'en charge et consigne son résultat. Le point est retenu (la reprise peut en avoir besoin,
 	 * ou un rollback manuel), la transaction n'est pas retirée (close() ne retire que
 	 * la sienne).
 	 *

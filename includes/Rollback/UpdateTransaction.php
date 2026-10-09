@@ -56,6 +56,17 @@ final class UpdateTransaction {
 	public const STEP_RECOVERING = 'recovering';
 
 	/**
+	 * Reprises commencées (réservations, cf. reserve() et `recovery_attempts`) au-delà
+	 * desquelles la reprise ne restaure plus l'extension (cf. ProtectedUpdate::recover()).
+	 * Une reprise qui meurt en route (erreur fatale pendant la restauration) ne
+	 * consigne rien et laisse l'extension désactivée : la même cause la ferait mourir
+	 * de nouveau à chaque passage du contrôle, toutes les 11 minutes environ. Trois
+	 * tentatives : celle du contrôle, celle du filet de shutdown qui la suit aussitôt,
+	 * puis celle du contrôle suivant (cause passagère : délai dépassé, serveur chargé).
+	 */
+	public const MAX_RECOVERY_ATTEMPTS = 3;
+
+	/**
 	 * Refus d'une opération sur les fichiers d'une extension pendant une mise à jour
 	 * protégée ou une reprise (ProtectedUpdate::run(), RestoreCommands::rollback_plugin()).
 	 * Déjà connu de la plateforme, qui l'affiche tel quel : rien n'a changé sur le site.
@@ -200,9 +211,11 @@ final class UpdateTransaction {
 				'step'            => self::STEP_RECOVERING,
 				// Reprise d'une reprise interrompue : l'étape d'origine reste celle de
 				// la mise à jour morte (inconnue : null, cf. files_may_be_dirty()).
-				'recovering_from' => self::STEP_RECOVERING === $stored['step'] ? ( $stored['recovering_from'] ?? null ) : $stored['step'],
-				'recovery_token'  => $token,
-				'updated_at'      => $now,
+				'recovering_from'   => self::STEP_RECOVERING === $stored['step'] ? ( $stored['recovering_from'] ?? null ) : $stored['step'],
+				'recovery_token'    => $token,
+				// Celle-ci comprise, jamais remis à zéro : une reprise morte en route compte.
+				'recovery_attempts' => self::recovery_attempts( $stored ) + 1,
+				'updated_at'        => $now,
 			]
 		);
 		self::write( $reserved );
@@ -282,6 +295,17 @@ final class UpdateTransaction {
 	 */
 	public static function identity( array $txn ): string {
 		return (string) ( $txn['id'] ?? '' ) . '|' . (string) ( $txn['plugin_file'] ?? '' ) . '|' . (int) ( $txn['started_at'] ?? 0 );
+	}
+
+	/**
+	 * Reprises commencées sur cette transaction (réservations, celle en cours
+	 * comprise) ; 0 si elle n'a jamais été reprise, ou si elle a été écrite par une
+	 * version d'avant ce compte.
+	 *
+	 * @param array<string, mixed> $txn
+	 */
+	public static function recovery_attempts( array $txn ): int {
+		return max( 0, (int) ( $txn['recovery_attempts'] ?? 0 ) );
 	}
 
 	/**
