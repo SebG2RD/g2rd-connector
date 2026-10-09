@@ -248,7 +248,13 @@ dont le loopback est impossible donne « non vérifiable », jamais « cassé »
   protégée dont la requête a été tuée (sans passer par le shutdown) est reprise par un contrôle
   ponctuel à part (`g2rd_connector_update_recovery_check`, reprise seule, sans purge), programmé
   11 minutes après son ouverture puis suivi tant qu'elle reste ouverte. La mise à jour rafraîchit
-  sa transaction après chaque étape longue : aucune étape ne doit dépasser 10 minutes d'horloge.
+  sa transaction après chaque étape longue : aucune étape ne doit dépasser 10 minutes d'horloge,
+  sans quoi un contrôle la prendrait pour morte et la reprendrait. Une requête encore vivante ne
+  recrée jamais une transaction fermée par un contrôle (relecture sans cache avant chaque
+  rafraîchissement). Une mise à jour morte n'est reprise qu'une fois : si sa transaction ne peut
+  pas être retirée, le contrôle n'est pas reprogrammé (jamais à une date passée), l'extension
+  n'est pas restaurée à nouveau, et la tentative est tracée dans l'option
+  `g2rd_update_txn_recovery`.
 - Après un rollback, la version retirée est bloquée pour les mises à jour automatiques de
   WordPress jusqu'à la version suivante.
 - Le plugin ne se rollback jamais lui-même. La capacité `restore_points` n'est annoncée dans

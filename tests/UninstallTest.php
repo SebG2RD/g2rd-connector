@@ -7,6 +7,7 @@ namespace G2RD\Connector\Tests;
 use Brain\Monkey\Functions;
 use G2RD\Connector\Cron\RestorePointPurgeJob;
 use G2RD\Connector\Events\LoginFailedThrottle;
+use G2RD\Connector\Rollback\UpdateTransaction;
 use G2RD\Connector\Tests\DirectLogin\FakeWpdb;
 
 /**
@@ -91,6 +92,17 @@ final class UninstallTest extends TestCase {
 
 		self::assertContains( RestorePointPurgeJob::HOOK, $this->cleared_hooks );
 		self::assertContains( RestorePointPurgeJob::RECOVERY_HOOK, $this->cleared_hooks );
+	}
+
+	public function test_la_trace_de_reprise_d_une_mise_a_jour_protegee_est_retiree(): void {
+		$this->options[ UpdateTransaction::RECOVERY_TRACE_KEY ] = [
+			'txn' => 'x|a/a.php|1',
+			'at'  => 1,
+		];
+
+		$this->uninstall();
+
+		self::assertArrayNotHasKey( UpdateTransaction::RECOVERY_TRACE_KEY, $this->options );
 	}
 
 	private function uninstall(): void {

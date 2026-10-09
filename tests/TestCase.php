@@ -45,6 +45,9 @@ abstract class TestCase extends PHPUnitTestCase {
 				return true;
 			}
 		);
+		// Pas de cache d'options simulé par défaut : le vider ne change rien
+		// (cf. Rollback\UpdateTransactionTest pour un cache simulé).
+		Functions\when( 'wp_cache_delete' )->justReturn( true );
 	}
 
 	protected function tearDown(): void {

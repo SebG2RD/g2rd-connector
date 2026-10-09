@@ -74,7 +74,9 @@ final class ProtectedUpdate {
 		// Chaque étape qui peut durer est suivie d'un rafraîchissement de la
 		// transaction (step() ou touch()) : un contrôle de reprise qui tombe pendant
 		// l'étape suivante (autre processus) ne prend pas cette requête vivante pour
-		// morte. Durée d'étape supposée : cf. RestorePointPurgeJob::RECOVERY_CHECK_DELAY.
+		// morte, tant qu'aucune étape ne dépasse la durée supposée (cf.
+		// RestorePointPurgeJob::RECOVERY_CHECK_DELAY). Au-delà, si un contrôle a fermé
+		// la transaction entre-temps, step() et touch() ne la recréent pas.
 
 		// ── Référence de santé, AVANT tout changement ────────────────────────────
 		$baseline = $s->health->measure();
@@ -254,10 +256,20 @@ final class ProtectedUpdate {
 	 * Reprise d'une transaction interrompue (shutdown ou cron) : si les fichiers
 	 * peuvent être dans un état intermédiaire, on restaure le point ; sinon on
 	 * consigne seulement ce qui s'est passé. Toujours silencieuse.
+	 *
+	 * Une reprise par transaction : si close() n'a pas pu la retirer (delete_option()
+	 * en échec), la reprise est tracée (UpdateTransaction::RECOVERY_TRACE_KEY) et les
+	 * passages suivants ne font que retenter la fermeture — sans quoi chacun
+	 * restaurerait l'extension à nouveau et consignerait un nouveau résultat.
 	 */
 	public static function recover( int $now, bool $force = false ): void {
 		$txn = UpdateTransaction::current();
 		if ( null === $txn || ( ! $force && ! UpdateTransaction::is_stale( $txn, $now ) ) ) {
+			return;
+		}
+
+		if ( UpdateTransaction::recovery_already_attempted( $txn ) ) {
+			UpdateTransaction::close();
 			return;
 		}
 
@@ -291,6 +303,12 @@ final class ProtectedUpdate {
 
 		PendingOutcomes::add( $outcome, $now );
 		UpdateTransaction::close();
+
+		// Trace écrite seulement si la transaction est toujours là : le cas courant
+		// (fermeture réussie) ne coûte aucune écriture de plus.
+		if ( null !== UpdateTransaction::current() ) {
+			UpdateTransaction::record_recovery_attempt( $txn, (string) $outcome['outcome'], $now );
+		}
 	}
 
 	/**

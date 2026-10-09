@@ -109,9 +109,15 @@ Lighter on the server: fewer WordPress boots and fewer calls to the manager, sam
   restore points or tickets. The purge itself is skipped while a protected update is running,
   so the restore point and archive of an update in progress are never deleted under it. The
   update refreshes its transaction after each long step (health measures, restore), so a check
-  never takes a live update for a dead one. Expired restore points may stay on disk up to 12
-  hours longer (24 hours if an update was running at purge time), still within the per-plugin
-  cap and the disk budget. Deactivation and uninstall also remove a pending one-off check.
+  does not take a live update for a dead one unless a single step lasts more than 10 minutes.
+  A request still running never recreates a transaction that a check has closed: it re-reads
+  the transaction, bypassing the options cache, before each refresh. A dead update is recovered
+  once: if its transaction cannot be removed, the check is not scheduled again (never at a past
+  date), the plugin is not restored again, and the attempt is recorded in the
+  `g2rd_update_txn_recovery` option. Expired restore points may stay on disk up to 12 hours
+  longer (24 hours if an update was running at purge time), still within the per-plugin cap
+  and the disk budget. Deactivation and uninstall also remove a pending one-off check;
+  uninstall also removes the recovery record.
 * **Uninstall also removes the failed-login counter** (`g2rd_connector_login_failed_window`
   transient), on every site of a multisite network.
 * **Performance: one SQL query less per page view.** The `g2rd_connector_settings` option

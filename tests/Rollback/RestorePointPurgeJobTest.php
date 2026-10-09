@@ -174,6 +174,7 @@ final class RestorePointPurgeJobTest extends FilesystemTestCase {
 		self::assertNotNull( $this->store->get( 'expire' ), 'La purge des points attend le passage biquotidien.' );
 		self::assertFileExists( $this->snapshots . '/orphelin-1-abcd.zip' );
 		self::assertSame( [], $scheduled->getArrayCopy() );
+		self::assertArrayNotHasKey( UpdateTransaction::RECOVERY_TRACE_KEY, $this->options, 'Fermeture réussie : aucune trace écrite.' );
 	}
 
 	/** Transaction encore fraîche au moment du contrôle : il se reprogramme, sans rien toucher. */
@@ -189,6 +190,87 @@ final class RestorePointPurgeJobTest extends FilesystemTestCase {
 		self::assertNotNull( $this->store->get( 'point-en-cours' ) );
 		self::assertSame( [], PendingOutcomes::all() );
 		self::assertSame( [ [ $updated_at + RestorePointPurgeJob::RECOVERY_CHECK_DELAY, RestorePointPurgeJob::RECOVERY_HOOK ] ], $scheduled->getArrayCopy() );
+	}
+
+	/**
+	 * Transaction fraîche à la limite (presque 10 min depuis sa dernière étape) : le
+	 * contrôle est reprogrammé dans le futur, au moins une minute plus tard.
+	 */
+	public function test_recovery_check_reschedules_a_fresh_transaction_in_the_future(): void {
+		$scheduled = $this->record_single_events();
+		$before    = time();
+		UpdateTransaction::open( [ 'plugin_file' => 'z/z.php' ], $before - UpdateTransaction::STALE_AFTER_SECONDS + 5 );
+
+		( new RestorePointPurgeJob() )->run_recovery_check();
+
+		self::assertNotNull( UpdateTransaction::current(), 'Pas encore morte : pas reprise.' );
+		self::assertSame( [], PendingOutcomes::all() );
+		self::assertCount( 1, $scheduled );
+		[ $timestamp, $hook ] = $scheduled[0];
+		self::assertSame( RestorePointPurgeJob::RECOVERY_HOOK, $hook );
+		self::assertGreaterThanOrEqual( $before + 60, $timestamp );
+		self::assertGreaterThan( time(), $timestamp, 'Jamais dans le passé : WP-Cron le relancerait aussitôt.' );
+	}
+
+	/**
+	 * Transaction morte que la reprise n'arrive pas à retirer (delete_option() en
+	 * échec) : le contrôle ne se reprogramme pas — à `updated_at + délai`, date déjà
+	 * passée, WP-Cron le relancerait à chaque passage, environ une fois par minute —
+	 * et la reprise n'est pas rejouée sur la même transaction.
+	 */
+	public function test_recovery_check_does_not_loop_on_a_dead_transaction_it_cannot_close(): void {
+		$scheduled = $this->record_single_events();
+		$this->make_transaction_undeletable();
+		UpdateTransaction::open( [ 'plugin_file' => 'z/z.php' ], time() - 5000 );
+
+		( new RestorePointPurgeJob() )->run_recovery_check();
+		( new RestorePointPurgeJob() )->run_recovery_check();
+
+		$txn = UpdateTransaction::current();
+		self::assertNotNull( $txn, 'Toujours là : delete_option() échoue.' );
+		self::assertSame( [], $scheduled->getArrayCopy(), 'Aucune reprogrammation, ni dans le passé ni ailleurs.' );
+		self::assertSame( [ 'interrupted_unverified' ], array_column( PendingOutcomes::all(), 'outcome' ), 'Une seule reprise pour cette transaction.' );
+		$trace = $this->options[ UpdateTransaction::RECOVERY_TRACE_KEY ] ?? null;
+		self::assertIsArray( $trace, 'Reprise tracée.' );
+		self::assertSame( UpdateTransaction::identity( $txn ), $trace['txn'] );
+		self::assertSame( 'interrupted_unverified', $trace['outcome'] );
+	}
+
+	/**
+	 * Même transaction morte et impossible à retirer, au passage biquotidien : elle ne
+	 * protège plus aucune mise à jour vivante, la purge n'est donc pas reportée
+	 * indéfiniment, et rien n'est reprogrammé.
+	 */
+	public function test_purge_is_not_deferred_forever_by_a_dead_transaction_it_cannot_close(): void {
+		$scheduled = $this->record_single_events();
+		$this->make_transaction_undeletable();
+		$now = time();
+		$this->add( 'expire', expires: $now - 1 );
+		UpdateTransaction::open( [ 'plugin_file' => 'z/z.php' ], $now - 5000 );
+
+		( new RestorePointPurgeJob() )->run();
+		( new RestorePointPurgeJob() )->run();
+
+		self::assertNotNull( UpdateTransaction::current() );
+		self::assertNull( $this->store->get( 'expire' ), 'Purge faite.' );
+		self::assertSame( [], $scheduled->getArrayCopy() );
+		self::assertSame( [ 'interrupted_unverified' ], array_column( PendingOutcomes::all(), 'outcome' ) );
+	}
+
+	/**
+	 * delete_option() échoue sur la transaction (base en erreur, ligne verrouillée…) ;
+	 * les autres options se suppriment normalement.
+	 */
+	private function make_transaction_undeletable(): void {
+		Functions\when( 'delete_option' )->alias(
+			function ( string $key ): bool {
+				if ( UpdateTransaction::OPTION_KEY === $key ) {
+					return false;
+				}
+				unset( $this->options[ $key ] );
+				return true;
+			}
+		);
 	}
 
 	/**

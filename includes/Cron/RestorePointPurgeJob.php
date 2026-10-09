@@ -35,7 +35,9 @@
  *   - la reprise d'une mise à jour protégée morte sans passer par le filet de
  *     shutdown (processus tué) : un contrôle ponctuel est programmé à l'ouverture
  *     de la transaction (schedule_recovery_check()), puis suivi tant qu'elle reste
- *     ouverte — au plus RECOVERY_CHECK_DELAY après, au lieu d'une heure avant.
+ *     ouverte sans être morte — au plus RECOVERY_CHECK_DELAY après, au lieu d'une
+ *     heure avant. Jamais reprogrammé dans le passé, ni pour une transaction morte
+ *     que la reprise n'a pas pu retirer (cf. follow_open_transaction()).
  *     Ce contrôle a son propre hook (RECOVERY_HOOK) et ne fait que la reprise :
  *     ni purge des points, ni purge des tickets.
  * Les points expirés restent jusqu'à 12 h de plus sur le disque (24 h si une mise
@@ -94,6 +96,12 @@ final class RestorePointPurgeJob {
 	 */
 	public const RECOVERY_CHECK_DELAY = UpdateTransaction::STALE_AFTER_SECONDS + 60;
 
+	/**
+	 * Avance minimale d'un contrôle de reprise reprogrammé : jamais dans le passé, où
+	 * WP-Cron l'exécuterait au passage suivant (cf. follow_open_transaction()).
+	 */
+	private const RECOVERY_MIN_LEAD_SECONDS = 60;
+
 	public function register(): void {
 		add_action( self::HOOK, [ $this, 'run' ] );
 		add_action( self::RECOVERY_HOOK, [ $this, 'run_recovery_check' ] );
@@ -104,8 +112,9 @@ final class RestorePointPurgeJob {
 	 * au passage suivant et seul le contrôle de reprise est reprogrammé.
 	 */
 	public function run(): void {
-		if ( null === self::purge( new RestorePointStore(), time() ) ) {
-			self::follow_open_transaction();
+		$now = time();
+		if ( null === self::purge( new RestorePointStore(), $now ) ) {
+			self::follow_open_transaction( $now );
 		}
 	}
 
@@ -115,8 +124,9 @@ final class RestorePointPurgeJob {
 	 * depuis peu), on repasse dès qu'elle pourra être déclarée morte.
 	 */
 	public function run_recovery_check(): void {
-		ProtectedUpdate::recover( time() );
-		self::follow_open_transaction();
+		$now = time();
+		ProtectedUpdate::recover( $now );
+		self::follow_open_transaction( $now );
 	}
 
 	/**
@@ -126,11 +136,14 @@ final class RestorePointPurgeJob {
 	public static function purge( RestorePointStore $store, int $now ): ?array {
 		ProtectedUpdate::recover( $now );
 
-		// recover() vient de fermer une transaction morte : une transaction encore
-		// là est fraîche, donc une mise à jour protégée en cours dans un autre
-		// processus. Ses fichiers (point à `expires_at = now`, zip pas encore indexé)
-		// et l'index des points ne se touchent pas tant qu'elle n'est pas terminée.
-		if ( null !== UpdateTransaction::current() ) {
+		// recover() vient de reprendre une transaction morte : une transaction encore
+		// là et fraîche est une mise à jour protégée en cours dans un autre processus.
+		// Ses fichiers (point à `expires_at = now`, zip pas encore indexé) et l'index
+		// des points ne se touchent pas tant qu'elle n'est pas terminée. Une
+		// transaction morte encore là (reprise faite, mais close() n'a pas pu la
+		// retirer) ne protège plus rien : elle ne reporte pas la purge indéfiniment.
+		$txn = UpdateTransaction::current();
+		if ( null !== $txn && ! UpdateTransaction::is_stale( $txn, $now ) ) {
 			return null;
 		}
 
@@ -237,11 +250,28 @@ final class RestorePointPurgeJob {
 	/**
 	 * Transaction encore ouverte mais pas encore déclarée morte : on repasse dès
 	 * qu'elle pourra l'être (contrôle de reprise seul).
+	 *
+	 * Rien n'est reprogrammé pour une transaction déjà morte : la reprise vient d'y
+	 * passer, et si elle est toujours là, c'est que close() n'a pas pu la retirer
+	 * (delete_option() en échec). Sa date `updated_at + RECOVERY_CHECK_DELAY` serait
+	 * déjà passée, WP-Cron relancerait le contrôle à chaque passage (environ une fois
+	 * par minute). La purge biquotidienne reste son filet (sans nouvelle restauration,
+	 * cf. ProtectedUpdate::recover()).
+	 *
+	 * La date est aussi bornée à au moins une minute dans le futur. Avec la garde
+	 * ci-dessus, la borne ne joue que si RECOVERY_CHECK_DELAY venait à descendre
+	 * sous STALE_AFTER_SECONDS + 60 : elle reste là pour qu'un contrôle ne soit
+	 * jamais reprogrammé dans le passé.
 	 */
-	private static function follow_open_transaction(): void {
+	private static function follow_open_transaction( int $now ): void {
 		$txn = UpdateTransaction::current();
-		if ( null !== $txn ) {
-			self::schedule_recovery_check( (int) ( $txn['updated_at'] ?? time() ) );
+		if ( null === $txn || UpdateTransaction::is_stale( $txn, $now ) ) {
+			return;
 		}
+		$from = (int) ( $txn['updated_at'] ?? $now );
+		wp_schedule_single_event(
+			max( $from + self::RECOVERY_CHECK_DELAY, $now + self::RECOVERY_MIN_LEAD_SECONDS ),
+			self::RECOVERY_HOOK
+		);
 	}
 }

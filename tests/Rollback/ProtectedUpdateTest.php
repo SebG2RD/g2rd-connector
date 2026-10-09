@@ -398,6 +398,39 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		self::assertTrue( $this->store->get( $point['id'] )['hold'] );
 	}
 
+	/**
+	 * Transaction morte que la reprise n'arrive pas à retirer (delete_option() en
+	 * échec) : l'extension est restaurée une fois, pas à chaque passage d'un contrôle
+	 * (ni au filet de shutdown d'une requête suivante).
+	 */
+	public function test_recover_restores_only_once_a_dead_transaction_it_cannot_close(): void {
+		$snapshotter = new Snapshotter( $this->store, $this->plugins );
+		$point       = $snapshotter->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
+		$tree_before = $this->tree( $this->plugins . '/akismet' );
+		( Plugin_Upgrader::$on_upgrade )();
+		UpdateTransaction::open( [ 'plugin_file' => self::FILE, 'was_active' => true ], time() - 1000 );
+		UpdateTransaction::step( UpdateTransaction::STEP_UPGRADING, [ 'restore_point_id' => $point['id'] ], time() - 900 );
+		Functions\when( 'delete_option' )->alias(
+			function ( string $key ): bool {
+				if ( UpdateTransaction::OPTION_KEY === $key ) {
+					return false;
+				}
+				unset( $this->options[ $key ] );
+				return true;
+			}
+		);
+
+		ProtectedUpdate::recover( time() );
+		ProtectedUpdate::recover( time() );
+		ProtectedUpdate::recover_on_shutdown();
+
+		self::assertNotNull( UpdateTransaction::current(), 'Toujours là : delete_option() échoue.' );
+		self::assertSame( [ self::FILE ], $this->deactivated, 'Une seule restauration.' );
+		self::assertSame( $tree_before, $this->tree( $this->plugins . '/akismet' ) );
+		self::assertTrue( $this->active );
+		self::assertSame( [ 'recovered_rolled_back' ], array_column( PendingOutcomes::all(), 'outcome' ), 'Un seul résultat pour la plateforme.' );
+	}
+
 	public function test_recover_ignores_a_fresh_transaction_unless_forced(): void {
 		UpdateTransaction::open( [ 'plugin_file' => self::FILE ], time() );
 		ProtectedUpdate::recover( time() );
