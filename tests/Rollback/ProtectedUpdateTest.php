@@ -1080,11 +1080,20 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 			);
 			$this->age_transaction( UpdateTransaction::STALE_AFTER_SECONDS + 100 );
 		}
+		// `$wp_filesystem` prêt AVANT le chargement de l'extension (contexte cron ou REST).
+		$activated_before_filesystem = null;
+		Functions\when( 'WP_Filesystem' )->alias(
+			function () use ( &$activated_before_filesystem ): bool {
+				$activated_before_filesystem = $this->activated;
+				return true;
+			}
+		);
 
 		ProtectedUpdate::recover( time() ); // Le contrôle suivant.
 
 		self::assertSame( [], $this->deactivated, 'Plus de restauration : elle rejouerait la même erreur fatale.' );
 		self::assertSame( $tree_before, $this->tree( $this->plugins . '/akismet' ), 'Fichiers laissés tels quels.' );
+		self::assertSame( [], $activated_before_filesystem, '$wp_filesystem initialisé avant activate_plugin().' );
 		self::assertSame( [ self::FILE ], $this->activated, 'Extension réactivée telle quelle.' );
 		self::assertTrue( $this->active );
 		$pending = PendingOutcomes::all();
@@ -1116,9 +1125,11 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		$this->dead_transaction( self::FILE, $point['id'] );
 		$this->options['active_plugins'] = [ 'hello/hello.php' ];
 		$attempts                        = 0;
+		$seen_at_activation              = null;
 		Functions\when( 'activate_plugin' )->alias(
-			static function () use ( $failure, &$attempts ): ?WP_Error {
+			static function () use ( $failure, &$attempts, &$seen_at_activation ): ?WP_Error {
 				++$attempts;
+				$seen_at_activation = [ count( PendingOutcomes::all() ), UpdateTransaction::current() ];
 				if ( 'error' === $failure ) {
 					// Comme activate_plugin() : tampon ouvert, puis inclusion du fichier principal.
 					ob_start();
@@ -1137,6 +1148,7 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		ProtectedUpdate::recover( time() );
 
 		self::assertSame( 1, $attempts, 'Une tentative, par le bac à sable d\'activate_plugin().' );
+		self::assertSame( [ 1, null ], $seen_at_activation, 'Résultat consigné et transaction fermée AVANT la réactivation.' );
 		self::assertSame( [ 'hello/hello.php' ], $this->options['active_plugins'], 'active_plugins jamais écrite de force.' );
 		self::assertFalse( $this->active, 'L\'extension reste inactive : le site reste debout.' );
 		self::assertSame( $level, ob_get_level(), 'Tampon ouvert par activate_plugin() refermé, sortie écartée.' );

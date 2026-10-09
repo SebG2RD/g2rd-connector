@@ -550,7 +550,12 @@ final class ProtectedUpdate {
 			// plus douteux (reprises mortes pendant la restauration, dossier peut-être à
 			// moitié extrait). Une extension qui ne se charge pas reste inactive : le site
 			// reste debout, au lieu de tomber en « erreur critique » sur toutes ses pages.
+			//
+			// `$wp_filesystem` d'abord, comme restore() : hors de l'administration (cron,
+			// REST), une extension saine dont le fichier principal s'en sert lèverait une
+			// erreur au chargement et resterait inactive sans raison (cf. 2026-09-23).
 			try {
+				self::ensure_filesystem();
 				CommandExecutor::try_activate( $plugin_file, ! empty( $reserved['network_active'] ) );
 			} catch ( \Throwable $e ) {
 				unset( $e );
