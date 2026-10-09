@@ -73,11 +73,29 @@ final class UpdatesDiscoveryJob {
 	}
 
 	/**
+	 * Réveille la découverte seulement si la dernière capture est périmée (plus de
+	 * PremiumUpdatesBridge::STALE_AFTER_SECONDS, soit 13 h), c'est-à-dire si le job
+	 * biquotidien est en retard. Appelée par le snapshot.
+	 *
+	 * @return bool Vrai si la capture est périmée (le cron a alors été réveillé) ;
+	 *              remonté tel quel au manager dans `updates_discovery.stale`.
+	 */
+	public static function request_if_stale(): bool {
+		$stale = PremiumUpdatesBridge::capture_is_stale();
+		if ( $stale ) {
+			self::request_now();
+		}
+
+		return $stale;
+	}
+
+	/**
 	 * Demande une découverte immédiate et réveille le cron.
 	 *
 	 * WP-Cron ne se déclenche que sur une requête HTTP : un site client à faible
 	 * trafic peut rester muet des heures. Le snapshot du manager, lui, arrive
-	 * toutes les heures — il sert donc de déclencheur. `spawn_cron()` part en
+	 * environ toutes les 7 h — il sert donc de déclencheur quand la découverte
+	 * planifiée est en retard (cf. request_if_stale()). `spawn_cron()` part en
 	 * requête non bloquante : la réponse du snapshot n'attend pas.
 	 */
 	public static function request_now(): void {

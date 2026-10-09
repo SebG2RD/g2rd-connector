@@ -52,7 +52,7 @@ final class GitHubUpdater {
 	private const CACHE_FAILURE_FLAG = 'failed';
 
 	/**
-	 * Durees en methodes plutot qu'en constantes, comme `stale_after()` dans
+	 * Durees en methodes plutot qu'en constantes, comme `cache_ttl()` dans
 	 * PremiumUpdatesBridge : `HOUR_IN_SECONDS` est defini a l'execution par
 	 * WordPress et n'existe pas quand la classe est compilee.
 	 */

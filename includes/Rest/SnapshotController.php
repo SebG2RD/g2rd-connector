@@ -168,13 +168,11 @@ final class SnapshotController {
 		PremiumUpdatesBridge::refresh_update_transients();
 
 		// Les updaters tiers ne s'enregistrent pas ici : seul le contexte WP-Cron
-		// sait les faire parler. Si sa dernière capture est périmée, on le réveille
-		// — WP-Cron ne partant que sur une requête HTTP, un site client sans trafic
-		// resterait muet. Non bloquant : la réponse ci-dessous n'attend pas.
-		$discovery_stale = PremiumUpdatesBridge::capture_is_stale();
-		if ( $discovery_stale ) {
-			UpdatesDiscoveryJob::request_now();
-		}
+		// sait les faire parler. Si sa dernière capture est périmée (plus de 13 h :
+		// la découverte biquotidienne est en retard), on le réveille — WP-Cron ne
+		// partant que sur une requête HTTP, un site client sans trafic resterait
+		// muet. Non bloquant : la réponse ci-dessous n'attend pas.
+		$discovery_stale = UpdatesDiscoveryJob::request_if_stale();
 
 		return new WP_REST_Response(
 			[

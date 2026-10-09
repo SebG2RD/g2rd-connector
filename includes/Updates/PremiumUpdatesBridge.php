@@ -70,6 +70,23 @@ final class PremiumUpdatesBridge {
 	private const CACHE_KEY = 'g2rd_updates_snapshot';
 
 	/**
+	 * Âge (en secondes) au-delà duquel une capture est périmée : 13 h.
+	 *
+	 * La découverte planifiée (UpdatesDiscoveryJob, `twicedaily`) capture toutes les
+	 * 12 h ; au-delà de 13 h, elle est en retard (WP-Cron désactivé, bloqué, ou site
+	 * sans visite), et c'est seulement là que le snapshot doit réveiller le cron.
+	 *
+	 * Avant la 1.13 : 6 h. La plateforme synchronise environ toutes les 7 h, donc
+	 * presque chaque synchronisation relançait `spawn_cron()` — un second démarrage
+	 * de WordPress et une recherche de mises à jour complète, en double du job
+	 * planifié, sur un serveur partagé avec tout le parc.
+	 *
+	 * Écrit en secondes littérales : `HOUR_IN_SECONDS` n'est défini qu'à l'exécution
+	 * par WordPress.
+	 */
+	public const STALE_AFTER_SECONDS = 13 * 3600;
+
+	/**
 	 * Écrans d'administration où le transient de MAJ est frais ET les updaters
 	 * tiers actifs. `plugins` et `update-core` forcent un `wp_update_*()` via
 	 * `load-plugins.php` / `load-update-core.php` ; `dashboard` repasse par
@@ -238,17 +255,7 @@ final class PremiumUpdatesBridge {
 		}
 		$captured_at = strtotime( $last['captured_at'] );
 
-		return false === $captured_at || ( time() - $captured_at ) > self::stale_after();
-	}
-
-	/**
-	 * Délai au-delà duquel une capture est périmée. Méthode plutôt que constante,
-	 * pour la même raison que `cache_ttl()` : `HOUR_IN_SECONDS` est défini à
-	 * l'exécution par WordPress. 6 h = deux fois l'intervalle du job `twicedaily`,
-	 * assez large pour ne pas éperonner les API des éditeurs.
-	 */
-	private static function stale_after(): int {
-		return 6 * HOUR_IN_SECONDS;
+		return false === $captured_at || ( time() - $captured_at ) > self::STALE_AFTER_SECONDS;
 	}
 
 	/**
