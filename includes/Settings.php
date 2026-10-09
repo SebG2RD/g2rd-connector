@@ -198,18 +198,49 @@ final class Settings {
 	}
 
 	/**
+	 * Écrit les réglages AUTOCHARGÉS : ils sont lus à chaque page (démarrage du
+	 * plugin), et une option non autochargée coûte une requête SQL par page vue.
+	 * Taille sous 2 Ko sérialisée, même dans le pire cas réaliste (cf.
+	 * tests/SettingsAutoloadTest). La copie de secours du jeton
+	 * (TOKEN_BACKUP_OPTION), jamais lue, reste non autochargée.
+	 *
 	 * @param array<string, mixed> $partial
 	 */
 	private static function persist( array $partial ): void {
 		$current = self::all();
 		$merged  = array_replace_recursive( $current, $partial );
-		update_option( self::OPTION_KEY, $merged, false );
+		update_option( self::OPTION_KEY, $merged, true );
 	}
 
 	public static function ensure_defaults(): void {
 		if ( get_option( self::OPTION_KEY, null ) === null ) {
-			update_option( self::OPTION_KEY, self::defaults(), false );
+			update_option( self::OPTION_KEY, self::defaults(), true );
 		}
+	}
+
+	/**
+	 * Passe en autoload les réglages d'une installation existante (écrits sans
+	 * autoload jusqu'à la 1.13.0-rc.1). Appelée à chaque démarrage, mais n'agit
+	 * qu'une fois : ensuite l'option figure parmi les options autochargées, déjà en
+	 * mémoire, et l'appel se résume à un isset().
+	 *
+	 * update_option() ne suffirait pas : à valeur identique, WordPress n'écrit rien,
+	 * pas même le drapeau d'autoload. wp_set_option_autoload() (WordPress 6.4, la
+	 * version minimale du plugin) ne change que ce drapeau, jamais la valeur. Un
+	 * refus de la base renvoie faux : nouvel essai au démarrage suivant.
+	 *
+	 * @return bool Vrai si la migration a été faite pendant cet appel.
+	 */
+	public static function maybe_autoload(): bool {
+		$autoloaded = wp_load_alloptions();
+		if ( isset( $autoloaded[ self::OPTION_KEY ] ) ) {
+			return false;
+		}
+		if ( ! function_exists( 'wp_set_option_autoload' ) || null === get_option( self::OPTION_KEY, null ) ) {
+			return false;
+		}
+
+		return true === wp_set_option_autoload( self::OPTION_KEY, true );
 	}
 
 	public static function is_enrolled(): bool {

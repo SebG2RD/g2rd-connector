@@ -68,6 +68,10 @@ final class Plugin {
 		// (installations antérieures au chiffrement au repos). No-op une fois fait.
 		Settings::maybe_migrate_token();
 
+		// Réglages autochargés (une requête SQL de moins par page vue) : migration
+		// des installations existantes, une seule fois. No-op ensuite.
+		Settings::maybe_autoload();
+
 		// Forcer l'IPv4 vers le manager (opt-in). AVANT la barrière d'enrôlement :
 		// l'enrôlement lui-même est un appel sortant vers le manager, et c'est
 		// précisément lui qui échouait en IPv6 le 2026-09-25 (403 du CDN de
