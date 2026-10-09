@@ -263,6 +263,32 @@ final class UpdateTransaction {
 	}
 
 	/**
+	 * Identité de la transaction que tient ce processus (cf. identity()), sans relecture,
+	 * ou null s'il n'en tient aucune.
+	 */
+	public static function held_identity(): ?string {
+		return null === self::$held ? null : self::$held[0];
+	}
+
+	/**
+	 * La transaction d'identité `$identity` est-elle reprise en ce moment par un autre
+	 * processus : réservée par une reprise encore vivante, que ce processus ne tient
+	 * pas ? Relue en base sans cache.
+	 *
+	 * Une mise à jour protégée prise par une reprise ne réactive pas son extension tant
+	 * que la reprise restaure : celle-ci l'a désactivée, extrait l'archive, et la
+	 * réactive elle-même (cf. ProtectedUpdate::run()).
+	 */
+	public static function recovering_elsewhere( string $identity, int $now ): bool {
+		$stored = self::fresh();
+		return null !== $stored
+			&& self::identity( $stored ) === $identity
+			&& null !== self::token( $stored )
+			&& self::is_live( $stored, $now )
+			&& ( null === self::$held || ! self::is( $stored, self::$held ) );
+	}
+
+	/**
 	 * Une mise à jour protégée, ou une reprise, est-elle en cours sur ce site ? Relue
 	 * en base sans cache (cf. fresh()). Pour refuser, avant tout changement, une
 	 * opération sur les fichiers d'une extension qui pourrait croiser une restauration

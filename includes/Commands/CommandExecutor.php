@@ -188,7 +188,7 @@ final class CommandExecutor {
 				// morte (ProtectedUpdate::run()) a pu restaurer cette extension entre-temps,
 				// et la version « avant » doit être celle restaurée. Sans reprise, get_plugins()
 				// rend la liste déjà en cache, identique à `$plugins`.
-				static fn (): array => self::perform_plugin_upgrade( $file, get_plugins() )
+				static fn ( callable $may_reactivate ): array => self::perform_plugin_upgrade( $file, get_plugins(), $may_reactivate )
 			);
 		}
 
@@ -199,10 +199,15 @@ final class CommandExecutor {
 	 * La mise à jour elle-même : Plugin_Upgrader + réactivation. Chemin historique,
 	 * partagé par la mise à jour simple et la mise à jour protégée.
 	 *
-	 * @param array<string, array<string, mixed>> $plugins Sortie de get_plugins(), déjà contrôlée.
+	 * @param array<string, array<string, mixed>> $plugins        Sortie de get_plugins(), déjà contrôlée.
+	 * @param (callable(): bool)|null             $may_reactivate Mise à jour protégée seulement (cf.
+	 *                                                            ProtectedUpdate::run()) : faux quand une
+	 *                                                            reprise d'un autre processus tient sa
+	 *                                                            transaction, et réactivera elle-même
+	 *                                                            l'extension. Null : chemin historique.
 	 * @return array<string, mixed>
 	 */
-	private static function perform_plugin_upgrade( string $file, array $plugins ): array {
+	private static function perform_plugin_upgrade( string $file, array $plugins, ?callable $may_reactivate = null ): array {
 		$version_before = isset( $plugins[ $file ]['Version'] ) ? (string) $plugins[ $file ]['Version'] : '';
 
 		// État d'activation AVANT l'upgrade : Plugin_Upgrader::upgrade() désactive
@@ -228,8 +233,24 @@ final class CommandExecutor {
 		// idempotent : si la réactivation nominale a déjà réussi, ce filet ne fait
 		// rien. On ne l'arme que si le plugin était actif (on ne réactive jamais un
 		// plugin que l'admin avait volontairement laissé éteint).
+		//
+		// Mise à jour protégée : le filet demande d'abord le droit de réactiver. Une
+		// reprise d'un autre processus qui tient la transaction (étape de plus de 10
+		// minutes) a désactivé l'extension et extrait l'archive : activate_plugin()
+		// inclurait des fichiers à moitié extraits, puis l'option serait forcée en même
+		// temps que la reprise l'écrit. La reprise réactive elle-même, une fois finie.
 		if ( $was_active ) {
-			register_shutdown_function( [ self::class, 'force_reactivate' ], $file, $was_network_active );
+			if ( null === $may_reactivate ) {
+				register_shutdown_function( [ self::class, 'force_reactivate' ], $file, $was_network_active );
+			} else {
+				register_shutdown_function(
+					static function () use ( $file, $was_network_active, $may_reactivate ): void {
+						if ( $may_reactivate() ) {
+							self::force_reactivate( $file, $was_network_active );
+						}
+					}
+				);
+			}
 		}
 
 		// Force le refresh du transient update_plugins avant l'upgrade pour
@@ -256,9 +277,12 @@ final class CommandExecutor {
 		// Réactivation nominale (synchrone) : si le plugin était actif, on le
 		// rétablit immédiatement. force_reactivate gère le mode silencieux et un
 		// repli défensif ; le filet shutdown reste armé en cas d'échec du code aval.
+		// Pas pendant qu'une reprise d'un autre processus restaure (cf. le filet plus
+		// haut) : la mise à jour protégée s'arrête ensuite sans rendre ce résultat.
 		$reactivated = $was_active;
 		if ( $was_active ) {
-			$reactivated = self::force_reactivate( $file, $was_network_active );
+			$reactivated = ( null === $may_reactivate || $may_reactivate() )
+				&& self::force_reactivate( $file, $was_network_active );
 		}
 
 		// Re-lire la version installée après upgrade. `false` : on ne veut que le
@@ -366,6 +390,51 @@ final class CommandExecutor {
 			update_option( 'active_plugins', $active );
 		}
 		return in_array( $file, $active, true );
+	}
+
+	/**
+	 * Réactive un plugin par la seule voie standard : activate_plugin() en mode
+	 * silencieux, qui charge d'abord son fichier principal (plugin_sandbox_scrape())
+	 * et n'écrit `active_plugins` que s'il s'est chargé. Jamais d'écriture forcée de
+	 * l'option, contrairement à force_reactivate().
+	 *
+	 * Pour des fichiers douteux (abandon d'une reprise, cf. ProtectedUpdate::recover()) :
+	 * une extension dont le fichier principal lève une erreur (classe ou fichier inclus
+	 * manquant, dossier à moitié extrait) ou est introuvable reste inactive. Forcée,
+	 * elle ferait tomber toutes les pages du site en « erreur critique ».
+	 *
+	 * @return bool Vrai si le plugin est actif en sortie.
+	 */
+	public static function try_activate( string $file, bool $network_wide ): bool {
+		if ( ! function_exists( 'is_plugin_active' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/plugin.php';
+		}
+
+		if ( is_plugin_active( $file ) ) {
+			return true;
+		}
+
+		$level = ob_get_level();
+		try {
+			$activated = activate_plugin( $file, '', $network_wide, true );
+		} catch ( \Throwable $e ) {
+			// activate_plugin() ouvre un tampon de sortie avant d'inclure le fichier
+			// principal, et ne le referme pas quand l'inclusion lève une erreur : ce que
+			// l'extension a écrit ne doit pas finir dans la réponse.
+			while ( ob_get_level() > $level ) {
+				if ( ! ob_end_clean() ) {
+					break;
+				}
+			}
+			unset( $e );
+			return false;
+		}
+		if ( ! is_wp_error( $activated ) ) {
+			return true;
+		}
+		// `unexpected_output` : seule erreur qu'activate_plugin() rend APRÈS avoir écrit
+		// `active_plugins` (l'extension s'est chargée, mais a écrit quelque chose).
+		return 'unexpected_output' === $activated->get_error_code();
 	}
 
 	/**

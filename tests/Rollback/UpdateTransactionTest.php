@@ -517,6 +517,34 @@ final class UpdateTransactionTest extends TestCase {
 		self::assertFalse( UpdateTransaction::in_progress( self::NOW ), 'Transaction morte : plus rien en cours.' );
 	}
 
+	/**
+	 * Droit de réactiver d'une mise à jour protégée (cf. ProtectedUpdate::run()) : refusé
+	 * seulement tant qu'une reprise vivante d'un AUTRE processus tient SA transaction.
+	 */
+	public function test_recovering_elsewhere_ne_vaut_que_pour_sa_transaction_reprise_ailleurs(): void {
+		self::assertTrue( UpdateTransaction::open( [ 'plugin_file' => 'a/a.php' ], self::NOW ) );
+		$identity = (string) UpdateTransaction::held_identity();
+		$mine     = $this->stored();
+		self::assertSame( UpdateTransaction::identity( $mine ), $identity );
+		self::assertFalse( UpdateTransaction::recovering_elsewhere( $identity, self::NOW ), 'Ouverte par ce processus, pas reprise.' );
+
+		$this->reserved_by_another_process( $mine, self::NOW + 700 );
+		self::assertTrue( UpdateTransaction::recovering_elsewhere( $identity, self::NOW + 700 ), 'Réservée par une reprise vivante d\'un autre processus.' );
+		self::assertFalse( UpdateTransaction::recovering_elsewhere( $identity, self::NOW + 701 + UpdateTransaction::STALE_AFTER_SECONDS ), 'Reprise morte à son tour : elle ne protège plus rien.' );
+		self::assertFalse( UpdateTransaction::recovering_elsewhere( UpdateTransaction::identity( $this->other_transaction() ), self::NOW + 700 ), 'Une autre transaction.' );
+
+		$this->closed_by_another_process();
+		self::assertFalse( UpdateTransaction::recovering_elsewhere( $identity, self::NOW + 700 ), 'Reprise finie, transaction retirée.' );
+	}
+
+	public function test_recovering_elsewhere_est_faux_pour_la_reprise_de_ce_processus(): void {
+		$dead = $this->dead_transaction();
+		$this->options[ UpdateTransaction::OPTION_KEY ] = $dead;
+		self::assertNotNull( UpdateTransaction::reserve( $dead, self::NOW ) );
+
+		self::assertFalse( UpdateTransaction::recovering_elsewhere( UpdateTransaction::identity( $dead ), self::NOW ) );
+	}
+
 	public function test_same_reservation_compare_identite_et_jeton(): void {
 		$dead     = $this->dead_transaction();
 		$reserved = array_merge( $dead, [ 'recovery_token' => 'r1' ] );

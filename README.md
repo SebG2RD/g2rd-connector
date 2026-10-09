@@ -283,9 +283,14 @@ dont le loopback est impossible donne « non vérifiable », jamais « cassé »
   pour un rollback depuis la plateforme (limite connue : il faut une mesure de santé de plus de
   10 minutes). Une reprise qui meurt pendant la restauration n'est plus relancée sans fin : après
   3 reprises inachevées (la même erreur fatale rejouée à chaque fois), la suivante ne restaure
-  plus, consigne `recovery_failed` avec un détail explicite, garde le point et réactive
-  l'extension telle quelle si elle était active, au lieu de la laisser désactivée sans résultat
-  pour la plateforme. Le rollback manuel (`rollback_plugin`) est refusé avec le même message
+  plus, consigne `recovery_failed` avec un détail explicite et garde le point, au lieu de laisser
+  l'extension désactivée sans résultat pour la plateforme. Si l'extension était active, elle
+  n'est réactivée que si elle se charge sans erreur (sinon elle reste inactive) : ses fichiers
+  sont alors les plus douteux (peut-être à moitié extraits), et `active_plugins` n'est jamais
+  écrite de force, ce qui ferait tomber toutes les pages du site en « erreur critique ». Une mise
+  à jour protégée arrêtée parce qu'une reprise a pris sa transaction ne réactive plus l'extension
+  pendant que cette reprise la restaure (la reprise la réactive elle-même, une fois finie). Le
+  rollback manuel (`rollback_plugin`) est refusé avec le même message
   (« another protected update is still running on this site… retry in a few minutes ») tant
   qu'une mise à jour protégée ou une reprise est en cours ; une transaction morte ne le bloque pas.
   Une reprise qui a dépassé sa réservation ne fait plus passer la suivante pour faite ; la

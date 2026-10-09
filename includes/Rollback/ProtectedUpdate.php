@@ -90,7 +90,7 @@ final class ProtectedUpdate {
 	/**
 	 * @param string               $plugin_file Plugin déjà validé par CommandExecutor (installé).
 	 * @param array<string, mixed> $payload     Options envoyées par la plateforme (kind, grace_seconds, keep_on_success, hold_max_seconds, max_total_bytes, disk_margin_bytes).
-	 * @param callable(): array<string, mixed> $perform_upgrade La mise à jour historique (Plugin_Upgrader + réactivation).
+	 * @param callable(callable(): bool): array<string, mixed> $perform_upgrade La mise à jour historique (Plugin_Upgrader + réactivation), à qui run() passe le droit de réactiver l'extension (cf. plus bas).
 	 * @return array<string, mixed>
 	 * @throws \RuntimeException Échec de la mise à jour elle-même (comportement historique conservé).
 	 */
@@ -131,6 +131,9 @@ final class ProtectedUpdate {
 			// l'élément, message affiché tel quel) : même début de phrase qu'avant.
 			throw new \RuntimeException( UpdateTransaction::BUSY_MESSAGE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- constante, texte fixe.
 		}
+		// Gardée après close() : le filet de shutdown de la mise à jour la consulte en fin
+		// de requête (cf. plus bas, droit de réactiver).
+		$identity = (string) UpdateTransaction::held_identity();
 		// Filet du filet : un processus tué par le serveur ne passe pas par le
 		// shutdown. La purge locale (qui reprend aussi les transactions mortes) ne
 		// passant que deux fois par jour, un contrôle de reprise ponctuel (reprise
@@ -206,10 +209,17 @@ final class ProtectedUpdate {
 		// remplacement des fichiers (cf. PreInstallGuard) : il rafraîchit la
 		// transaction, ou arrête Plugin_Upgrader sans rien toucher si elle n'est plus
 		// celle de cette requête.
-		$guard = new PreInstallGuard( $plugin_file, self::TAKEN_OVER_BEFORE_INSTALL );
+		//
+		// Droit de réactiver l'extension (réactivation nominale et filet de shutdown de
+		// la mise à jour) : refusé tant qu'une reprise d'un autre processus tient cette
+		// transaction. Elle a désactivé l'extension et extrait l'archive ; activate_plugin()
+		// inclurait des fichiers à moitié extraits, en même temps qu'elle écrit
+		// `active_plugins`. Elle réactive elle-même, dans le `finally` de restore().
+		$guard          = new PreInstallGuard( $plugin_file, self::TAKEN_OVER_BEFORE_INSTALL );
+		$may_reactivate = static fn (): bool => ! UpdateTransaction::recovering_elsewhere( $identity, time() );
 		add_filter( 'upgrader_pre_install', $guard, self::PRE_INSTALL_PRIORITY, 2 );
 		try {
-			$result = $perform_upgrade();
+			$result = $perform_upgrade( $may_reactivate );
 		} catch ( \Throwable $e ) {
 			if ( $guard->stopped ) {
 				$this->stop_taken_over( $point['id'], $hold_until, self::TAKEN_OVER_BEFORE_INSTALL );
@@ -412,8 +422,9 @@ final class ProtectedUpdate {
 	 *
 	 * Au-delà de UpdateTransaction::MAX_RECOVERY_ATTEMPTS reprises commencées sur la
 	 * même transaction (toutes mortes en route, sans résultat), la reprise ne restaure
-	 * plus : elle consigne `recovery_failed`, ferme la transaction, puis réactive
-	 * l'extension telle quelle si elle était active.
+	 * plus : elle consigne `recovery_failed`, ferme la transaction, puis, si l'extension
+	 * était active, la réactive seulement si elle se charge sans erreur (sinon elle
+	 * reste inactive, cf. CommandExecutor::try_activate()).
 	 *
 	 * @param bool $force Filet de shutdown : reprend la transaction que tient ce
 	 *                    processus, même fraîche — et aucune autre.
@@ -471,7 +482,7 @@ final class ProtectedUpdate {
 		];
 
 		// Réactivation sans restauration, une fois le résultat consigné (cf. plus bas).
-		$reactivate_as_is = false;
+		$try_reactivate = false;
 		try {
 			if ( UpdateTransaction::files_may_be_dirty( $reserved ) && '' !== $point_id ) {
 				$services = Services::make();
@@ -485,13 +496,13 @@ final class ProtectedUpdate {
 					// n'a été consigné, et l'extension est restée désactivée. Restaurer encore
 					// rejouerait la même fin, toutes les 11 minutes environ. On s'arrête :
 					// résultat explicite, point gardé pour un rollback manuel, extension
-					// réactivée telle quelle si elle était active.
-					$reactivate_as_is   = ! empty( $reserved['was_active'] );
+					// réactivée si elle était active ET se charge sans erreur.
+					$try_reactivate     = ! empty( $reserved['was_active'] );
 					$outcome['outcome'] = 'recovery_failed';
 					$outcome['detail']  = sprintf(
 						self::RECOVERY_GAVE_UP,
 						UpdateTransaction::recovery_attempts( $reserved ) - 1, // Celle-ci exclue.
-						$reactivate_as_is ? 'is reactivated as it is' : 'is left inactive, as it was before the update'
+						$try_reactivate ? 'is reactivated only if it loads without error (otherwise it stays inactive)' : 'is left inactive, as it was before the update'
 					);
 					$services->store->hold( $point_id, $now + RestorePointPurgeJob::DEFAULT_HOLD_MAX_SECONDS );
 				} else {
@@ -529,12 +540,18 @@ final class ProtectedUpdate {
 			UpdateTransaction::record_recovery_attempt( $reserved, (string) $outcome['outcome'], $now );
 		}
 
-		if ( $reactivate_as_is ) {
+		if ( $try_reactivate ) {
 			// APRÈS le résultat, la fermeture et la trace : si la réactivation mourait à
-			// son tour (code de l'extension chargé par activate_plugin()), la plateforme
-			// est déjà prévenue, et aucune reprise ne rejouera cette fin.
+			// son tour (erreur fatale non rattrapable au chargement de l'extension), la
+			// plateforme est déjà prévenue, et aucune reprise ne rejouera cette fin.
+			//
+			// Par le bac à sable d'activate_plugin() seulement, jamais par une écriture
+			// forcée de `active_plugins` (force_reactivate()) : les fichiers sont ici les
+			// plus douteux (reprises mortes pendant la restauration, dossier peut-être à
+			// moitié extrait). Une extension qui ne se charge pas reste inactive : le site
+			// reste debout, au lieu de tomber en « erreur critique » sur toutes ses pages.
 			try {
-				CommandExecutor::force_reactivate( $plugin_file, ! empty( $reserved['network_active'] ) );
+				CommandExecutor::try_activate( $plugin_file, ! empty( $reserved['network_active'] ) );
 			} catch ( \Throwable $e ) {
 				unset( $e );
 			}
@@ -572,9 +589,9 @@ final class ProtectedUpdate {
 	/**
 	 * Arrêt d'une mise à jour dont une reprise a pris la transaction, juste avant le
 	 * remplacement des fichiers ou après la mise à jour : plus rien n'est copié,
-	 * mesuré ni restauré ici, la reprise s'en charge et consigne son résultat. Le point est retenu (la reprise peut en avoir besoin,
-	 * ou un rollback manuel), la transaction n'est pas retirée (close() ne retire que
-	 * la sienne).
+	 * mesuré ni restauré ici, la reprise s'en charge et consigne son résultat. Le
+	 * point est retenu (la reprise peut en avoir besoin, ou un rollback manuel), la
+	 * transaction n'est pas retirée (close() ne retire que la sienne).
 	 *
 	 * @throws \RuntimeException Toujours : la plateforme reçoit un échec explicite.
 	 */

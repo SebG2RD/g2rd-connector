@@ -956,31 +956,57 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 	 * Même prise avant la copie, mais la reprise restaure encore (autre processus) :
 	 * la mise à jour ne déplace pas le même dossier qu'elle en même temps. Ni copie, ni
 	 * désactivation par la requête ; la réservation de la reprise reste en place.
+	 *
+	 * La reprise a désactivé l'extension et extrait l'archive : la requête ne la
+	 * réactive pas, ni à la réactivation nominale (upgrade() rend un tableau vide) ni
+	 * par son filet de shutdown (upgrade() rend la WP_Error). activate_plugin()
+	 * inclurait un fichier à moitié extrait, puis l'option serait forcée, en même temps
+	 * que la reprise l'écrit. C'est la reprise qui réactive, dans son `finally`.
+	 *
+	 * @param mixed $result_on_error Retour de Plugin_Upgrader::upgrade() quand le filtre rend une WP_Error (null : la WP_Error).
 	 */
-	public function test_an_update_taken_over_by_a_running_recovery_before_the_files_change_does_not_touch_them(): void {
+	#[DataProvider( 'pre_install_error_results' )]
+	public function test_an_update_taken_over_by_a_running_recovery_before_the_files_change_does_not_touch_them( $result_on_error ): void {
+		$nets = $this->record_shutdown_nets();
 		$this->script_health( ok: 2, then_ok: 2 );
-		$tree_before                  = $this->tree( $this->plugins . '/akismet' );
-		$reserved                     = null;
-		Plugin_Upgrader::$on_download = function () use ( &$reserved ): void {
+		$tree_before                                  = $this->tree( $this->plugins . '/akismet' );
+		$reserved                                     = null;
+		Plugin_Upgrader::$result_on_pre_install_error = $result_on_error;
+		Plugin_Upgrader::$on_download                 = function () use ( &$reserved ): void {
 			$this->age_transaction( UpdateTransaction::STALE_AFTER_SECONDS + 100 );
 			$this->as_another_process(
 				static function () use ( &$reserved ): void {
 					$reserved = UpdateTransaction::reserve( (array) UpdateTransaction::current(), time() );
 				}
 			);
+			// La reprise (autre processus) désactive l'extension avant d'extraire l'archive.
+			$this->active = false;
 		};
 
 		$outcome = CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+		// Fin de la requête pendant que la reprise restaure encore.
+		foreach ( $nets as $net ) {
+			$net();
+		}
 
 		self::assertIsArray( $reserved, 'La reprise a bien réservé la transaction.' );
 		self::assertSame( 'failed', $outcome['status'] );
 		self::assertStringContainsString( 'stopped before replacing the plugin files', $outcome['error'] );
 		self::assertSame( $tree_before, $this->tree( $this->plugins . '/akismet' ), 'Fichiers intacts.' );
-		self::assertSame( [], $this->deactivated );
-		self::assertTrue( $this->active );
+		self::assertSame( [], $this->deactivated, 'La requête ne désactive rien.' );
+		self::assertSame( [], $this->activated, 'La requête ne réactive pas pendant que la reprise restaure.' );
+		self::assertFalse( $this->active );
 		self::assertSame( $reserved, $this->options[ UpdateTransaction::OPTION_KEY ] ?? null );
 		self::assertSame( [], PendingOutcomes::all(), 'Le résultat est celui de la reprise, à venir.' );
 		self::assertSame( 2, $this->response_index );
+
+		// La reprise a fermé sans réactiver (point introuvable, par exemple) : le filet
+		// de la requête rétablit l'extension, comme avant.
+		unset( $this->options[ UpdateTransaction::OPTION_KEY ] );
+		foreach ( $nets as $net ) {
+			$net();
+		}
+		self::assertSame( [ self::FILE ], $this->activated );
 	}
 
 	/** Téléchargement lent sans reprise : le contrôle d'avant la copie rafraîchit la transaction, la mise à jour continue. */
@@ -1037,7 +1063,8 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 	 * s'exécute pas, aucun résultat n'est consigné, l'extension reste désactivée, et le
 	 * contrôle reprogrammé la relance environ toutes les 11 min. Après
 	 * MAX_RECOVERY_ATTEMPTS reprises commencées, la suivante ne restaure plus : elle
-	 * consigne recovery_failed, ferme la transaction et réactive l'extension telle quelle.
+	 * consigne recovery_failed, ferme la transaction et réactive l'extension si elle se
+	 * charge sans erreur (ici, oui).
 	 */
 	public function test_a_recovery_that_keeps_dying_gives_up_reports_and_reactivates(): void {
 		$point = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
@@ -1065,12 +1092,72 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		self::assertSame( 'recovery_failed', $pending[0]['outcome'] );
 		self::assertSame( UpdateTransaction::STEP_UPGRADING, $pending[0]['step'] );
 		self::assertStringContainsString( 'gave up after ' . UpdateTransaction::MAX_RECOVERY_ATTEMPTS . ' recovery attempts', $pending[0]['detail'] );
+		self::assertStringContainsString( 'is reactivated only if it loads without error (otherwise it stays inactive)', $pending[0]['detail'] );
 		self::assertStringContainsString( 'roll it back from the platform', $pending[0]['detail'] );
 		self::assertTrue( $this->store->get( $point['id'] )['hold'], 'Point gardé pour un rollback manuel.' );
 		self::assertNull( UpdateTransaction::current() );
 
 		ProtectedUpdate::recover( time() + 3600 ); // Le contrôle reprogrammé : plus rien à faire.
 		self::assertCount( 1, PendingOutcomes::all() );
+	}
+
+	/**
+	 * À l'abandon, les fichiers sont les plus douteux : trois reprises sont mortes
+	 * pendant la restauration, le dossier est peut-être à moitié extrait. Si le fichier
+	 * principal lève une Error (classe ou fichier inclus manquant), ou si l'extension
+	 * est introuvable (WP_Error), elle reste inactive : `active_plugins` n'est jamais
+	 * écrite de force, sans quoi toutes les pages du site tomberaient en « erreur
+	 * critique ». Le résultat, déjà consigné, ne l'est qu'une fois.
+	 */
+	#[DataProvider( 'activation_failures' )]
+	public function test_a_recovery_that_gives_up_never_forces_a_plugin_that_does_not_load( string $failure ): void {
+		$point = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
+		( Plugin_Upgrader::$on_upgrade )();
+		$this->dead_transaction( self::FILE, $point['id'] );
+		$this->options['active_plugins'] = [ 'hello/hello.php' ];
+		$attempts                        = 0;
+		Functions\when( 'activate_plugin' )->alias(
+			static function () use ( $failure, &$attempts ): ?WP_Error {
+				++$attempts;
+				if ( 'error' === $failure ) {
+					// Comme activate_plugin() : tampon ouvert, puis inclusion du fichier principal.
+					ob_start();
+					echo 'sortie partielle de l\'extension';
+					throw new \Error( 'Class "Akismet\\New_Module" not found' );
+				}
+				return new WP_Error( 'plugin_not_found', 'Plugin file does not exist.' );
+			}
+		);
+		for ( $i = 0; $i < UpdateTransaction::MAX_RECOVERY_ATTEMPTS; $i++ ) {
+			$this->as_another_process( static fn () => UpdateTransaction::reserve( (array) UpdateTransaction::current(), time() ) );
+			$this->age_transaction( UpdateTransaction::STALE_AFTER_SECONDS + 100 );
+		}
+		$level = ob_get_level();
+
+		ProtectedUpdate::recover( time() );
+
+		self::assertSame( 1, $attempts, 'Une tentative, par le bac à sable d\'activate_plugin().' );
+		self::assertSame( [ 'hello/hello.php' ], $this->options['active_plugins'], 'active_plugins jamais écrite de force.' );
+		self::assertFalse( $this->active, 'L\'extension reste inactive : le site reste debout.' );
+		self::assertSame( $level, ob_get_level(), 'Tampon ouvert par activate_plugin() refermé, sortie écartée.' );
+		$pending = PendingOutcomes::all();
+		self::assertCount( 1, $pending );
+		self::assertSame( 'recovery_failed', $pending[0]['outcome'] );
+		self::assertStringContainsString( 'otherwise it stays inactive', $pending[0]['detail'] );
+		self::assertNull( UpdateTransaction::current() );
+
+		ProtectedUpdate::recover( time() + 3600 ); // Le contrôle reprogrammé : plus rien à faire.
+		self::assertCount( 1, PendingOutcomes::all(), 'recovery_failed consigné une seule fois.' );
+		self::assertSame( 1, $attempts );
+		self::assertSame( [ 'hello/hello.php' ], $this->options['active_plugins'] );
+	}
+
+	/** @return array<string, array{0: string}> */
+	public static function activation_failures(): array {
+		return [
+			'le fichier principal lève une Error' => [ 'error' ],
+			'activate_plugin() rend une WP_Error' => [ 'wp_error' ],
+		];
 	}
 
 	/** Jusqu'à MAX_RECOVERY_ATTEMPTS reprises commencées, la restauration est tentée (délai dépassé passager, par exemple). */

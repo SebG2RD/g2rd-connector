@@ -148,8 +148,13 @@ Lighter on the server: fewer WordPress boots and fewer calls to the manager, sam
   limit: it takes a health measure longer than 10 minutes). A recovery that died while restoring
   is no longer retried forever: after 3 recovery attempts that did not finish (a fatal error
   replayed each time), the next one does not restore, reports `recovery_failed` with an explicit
-  detail, keeps the restore point and reactivates the plugin as it is if it was active, instead of
-  leaving it deactivated with no result for the platform. A manual rollback (`rollback_plugin`)
+  detail and keeps the restore point, instead of leaving the plugin deactivated with no result for
+  the platform. If the plugin was active, it is reactivated only if it loads without error
+  (otherwise it stays inactive): its files are then at their most doubtful (maybe half
+  extracted), and `active_plugins` is never written directly, which would take every page of the
+  site down with a critical error. A protected update stopped because a recovery took over its
+  transaction no longer reactivates the plugin while that recovery is still restoring it (the
+  recovery reactivates it itself once done). A manual rollback (`rollback_plugin`)
   is refused with the same "another protected update is still running on this site… retry in a
   few minutes" message while a protected update or a recovery is running; a dead transaction
   does not block it. A recovery that outlived its reservation no longer marks the next recovery
