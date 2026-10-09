@@ -25,6 +25,18 @@ final class ManagerClient {
 	private const TIMEOUT = 15;
 
 	/**
+	 * Délai (secondes) d'un envoi non bloquant (`'blocking' => false`).
+	 *
+	 * Avec le transport cURL de WordPress, un envoi non bloquant attend tout de même
+	 * que la requête soit partie, jusqu'à ce délai ; il ne lit ni n'interprète la
+	 * réponse. Le délai doit donc couvrir DNS, connexion et TLS jusqu'à la plateforme
+	 * (via le CDN de l'hébergeur), sans quoi l'événement serait perdu : 2 s, en
+	 * secondes entières (un délai inférieur à la seconde est mal tenu par certains
+	 * résolveurs DNS de cURL), contre 15 s pour un envoi bloquant.
+	 */
+	public const NON_BLOCKING_TIMEOUT = 2;
+
+	/**
 	 * Enregistre ce site auprès du manager en présentant un invitation_token
 	 * collé par l'utilisateur dans la page admin du plugin.
 	 *
@@ -129,10 +141,17 @@ final class ManagerClient {
 	/**
 	 * Push d'un event temps réel (login, plugin install, update fail, etc.).
 	 *
+	 * `$blocking = false` : la requête part avec un délai court
+	 * (NON_BLOCKING_TIMEOUT) et sa réponse n'est pas lue — un refus de la plateforme
+	 * n'est alors pas remonté. Même adresse, mêmes en-têtes, même corps qu'un envoi
+	 * bloquant. Réservé aux événements qu'on ne veut jamais voir retenir une page
+	 * WordPress (connexions échouées, cf. Events\Listener).
+	 *
 	 * @param array<string, mixed> $context
+	 * @param bool                 $blocking Attendre et contrôler la réponse (par défaut, comme avant).
 	 * @return true|WP_Error Type natif `bool` : `true` n'existe qu'en PHP 8.2.
 	 */
-	public function send_event( string $type, array $context = [] ): bool|WP_Error {
+	public function send_event( string $type, array $context = [], bool $blocking = true ): bool|WP_Error {
 		if ( ! Settings::is_enrolled() ) {
 			return new WP_Error( 'g2rd_connector_not_enrolled', 'Site non enrôlé.' );
 		}
@@ -146,7 +165,7 @@ final class ManagerClient {
 			'at'      => gmdate( 'c' ),
 		];
 
-		$resp = $this->post( '/events', $payload );
+		$resp = $this->post( '/events', $payload, $blocking );
 		return is_wp_error( $resp ) ? $resp : true;
 	}
 
@@ -220,29 +239,37 @@ final class ManagerClient {
 
 	/**
 	 * @param array<string, mixed> $payload
+	 * @param bool                 $blocking Faux : délai court, réponse ni attendue ni lue (cf. send_event).
 	 * @return array<string, mixed>|WP_Error
 	 */
-	private function post( string $relative_path, array $payload ): array|WP_Error {
+	private function post( string $relative_path, array $payload, bool $blocking = true ): array|WP_Error {
 		$base    = (string) Settings::get( 'manager_url' );
 		$site_id = (int) Settings::get( 'site_id' );
 		$token   = Settings::site_token();
 		$url     = sprintf( '%s/api/agent/sites/%d%s', rtrim( $base, '/' ), $site_id, $relative_path );
 
-		$resp = wp_remote_post(
-			$url,
-			[
-				'timeout' => self::TIMEOUT,
-				'headers' => [
-					'Content-Type'  => 'application/json',
-					'Accept'        => 'application/json',
-					'Authorization' => 'Bearer ' . $token,
-				],
-				'body'    => wp_json_encode( $payload ),
-			]
-		);
+		$args = [
+			'timeout' => self::TIMEOUT,
+			'headers' => [
+				'Content-Type'  => 'application/json',
+				'Accept'        => 'application/json',
+				'Authorization' => 'Bearer ' . $token,
+			],
+			'body'    => wp_json_encode( $payload ),
+		];
+		if ( ! $blocking ) {
+			$args['timeout']  = self::NON_BLOCKING_TIMEOUT;
+			$args['blocking'] = false;
+		}
+
+		$resp = wp_remote_post( $url, $args );
 
 		if ( is_wp_error( $resp ) ) {
 			return $resp;
+		}
+		if ( ! $blocking ) {
+			// Pas de réponse à lire : WordPress renvoie un code vide.
+			return [];
 		}
 
 		$code = (int) wp_remote_retrieve_response_code( $resp );

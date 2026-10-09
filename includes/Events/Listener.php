@@ -10,6 +10,11 @@
  *   - automatic_updates_complete → core.auto_update (avec rapport échecs)
  *   - wp_login_failed          → user.login_failed (sécurité)
  *
+ * Les connexions échouées sont le seul événement qu'un tiers peut déclencher à
+ * volonté (force brute, xmlrpc `system.multicall`) : elles partent sans bloquer la
+ * page et au plus LoginFailedThrottle::MAX_PER_MINUTE fois par minute. Les autres
+ * événements restent envoyés comme avant.
+ *
  * @package G2RD\Connector
  */
 
@@ -20,6 +25,15 @@ namespace G2RD\Connector\Events;
 use G2RD\Connector\Outbound\ManagerClient;
 
 final class Listener {
+
+	private LoginFailedThrottle $login_failed_throttle;
+
+	/**
+	 * @param LoginFailedThrottle|null $login_failed_throttle Plafond des connexions échouées (remplacé par les tests).
+	 */
+	public function __construct( ?LoginFailedThrottle $login_failed_throttle = null ) {
+		$this->login_failed_throttle = $login_failed_throttle ?? new LoginFailedThrottle();
+	}
 
 	public function register(): void {
 		add_action( 'wp_login', [ $this, 'on_login' ], 10, 2 );
@@ -41,13 +55,23 @@ final class Listener {
 		);
 	}
 
+	/**
+	 * Une tentative au-delà du plafond de la minute est seulement comptée : aucun
+	 * appel à la plateforme (cf. LoginFailedThrottle). Sinon l'événement part sans
+	 * bloquer : la page de connexion (ou xmlrpc.php) n'attend pas la plateforme.
+	 */
 	public function on_login_failed( string $user_login ): void {
-		$this->dispatch(
+		if ( ! $this->login_failed_throttle->allow() ) {
+			return;
+		}
+
+		( new ManagerClient() )->send_event(
 			'user.login_failed',
 			[
 				'user_login' => $user_login,
 				'ip'         => $this->client_ip(),
-			]
+			],
+			false
 		);
 	}
 
@@ -141,7 +165,8 @@ final class Listener {
 	 * @param array<string, mixed> $context
 	 */
 	private function dispatch( string $type, array $context ): void {
-		// Fire-and-forget : si le manager est down, on ne bloque pas WP.
+		// Envoi bloquant (délai de 15 s), erreur ignorée : un manager injoignable ne
+		// casse pas WordPress. Les connexions échouées passent par on_login_failed().
 		( new ManagerClient() )->send_event( $type, $context );
 	}
 
