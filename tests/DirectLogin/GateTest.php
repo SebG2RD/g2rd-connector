@@ -8,6 +8,7 @@ use Brain\Monkey\Functions;
 use G2RD\Connector\DirectLogin\Gate;
 use G2RD\Connector\DirectLogin\Refusal;
 use G2RD\Connector\DirectLogin\UsedTickets;
+use G2RD\Connector\Security\DirectLoginTicket;
 use G2RD\Connector\Settings;
 use G2RD\Connector\Tests\TestCase;
 
@@ -113,6 +114,46 @@ final class GateTest extends TestCase {
 
 	public function test_un_compte_supprime_est_refuse(): void {
 		self::assertSame( Refusal::NOT_ADMIN, $this->refusal( TicketFactory::make( self::NOW + 60, [ 'u' => 99 ] ) ) );
+	}
+
+	/**
+	 * La purge des tickets consommés (cron local) n'est qu'un ménage : un ticket est
+	 * refusé s'il a déjà servi tant que son nonce est stocké, et refusé comme expiré
+	 * dès que sa fenêtre est passée, que la purge ait eu lieu ou non. C'est ce qui
+	 * permet d'espacer la purge (deux fois par jour au lieu de toutes les heures)
+	 * sans rien changer à la sécurité.
+	 */
+	public function test_la_validation_ne_depend_pas_de_la_purge_des_tickets_consommes(): void {
+		$ticket = TicketFactory::make( self::NOW + 60 );
+		$nonce  = UsedTickets::OPTION_PREFIX . TicketFactory::NONCE;
+		self::assertSame( 'ok', ( new Gate() )->check( $ticket, self::NOW )['status'] );
+
+		// Encore dans sa fenêtre, nonce stocké : déjà utilisé.
+		self::assertSame( Refusal::REPLAYED, $this->refusal( $ticket ) );
+
+		// Fenêtre passée, purge pas encore faite (nonce toujours stocké) : expiré.
+		$later = self::NOW + UsedTickets::RETENTION_SECONDS + 1;
+		self::assertArrayHasKey( $nonce, $this->options );
+		self::assertSame( Refusal::EXPIRED, ( new Gate() )->check( $ticket, $later )['code'] ?? null );
+
+		// Purge faite (nonce retiré) : toujours expiré, et le nonce n'est pas reconsommé.
+		self::assertSame( 1, UsedTickets::purge( $later ) );
+		self::assertArrayNotHasKey( $nonce, $this->options );
+		self::assertSame( Refusal::EXPIRED, ( new Gate() )->check( $ticket, $later )['code'] ?? null );
+		self::assertArrayNotHasKey( $nonce, $this->options );
+	}
+
+	/**
+	 * Un ticket accepté à l'instant t expire au plus tard à t + 90 s (avance maximale)
+	 * et passe le contrôle d'expiration jusqu'à t + 120 s (tolérance d'horloge). La
+	 * purge ne retire qu'un nonce consommé depuis plus de RETENTION_SECONDS : jamais
+	 * celui d'un ticket qui pourrait encore passer, quelle que soit sa fréquence.
+	 */
+	public function test_un_nonce_n_est_jamais_purge_tant_que_son_ticket_peut_encore_passer(): void {
+		self::assertGreaterThan(
+			DirectLoginTicket::MAX_FUTURE_SECONDS + DirectLoginTicket::CLOCK_TOLERANCE_SECONDS,
+			UsedTickets::RETENTION_SECONDS
+		);
 	}
 
 	private function refusal( string $ticket ): string {

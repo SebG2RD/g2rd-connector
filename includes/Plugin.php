@@ -121,15 +121,16 @@ final class Plugin {
 		//   - la garde qui empêche WordPress de réinstaller seul une version retirée.
 		( new HealthEndpoint() )->register();
 		( new AutoUpdateGuard() )->register();
-		// Purge locale horaire des points de restauration : fonctionne hors connexion
-		// à la plateforme. Planification réparée à chaque démarrage, comme la
-		// découverte des MAJ.
+		// Purge locale des points de restauration, deux fois par jour : fonctionne hors
+		// connexion à la plateforme. Planification réparée à chaque démarrage, comme la
+		// découverte des MAJ, et ancienne planification horaire migrée (une fois).
 		( new RestorePointPurgeJob() )->register();
 		RestorePointPurgeJob::schedule();
 
 		// Connexion directe depuis G2RD WP Manager (1.13) : point d'entrée admin-ajax
 		// `g2rd_login` (avec et sans session, comme la sonde de santé), et purge des
-		// tickets consommés sur le cron horaire local existant.
+		// tickets consommés sur le cron local de la purge (la validation d'un ticket
+		// n'en dépend pas : expiration contrôlée avant l'usage unique).
 		( new Endpoint() )->register();
 		add_action( RestorePointPurgeJob::HOOK, [ UsedTickets::class, 'purge_now' ] );
 
@@ -222,7 +223,10 @@ final class Plugin {
 	public static function activate(): void {
 		Settings::ensure_defaults();
 		// Le cron est planifié seulement à l'enrollment, pas à l'activation —
-		// conforme guideline "no phoning home without consent".
+		// conforme guideline "no phoning home without consent". Une ancienne
+		// planification horaire de la purge locale, si elle existe encore, est
+		// seulement migrée (rien n'est créé ici).
+		RestorePointPurgeJob::migrate_legacy_schedule();
 		flush_rewrite_rules();
 	}
 

@@ -64,6 +64,11 @@ final class ProtectedUpdate {
 			throw new \RuntimeException( 'another protected update is still running on this site' );
 		}
 		register_shutdown_function( [ self::class, 'recover_on_shutdown' ] );
+		// Filet du filet : un processus tué par le serveur ne passe pas par le
+		// shutdown. La purge locale (qui reprend les transactions mortes) ne passant
+		// que deux fois par jour, on lui demande un passage juste après le délai au-delà
+		// duquel cette transaction pourra être déclarée morte.
+		RestorePointPurgeJob::schedule_recovery_check( $now );
 
 		// ── Référence de santé, AVANT tout changement ────────────────────────────
 		$baseline = $s->health->measure();

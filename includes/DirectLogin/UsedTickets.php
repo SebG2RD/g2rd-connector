@@ -12,8 +12,11 @@
  * différentes.
  *
  * Les entrées de plus de 10 minutes — bien au-delà de la vie d'un ticket (60 s,
- * plus 30 s de tolérance d'horloge) — sont purgées par le cron horaire local
- * existant (RestorePointPurgeJob::HOOK), qui fonctionne hors connexion au manager.
+ * plus 30 s de tolérance d'horloge) — sont purgées par le cron local de la purge
+ * des points de restauration (RestorePointPurgeJob::HOOK, deux fois par jour), qui
+ * fonctionne hors connexion au manager. La purge n'est qu'un ménage : la validation
+ * contrôle l'expiration avant l'usage unique, un ticket expiré est donc refusé que
+ * son nonce soit encore stocké ou déjà purgé.
  *
  * @package G2RD\Connector
  */
@@ -113,7 +116,7 @@ final class UsedTickets {
 	}
 
 	/**
-	 * Cible du cron horaire (RestorePointPurgeJob::HOOK).
+	 * Cible du cron local de la purge (RestorePointPurgeJob::HOOK).
 	 */
 	public static function purge_now(): void {
 		self::purge( time() );

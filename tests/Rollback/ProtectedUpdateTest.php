@@ -6,6 +6,7 @@ namespace G2RD\Connector\Tests\Rollback;
 
 use Brain\Monkey\Functions;
 use G2RD\Connector\Commands\CommandExecutor;
+use G2RD\Connector\Cron\RestorePointPurgeJob;
 use G2RD\Connector\Rollback\AutoUpdateGuard;
 use G2RD\Connector\Rollback\HealthChecker;
 use G2RD\Connector\Rollback\PendingOutcomes;
@@ -36,6 +37,8 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 	private array $deactivated = [];
 	/** @var list<string> */
 	private array $activated = [];
+	/** @var list<array{0:int, 1:string}> Événements ponctuels programmés (date, hook). */
+	private array $single_events = [];
 
 	protected function setUp(): void {
 		parent::setUp();
@@ -46,6 +49,7 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		$this->active          = true;
 		$this->deactivated     = [];
 		$this->activated       = [];
+		$this->single_events   = [];
 
 		// ── WordPress simulé ────────────────────────────────────────────────────
 		Functions\when( 'get_plugins' )->alias( fn (): array => $this->plugins_on_disk() );
@@ -55,6 +59,12 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		Functions\when( 'is_wp_error' )->alias( static fn ( $v ): bool => $v instanceof WP_Error );
 		Functions\when( 'wp_clean_plugins_cache' )->justReturn( null );
 		Functions\when( 'register_shutdown_function' )->justReturn( null );
+		Functions\when( 'wp_schedule_single_event' )->alias(
+			function ( int $timestamp, string $hook ): bool {
+				$this->single_events[] = [ $timestamp, $hook ];
+				return true;
+			}
+		);
 		Functions\when( 'plugin_basename' )->alias( static fn ( string $f ): string => 'g2rd-connector/g2rd-connector.php' );
 		Functions\when( 'get_filesystem_method' )->justReturn( 'direct' );
 		Functions\when( 'deactivate_plugins' )->alias(
@@ -268,6 +278,27 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		self::assertSame( 'failed', $outcome['status'] );
 		self::assertStringContainsString( 'still running', $outcome['error'] );
 		self::assertSame( [], Plugin_Upgrader::$upgraded );
+		self::assertSame( [], $this->single_events, 'Refusée avant ouverture : aucun contrôle de reprise à programmer.' );
+	}
+
+	/**
+	 * Filet du filet : une requête tuée sans passer par le shutdown (processus arrêté
+	 * par le serveur) laisse la transaction ouverte. La purge locale ne passant plus
+	 * que deux fois par jour, un contrôle ponctuel est programmé dès l'ouverture, juste
+	 * après le délai au-delà duquel la transaction est déclarée morte.
+	 */
+	public function test_the_update_schedules_a_recovery_check_when_the_transaction_opens(): void {
+		$this->script_health( ok: 2, then_ok: 2 );
+		$before = time();
+
+		CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+		$after = time();
+
+		self::assertCount( 1, $this->single_events );
+		[ $timestamp, $hook ] = $this->single_events[0];
+		self::assertSame( RestorePointPurgeJob::HOOK, $hook );
+		self::assertGreaterThanOrEqual( $before + RestorePointPurgeJob::RECOVERY_CHECK_DELAY, $timestamp );
+		self::assertLessThanOrEqual( $after + RestorePointPurgeJob::RECOVERY_CHECK_DELAY, $timestamp );
 	}
 
 	/**

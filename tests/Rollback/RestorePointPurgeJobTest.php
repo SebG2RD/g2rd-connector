@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Tests\Rollback;
 
+use Brain\Monkey\Functions;
 use G2RD\Connector\Cron\RestorePointPurgeJob;
 use G2RD\Connector\Rollback\PendingOutcomes;
 use G2RD\Connector\Rollback\RestorePointStore;
@@ -84,6 +85,44 @@ final class RestorePointPurgeJobTest extends FilesystemTestCase {
 	public function test_empty_store_is_a_no_op(): void {
 		$report = RestorePointPurgeJob::purge( $this->store, self::NOW );
 		self::assertSame( [ 'expired' => 0, 'held' => 0, 'capped' => 0, 'orphans' => [ 'files' => 0, 'records' => 0 ], 'outcomes' => 0 ], $report );
+	}
+
+	/**
+	 * Une mise à jour protégée encore ouverte, pas encore déclarée morte : le cron
+	 * repassera dès qu'elle pourra l'être, sans attendre son passage biquotidien.
+	 */
+	public function test_run_follows_a_transaction_that_is_still_open(): void {
+		$scheduled = [];
+		Functions\when( 'wp_schedule_single_event' )->alias(
+			function ( int $timestamp, string $hook ) use ( &$scheduled ): bool {
+				$scheduled[] = [ $timestamp, $hook ];
+				return true;
+			}
+		);
+		$updated_at = time() - 30;
+		UpdateTransaction::open( [ 'plugin_file' => 'z/z.php' ], $updated_at );
+
+		( new RestorePointPurgeJob() )->run();
+
+		self::assertNotNull( UpdateTransaction::current(), 'Transaction fraîche : pas encore reprise.' );
+		self::assertSame( [ [ $updated_at + RestorePointPurgeJob::RECOVERY_CHECK_DELAY, RestorePointPurgeJob::HOOK ] ], $scheduled );
+	}
+
+	public function test_run_schedules_nothing_once_a_dead_transaction_is_recovered(): void {
+		Functions\expect( 'wp_schedule_single_event' )->never();
+		UpdateTransaction::open( [ 'plugin_file' => 'z/z.php' ], time() - 5000 );
+
+		( new RestorePointPurgeJob() )->run();
+
+		self::assertNull( UpdateTransaction::current() );
+	}
+
+	public function test_run_schedules_nothing_without_an_open_transaction(): void {
+		Functions\expect( 'wp_schedule_single_event' )->never();
+
+		( new RestorePointPurgeJob() )->run();
+
+		self::assertNull( UpdateTransaction::current() );
 	}
 
 	private function add( string $id, string $plugin = 'a/a.php', ?int $expires = null, bool $hold = false, ?int $hold_until = null, int $created = self::NOW ): void {
