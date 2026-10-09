@@ -82,6 +82,15 @@ final class RestoreCommands {
 			throw new \RuntimeException( 'payload.expected_version required' );
 		}
 
+		// Une mise à jour protégée, ou une reprise menée par le cron du site (que la
+		// plateforme ne sérialise pas avec ses commandes), peut restaurer cette même
+		// extension en ce moment : deux restaurations déplaceraient le même dossier en
+		// même temps. Refus avant tout changement, avec le message déjà connu de la
+		// plateforme. Une transaction morte ne bloque pas (comportement d'avant).
+		if ( UpdateTransaction::in_progress( time() ) ) {
+			throw new \RuntimeException( UpdateTransaction::BUSY_MESSAGE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- constante, texte fixe.
+		}
+
 		$s        = $this->services;
 		$point_id = (string) ( $payload['restore_point_id'] ?? '' );
 		$point    = '' !== $point_id ? $s->store->get( $point_id ) : null;

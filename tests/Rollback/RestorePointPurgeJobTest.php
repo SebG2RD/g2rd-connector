@@ -20,6 +20,10 @@ final class RestorePointPurgeJobTest extends FilesystemTestCase {
 		parent::setUp();
 		$this->store = new RestorePointStore();
 		$this->store->ensure_dir();
+		// Une reprise qui réserve une transaction programme un contrôle (filet si elle
+		// mourait en route, cf. ProtectedUpdate::recover()) : rien en attente par défaut.
+		Functions\when( 'wp_next_scheduled' )->justReturn( false );
+		Functions\when( 'wp_schedule_single_event' )->justReturn( true );
 	}
 
 	public function test_purges_expired_points_and_keeps_the_others(): void {
@@ -131,7 +135,10 @@ final class RestorePointPurgeJobTest extends FilesystemTestCase {
 		self::assertSame( [ [ $updated_at + RestorePointPurgeJob::RECOVERY_CHECK_DELAY, RestorePointPurgeJob::RECOVERY_HOOK ] ], $scheduled->getArrayCopy() );
 	}
 
-	/** Transaction morte : reprise d'abord, puis purge normale, et plus rien à suivre. */
+	/**
+	 * Transaction morte : reprise d'abord, puis purge normale. Seul contrôle programmé :
+	 * celui de la réservation, rien de reprogrammé ensuite.
+	 */
 	public function test_run_recovers_a_dead_transaction_then_purges_normally(): void {
 		$scheduled = $this->record_single_events();
 		$now       = time();
@@ -145,7 +152,7 @@ final class RestorePointPurgeJobTest extends FilesystemTestCase {
 		self::assertSame( [ 'interrupted_unverified' ], array_column( PendingOutcomes::all(), 'outcome' ) );
 		self::assertNull( $this->store->get( 'expire' ) );
 		self::assertFileDoesNotExist( $this->snapshots . '/orphelin-1-abcd.zip' );
-		self::assertSame( [], $scheduled->getArrayCopy() );
+		$this->assert_only_the_reservation_check( $scheduled, $now );
 	}
 
 	public function test_run_schedules_nothing_without_an_open_transaction(): void {
@@ -158,7 +165,8 @@ final class RestorePointPurgeJobTest extends FilesystemTestCase {
 
 	/**
 	 * Le contrôle ponctuel ne fait que reprendre une transaction morte : ni purge des
-	 * points (expirés, orphelins), ni reprogrammation une fois la transaction fermée.
+	 * points (expirés, orphelins), ni reprogrammation une fois la transaction fermée
+	 * (seul reste le contrôle posé à la réservation).
 	 */
 	public function test_recovery_check_recovers_a_dead_transaction_and_purges_nothing(): void {
 		$scheduled = $this->record_single_events();
@@ -173,7 +181,7 @@ final class RestorePointPurgeJobTest extends FilesystemTestCase {
 		self::assertSame( [ 'interrupted_unverified' ], array_column( PendingOutcomes::all(), 'outcome' ) );
 		self::assertNotNull( $this->store->get( 'expire' ), 'La purge des points attend le passage biquotidien.' );
 		self::assertFileExists( $this->snapshots . '/orphelin-1-abcd.zip' );
-		self::assertSame( [], $scheduled->getArrayCopy() );
+		$this->assert_only_the_reservation_check( $scheduled, $now );
 		self::assertArrayNotHasKey( UpdateTransaction::RECOVERY_TRACE_KEY, $this->options, 'Fermeture réussie : aucune trace écrite.' );
 	}
 
@@ -216,10 +224,12 @@ final class RestorePointPurgeJobTest extends FilesystemTestCase {
 	 * Transaction morte que la reprise n'arrive pas à retirer (delete_option() en
 	 * échec) : le contrôle ne se reprogramme pas — à `updated_at + délai`, date déjà
 	 * passée, WP-Cron le relancerait à chaque passage, environ une fois par minute —
-	 * et la reprise n'est pas rejouée sur la même transaction.
+	 * et la reprise n'est pas rejouée sur la même transaction. Seul reste le contrôle
+	 * posé à la réservation, dans le futur.
 	 */
 	public function test_recovery_check_does_not_loop_on_a_dead_transaction_it_cannot_close(): void {
 		$scheduled = $this->record_single_events();
+		$before    = time();
 		$this->make_transaction_undeletable();
 		UpdateTransaction::open( [ 'plugin_file' => 'z/z.php' ], time() - 5000 );
 
@@ -228,7 +238,7 @@ final class RestorePointPurgeJobTest extends FilesystemTestCase {
 
 		$txn = UpdateTransaction::current();
 		self::assertNotNull( $txn, 'Toujours là : delete_option() échoue.' );
-		self::assertSame( [], $scheduled->getArrayCopy(), 'Aucune reprogrammation, ni dans le passé ni ailleurs.' );
+		$this->assert_only_the_reservation_check( $scheduled, $before );
 		self::assertSame( [ 'interrupted_unverified' ], array_column( PendingOutcomes::all(), 'outcome' ), 'Une seule reprise pour cette transaction.' );
 		$trace = $this->options[ UpdateTransaction::RECOVERY_TRACE_KEY ] ?? null;
 		self::assertIsArray( $trace, 'Reprise tracée.' );
@@ -253,7 +263,7 @@ final class RestorePointPurgeJobTest extends FilesystemTestCase {
 
 		self::assertNotNull( UpdateTransaction::current() );
 		self::assertNull( $this->store->get( 'expire' ), 'Purge faite.' );
-		self::assertSame( [], $scheduled->getArrayCopy() );
+		$this->assert_only_the_reservation_check( $scheduled, $now );
 		self::assertSame( [ 'interrupted_unverified' ], array_column( PendingOutcomes::all(), 'outcome' ) );
 	}
 
@@ -286,7 +296,32 @@ final class RestorePointPurgeJobTest extends FilesystemTestCase {
 				return true;
 			}
 		);
+		Functions\when( 'wp_next_scheduled' )->alias(
+			static function ( string $hook ) use ( $scheduled ) {
+				foreach ( $scheduled as [ $timestamp, $event_hook ] ) {
+					if ( $event_hook === $hook ) {
+						return $timestamp;
+					}
+				}
+				return false;
+			}
+		);
 		return $scheduled;
+	}
+
+	/**
+	 * Seul contrôle programmé : celui posé quand la reprise a réservé la transaction
+	 * (filet si elle mourait en route), dans le futur. Rien de reprogrammé ensuite,
+	 * ni dans le passé.
+	 *
+	 * @param \ArrayObject<int, array{0:int, 1:string}> $scheduled
+	 */
+	private function assert_only_the_reservation_check( \ArrayObject $scheduled, int $before ): void {
+		self::assertCount( 1, $scheduled, 'Un seul contrôle : celui de la réservation.' );
+		[ $timestamp, $hook ] = $scheduled[0];
+		self::assertSame( RestorePointPurgeJob::RECOVERY_HOOK, $hook );
+		self::assertGreaterThanOrEqual( $before + RestorePointPurgeJob::RECOVERY_CHECK_DELAY, $timestamp );
+		self::assertLessThanOrEqual( time() + RestorePointPurgeJob::RECOVERY_CHECK_DELAY, $timestamp );
 	}
 
 	private function add( string $id, string $plugin = 'a/a.php', ?int $expires = null, bool $hold = false, ?int $hold_until = null, int $created = self::NOW ): void {

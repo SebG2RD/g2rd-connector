@@ -265,6 +265,19 @@ dont le loopback est impossible donne « non vérifiable », jamais « cassé »
   transaction de leur processus ; une mise à jour dont la transaction a été reprise pendant une
   étape de plus de 10 minutes s'arrête avant de toucher à l'extension, avec une erreur explicite ;
   un contrôle de reprise perdu est reprogrammé juste avant que les fichiers changent.
+- Une reprise menée par le cron arme le filet de shutdown et garde un contrôle en attente avant
+  de restaurer : une reprise tuée en route est reprise environ 11 minutes plus tard, au lieu
+  d'attendre la purge (jusqu'à 12 h). Une mise à jour dont la transaction a été prise pendant la
+  mise à jour s'arrête juste après, avec une erreur explicite : ni mesure de santé, ni seconde
+  restauration en même temps que la reprise, ni résultat `updated` / `not_updated` (la reprise
+  restaure l'ancienne version et consigne son propre résultat). Prise pendant le contrôle de
+  santé, elle ne restaure pas sans sa transaction : erreur explicite, point gardé pour un rollback
+  depuis la plateforme. Le rollback manuel (`rollback_plugin`) est refusé avec le même message
+  (« another protected update is still running on this site… retry in a few minutes ») tant
+  qu'une mise à jour protégée ou une reprise est en cours ; une transaction morte ne le bloque pas.
+  Une reprise qui a dépassé sa réservation ne fait plus passer la suivante pour faite ; la
+  transaction est relue même lue absente plus tôt dans la requête (cache `notoptions` de
+  WordPress) ; la trace `g2rd_update_txn_recovery` est retirée avec sa transaction.
 - Après un rollback, la version retirée est bloquée pour les mises à jour automatiques de
   WordPress jusqu'à la version suivante.
 - Le plugin ne se rollback jamais lui-même. La capacité `restore_points` n'est annoncée dans

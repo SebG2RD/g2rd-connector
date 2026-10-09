@@ -16,6 +16,7 @@ use G2RD\Connector\Rollback\RestorePointStore;
 use G2RD\Connector\Rollback\Services;
 use G2RD\Connector\Rollback\Snapshotter;
 use G2RD\Connector\Rollback\UnverifiedDownloads;
+use G2RD\Connector\Rollback\UpdateTransaction;
 use G2RD\Connector\Security\RequestSignature;
 use G2RD\Connector\Settings;
 use WP_Error;
@@ -165,6 +166,64 @@ final class RestoreCommandsTest extends FilesystemTestCase {
 			(array) ( $this->options['active_plugins'] ?? [] ),
 			'la voie de secours doit rallumer l\'extension sans passer par le code tiers',
 		);
+	}
+
+	/**
+	 * Une reprise du cron (ou une mise à jour protégée) est en cours : elle peut
+	 * restaurer la même extension. Le rollback manuel est refusé avant tout
+	 * changement, avec le message déjà connu de la plateforme.
+	 */
+	public function test_manual_rollback_is_refused_while_a_protected_update_or_a_recovery_is_running(): void {
+		$recovering = [
+			'id'               => 'morte',
+			'plugin_file'      => self::FILE,
+			'was_active'       => true,
+			'step'             => UpdateTransaction::STEP_RECOVERING,
+			'recovering_from'  => UpdateTransaction::STEP_UPGRADING,
+			'recovery_token'   => 'jeton-du-cron',
+			'restore_point_id' => $this->point['id'],
+			'started_at'       => time() - 1000,
+			'updated_at'       => time() - 20,
+		];
+		$this->options[ UpdateTransaction::OPTION_KEY ] = $recovering;
+
+		$outcome = CommandExecutor::run( 'rollback_plugin', [
+			'file'                     => self::FILE,
+			'restore_point_id'         => $this->point['id'],
+			'expected_sha256'          => $this->point['sha256'],
+			'expected_version'         => '1.0',
+			'expected_current_version' => '2.0',
+		] );
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assertStringStartsWith( 'another protected update is still running on this site', $outcome['error'] );
+		self::assertStringContainsString( 'nothing was changed, retry in a few minutes', $outcome['error'] );
+		self::assertSame( '2.0', $this->plugins_on_disk()[ self::FILE ]['Version'], 'Rien n\'a changé.' );
+		self::assertTrue( $this->active );
+		self::assertFalse( $this->store->get( $this->point['id'] )['hold'] );
+		self::assertSame( $recovering, $this->options[ UpdateTransaction::OPTION_KEY ] );
+	}
+
+	/** Une transaction morte (plus de 10 min sans signe de vie) ne bloque pas le rollback manuel, comme avant. */
+	public function test_a_dead_transaction_does_not_block_the_manual_rollback(): void {
+		$this->options[ UpdateTransaction::OPTION_KEY ] = [
+			'id'          => 'morte',
+			'plugin_file' => 'autre/autre.php',
+			'step'        => UpdateTransaction::STEP_HEALTH,
+			'started_at'  => time() - 2000,
+			'updated_at'  => time() - 1000,
+		];
+
+		$outcome = CommandExecutor::run( 'rollback_plugin', [
+			'file'                     => self::FILE,
+			'restore_point_id'         => $this->point['id'],
+			'expected_sha256'          => $this->point['sha256'],
+			'expected_version'         => '1.0',
+			'expected_current_version' => '2.0',
+		] );
+
+		self::assertSame( 'done', $outcome['status'] );
+		self::assertSame( RestoreCommands::OUTCOME_SUCCESS, $outcome['result']['outcome'] );
 	}
 
 	public function test_version_drift_is_refused(): void {

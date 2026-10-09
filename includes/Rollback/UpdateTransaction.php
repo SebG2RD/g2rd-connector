@@ -56,6 +56,13 @@ final class UpdateTransaction {
 	public const STEP_RECOVERING = 'recovering';
 
 	/**
+	 * Refus d'une opération sur les fichiers d'une extension pendant une mise à jour
+	 * protégée ou une reprise (ProtectedUpdate::run(), RestoreCommands::rollback_plugin()).
+	 * Déjà connu de la plateforme, qui l'affiche tel quel : rien n'a changé sur le site.
+	 */
+	public const BUSY_MESSAGE = 'another protected update is still running on this site (or an interrupted one is being recovered); nothing was changed, retry in a few minutes';
+
+	/**
 	 * Transaction que tient ce processus : [identité, jeton de reprise]. Jeton nul pour
 	 * celle qu'il a ouverte (open()), le sien pour celle qu'il reprend (reserve()).
 	 * Oubliée à close().
@@ -164,7 +171,12 @@ final class UpdateTransaction {
 	 * Deux reprises parties au même instant (contrôle du cron et mise à jour) écrivent
 	 * chacune leur jeton : la relecture qui suit l'écriture ne laisse continuer que
 	 * celle dont le jeton est resté en base. Reste la fenêtre où chacune relit avant
-	 * l'écriture de l'autre (quelques millisecondes).
+	 * l'écriture de l'autre (quelques millisecondes) : la réservation n'est pas
+	 * atomique. add_option() ne la rendrait pas atomique : WordPress l'écrit en
+	 * `INSERT … ON DUPLICATE KEY UPDATE`, le second appel concurrent réussit aussi.
+	 * Une réservation atomique demanderait une écriture conditionnelle en SQL direct
+	 * (`UPDATE … WHERE option_value = <valeur lue>`, une seule ligne modifiée pour
+	 * le gagnant) : limite connue, suivie à part.
 	 *
 	 * @param array<string, mixed> $txn Telle que lue par l'appelant.
 	 * @return array<string, mixed>|null La transaction réservée.
@@ -206,7 +218,9 @@ final class UpdateTransaction {
 
 	/**
 	 * Retire une transaction déjà reprise (trace de reprise) que close() n'avait pas
-	 * pu retirer — si c'est toujours elle en base (relue sans cache).
+	 * pu retirer — si c'est toujours elle en base (relue sans cache) —, puis sa trace,
+	 * qui ne sert qu'à elle. La trace reste tant que la transaction n'a pas pu être
+	 * retirée : sans elle, chaque passage restaurerait l'extension de nouveau.
 	 *
 	 * @param array<string, mixed> $txn
 	 */
@@ -215,7 +229,9 @@ final class UpdateTransaction {
 		if ( null === $stored || ! self::is( $stored, self::holder_of( $txn ) ) ) {
 			return;
 		}
-		self::delete();
+		if ( self::delete() && self::recovery_already_attempted( $txn ) ) {
+			delete_option( self::RECOVERY_TRACE_KEY );
+		}
 	}
 
 	/**
@@ -231,6 +247,30 @@ final class UpdateTransaction {
 		}
 		$stored = self::fresh();
 		return null !== $stored && self::is( $stored, self::$held ) ? $stored : null;
+	}
+
+	/**
+	 * Une mise à jour protégée, ou une reprise, est-elle en cours sur ce site ? Relue
+	 * en base sans cache (cf. fresh()). Pour refuser, avant tout changement, une
+	 * opération sur les fichiers d'une extension qui pourrait croiser une restauration
+	 * (rollback manuel, cf. RestoreCommands::rollback_plugin()).
+	 */
+	public static function in_progress( int $now ): bool {
+		$current = self::fresh();
+		return null !== $current && self::is_live( $current, $now );
+	}
+
+	/**
+	 * Même transaction et même reprise : même identité, même jeton de reprise (aucun
+	 * pour une transaction qui n'est pas réservée). Une reprise qui a dépassé 10 min a
+	 * pu être réservée de nouveau par une autre (même identité, autre jeton) : sa
+	 * réservation n'est plus celle de la première (cf. ProtectedUpdate::recover()).
+	 *
+	 * @param array<string, mixed> $txn
+	 * @param array<string, mixed> $other
+	 */
+	public static function same_reservation( array $txn, array $other ): bool {
+		return self::is( $txn, self::holder_of( $other ) );
 	}
 
 	/**
@@ -352,7 +392,8 @@ final class UpdateTransaction {
 	}
 
 	/**
-	 * La transaction en base, relue sans le cache d'options.
+	 * La transaction en base, relue sans le cache d'options — y compris quand elle a
+	 * été lue absente plus tôt dans la requête.
 	 *
 	 * @return array<string, mixed>|null
 	 */
@@ -360,6 +401,16 @@ final class UpdateTransaction {
 		// Non autochargée (cf. write()) : get_option() la garde dans le groupe
 		// `options` du cache, sous son nom.
 		wp_cache_delete( self::OPTION_KEY, 'options' );
+		// Lue absente plus tôt (par exemple par la reprise qui précède l'ouverture),
+		// elle est mémorisée dans `notoptions`, et get_option() la rendrait absente
+		// sans relire la base, même créée depuis par un autre processus. On l'en
+		// retire, comme WordPress quand il l'ajoute ; rien n'est écrit si elle n'y est
+		// pas. Le reste de `notoptions` est gardé (autres options lues absentes).
+		$notoptions = wp_cache_get( 'notoptions', 'options' );
+		if ( is_array( $notoptions ) && isset( $notoptions[ self::OPTION_KEY ] ) ) {
+			unset( $notoptions[ self::OPTION_KEY ] );
+			wp_cache_set( 'notoptions', $notoptions, 'options' );
+		}
 		return self::current();
 	}
 
@@ -390,11 +441,15 @@ final class UpdateTransaction {
 		return is_string( $token ) ? $token : null;
 	}
 
-	private static function delete(): void {
-		delete_option( self::OPTION_KEY );
+	/**
+	 * @return bool Vrai si la ligne a été retirée de la base (retour de delete_option()).
+	 */
+	private static function delete(): bool {
+		$deleted = delete_option( self::OPTION_KEY );
 		// Cache objet désynchronisé : delete_option() peut renvoyer faux sans vider le
 		// cache, et la transaction resterait vue comme ouverte. On le vide dans tous les cas.
 		wp_cache_delete( self::OPTION_KEY, 'options' );
+		return $deleted;
 	}
 
 	/**

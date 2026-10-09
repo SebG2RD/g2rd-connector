@@ -703,7 +703,236 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		self::assertLessThanOrEqual( time() + RestorePointPurgeJob::RECOVERY_CHECK_DELAY, $timestamp );
 	}
 
+	// ── Reprise menée par le cron : filet et contrôle pendant la restauration ──
+
+	/**
+	 * Le contrôle du cron reprend une mise à jour morte. wp-cron.php a retiré
+	 * l'événement avant de l'exécuter : si ce processus mourait pendant la
+	 * restauration (erreur fatale, délai dépassé pendant l'extraction, processus
+	 * tué), rien ne reprendrait sa réservation avant la purge biquotidienne. Pendant
+	 * toute la restauration, un contrôle attend donc, et le filet de shutdown est armé.
+	 */
+	public function test_a_cron_recovery_keeps_a_check_pending_and_the_shutdown_net_armed_while_restoring(): void {
+		$nets  = $this->record_shutdown_nets();
+		$point = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
+		( Plugin_Upgrader::$on_upgrade )();
+		$this->dead_transaction( self::FILE, $point['id'] );
+		$this->single_events = []; // Événement en cours : déjà retiré par wp-cron.php.
+		$seen                = null;
+		$this->on_filter     = function ( string $hook ) use ( &$seen, $nets ): void {
+			if ( null === $seen && 'g2rd_connector_snapshots_dir' === $hook && $this->recovery_running() ) {
+				$seen = [
+					'check' => \wp_next_scheduled( RestorePointPurgeJob::RECOVERY_HOOK ),
+					'net'   => in_array( [ ProtectedUpdate::class, 'recover_on_shutdown' ], $nets->getArrayCopy(), true ),
+				];
+			}
+		};
+		$before = time();
+
+		( new RestorePointPurgeJob() )->run_recovery_check();
+
+		self::assertNotNull( $seen, 'La restauration a bien eu lieu.' );
+		self::assertNotFalse( $seen['check'], 'Un contrôle attend pendant la restauration.' );
+		self::assertGreaterThanOrEqual( $before + RestorePointPurgeJob::RECOVERY_CHECK_DELAY, $seen['check'], 'Programmé après le délai au-delà duquel la réservation pourra être déclarée morte.' );
+		self::assertTrue( $seen['net'], 'Filet de shutdown armé avant la restauration.' );
+		self::assertSame( [ [ self::FILE, 'recovered_rolled_back' ] ], $this->pending_outcomes() );
+		self::assertNull( UpdateTransaction::current() );
+	}
+
+	/**
+	 * La reprise du cron meurt pendant la restauration (erreur fatale) : le filet de
+	 * shutdown reprend la réservation que tient ce processus, et restaure.
+	 */
+	public function test_the_shutdown_net_resumes_a_cron_recovery_that_died_while_restoring(): void {
+		$point       = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
+		$tree_before = $this->tree( $this->plugins . '/akismet' );
+		( Plugin_Upgrader::$on_upgrade )();
+		$this->dead_transaction( self::FILE, $point['id'] );
+		// Ce que fait la reprise du cron juste avant de restaurer ; le processus meurt ensuite.
+		self::assertNotNull( UpdateTransaction::reserve( (array) UpdateTransaction::current(), time() ) );
+
+		ProtectedUpdate::recover_on_shutdown();
+
+		self::assertSame( $tree_before, $this->tree( $this->plugins . '/akismet' ) );
+		self::assertTrue( $this->active );
+		self::assertSame( [ [ self::FILE, 'recovered_rolled_back' ] ], $this->pending_outcomes() );
+		self::assertNull( UpdateTransaction::current() );
+	}
+
+	/** La mise à jour reprend d'abord une transaction morte : un seul filet de shutdown pour les deux. */
+	public function test_the_update_and_its_own_recovery_arm_a_single_shutdown_net(): void {
+		$nets  = $this->record_shutdown_nets();
+		$file  = $this->make_plugin( 'autre', '1.0', [ 'assets/a.css' => 'a' ] );
+		$point = ( new Snapshotter( $this->store, $this->plugins ) )->create( $file, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
+		$this->half_upgrade( 'autre' );
+		$this->dead_transaction( $file, $point['id'] );
+		$this->script_health( ok: 2, then_ok: 2 );
+
+		$r = CommandExecutor::run( 'update_plugin', $this->payload( [] ) )['result'];
+
+		self::assertSame( ProtectedUpdate::OUTCOME_UPDATED, $r['outcome'] );
+		self::assertSame( [ [ $file, 'recovered_rolled_back' ] ], $this->pending_outcomes() );
+		$recovery_nets = array_filter( $nets->getArrayCopy(), static fn ( $cb ): bool => [ ProtectedUpdate::class, 'recover_on_shutdown' ] === $cb );
+		self::assertCount( 1, $recovery_nets );
+	}
+
+	// ── Prise par une reprise pendant ou après la mise à jour ───────────────────
+
+	/**
+	 * Mise à jour plus longue que 10 min : un contrôle du cron la prend pour morte et
+	 * restaure l'ancienne version (étape d'origine `upgrading`). La requête, encore
+	 * vivante, ne touche plus à rien : ni mesure, ni restauration, ni suppression du
+	 * point dont la reprise a besoin. Une seule restauration, un seul résultat.
+	 */
+	public function test_an_update_taken_over_while_upgrading_leaves_everything_to_the_recovery(): void {
+		$this->script_health( ok: 2, then_ok: 2 );
+		$tree_before                 = $this->tree( $this->plugins . '/akismet' );
+		$upgrade                     = Plugin_Upgrader::$on_upgrade;
+		Plugin_Upgrader::$on_upgrade = function () use ( $upgrade ): void {
+			$upgrade();
+			$this->age_transaction( UpdateTransaction::STALE_AFTER_SECONDS + 100 ); // L'étape dure plus de 10 min.
+			$this->as_another_process( static fn () => ProtectedUpdate::recover( time() ) );
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+
+		self::assertSame( 'failed', $outcome['status'], 'Jamais « updated » ni « not_updated » : la reprise rend son propre résultat.' );
+		self::assertArrayNotHasKey( 'result', $outcome );
+		self::assertStringContainsString( 'taken over by a recovery', $outcome['error'] );
+		self::assertSame( [ self::FILE ], $this->deactivated, 'Une seule restauration : celle de la reprise.' );
+		self::assertSame( $tree_before, $this->tree( $this->plugins . '/akismet' ) );
+		self::assertTrue( $this->active );
+		self::assertSame( [ [ self::FILE, 'recovered_rolled_back' ] ], $this->pending_outcomes() );
+		self::assertSame( 2, $this->response_index, 'Aucune mesure de santé après la prise.' );
+		$points = array_values( $this->store->all() );
+		self::assertCount( 1, $points, 'Le point de la reprise reste.' );
+		self::assertTrue( $points[0]['hold'] );
+		self::assertNull( UpdateTransaction::current() );
+	}
+
+	/**
+	 * Même prise, mais la reprise restaure encore (autre processus) quand la requête
+	 * relit la version : celle-ci voit la nouvelle version. Elle ne mesure pas la
+	 * santé, ne restaure pas en même temps que la reprise et ne rend pas « updated ».
+	 */
+	public function test_an_update_taken_over_by_a_running_recovery_neither_measures_nor_restores(): void {
+		$this->script_health( ok: 2, then_ok: 2 );
+		$reserved                    = null;
+		$upgrade                     = Plugin_Upgrader::$on_upgrade;
+		Plugin_Upgrader::$on_upgrade = function () use ( $upgrade, &$reserved ): void {
+			$upgrade();
+			$this->age_transaction( UpdateTransaction::STALE_AFTER_SECONDS + 100 );
+			$this->as_another_process(
+				static function () use ( &$reserved ): void {
+					$reserved = UpdateTransaction::reserve( (array) UpdateTransaction::current(), time() );
+				}
+			);
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+
+		self::assertIsArray( $reserved, 'La reprise a bien réservé la transaction.' );
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assertStringContainsString( 'taken over by a recovery', $outcome['error'] );
+		self::assertSame( 2, $this->response_index, 'Aucune mesure de santé.' );
+		self::assertSame( [], $this->deactivated, 'Aucune restauration par la requête : la reprise s\'en charge.' );
+		self::assertSame( $reserved, $this->options[ UpdateTransaction::OPTION_KEY ] ?? null, 'La réservation de la reprise reste en place.' );
+		$points = array_values( $this->store->all() );
+		self::assertCount( 1, $points );
+		self::assertTrue( $points[0]['hold'], 'Point retenu pour la reprise.' );
+	}
+
+	/**
+	 * Mesure de santé plus longue que 10 min : un contrôle prend la transaction
+	 * (étape d'origine `health` : il ne touchera pas aux fichiers). La requête a vu le
+	 * site cassé, mais ne restaure pas sans sa transaction : elle s'arrête avec une
+	 * erreur explicite et garde le point pour un rollback depuis la plateforme.
+	 */
+	public function test_an_update_taken_over_during_the_health_check_does_not_roll_back_without_its_transaction(): void {
+		$this->responses = [
+			[ 'code' => 200, 'body' => 'ok' ],
+			[ 'code' => 200, 'body' => self::ajax_ok() ],
+			[ 'code' => 500, 'body' => '' ],
+			[ 'code' => 200, 'body' => '<b>Fatal error</b>: Uncaught Error' ],
+		];
+		$reserved       = null;
+		$this->on_probe = function ( int $probe ) use ( &$reserved ): void {
+			if ( 3 === $probe ) { // Dernière sonde d'après la mise à jour : la mesure a duré plus de 10 min.
+				$this->age_transaction( UpdateTransaction::STALE_AFTER_SECONDS + 100 );
+				$this->as_another_process(
+					static function () use ( &$reserved ): void {
+						$reserved = UpdateTransaction::reserve( (array) UpdateTransaction::current(), time() );
+					}
+				);
+			}
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+
+		self::assertIsArray( $reserved );
+		self::assertSame( UpdateTransaction::STEP_HEALTH, $reserved['recovering_from'] );
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assertStringContainsString( 'not rolled back automatically', $outcome['error'] );
+		self::assertSame( [], $this->deactivated, 'Pas de restauration sans transaction.' );
+		self::assertSame( 4, $this->response_index, 'Pas de mesure d\'après rollback.' );
+		self::assertSame( $reserved, $this->options[ UpdateTransaction::OPTION_KEY ] ?? null );
+		$points = array_values( $this->store->all() );
+		self::assertCount( 1, $points );
+		self::assertTrue( $points[0]['hold'], 'Point gardé pour un rollback depuis la plateforme.' );
+	}
+
+	// ── Trace de reprise : seulement sur sa propre réservation ───────────────
+
+	/**
+	 * Restauration de la reprise R1 plus longue que 10 min : une reprise R2 réserve la
+	 * même transaction (même identité, autre jeton). R1 termine : elle ne marque pas
+	 * la réservation de R2 comme déjà reprise. Sinon une mise à jour pourrait s'ouvrir
+	 * par-dessus la restauration de R2, ou un autre passage la retirer.
+	 */
+	public function test_a_recovery_that_outlived_its_reservation_does_not_trace_the_next_one(): void {
+		$point = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
+		( Plugin_Upgrader::$on_upgrade )();
+		$this->dead_transaction( self::FILE, $point['id'] );
+		$r2              = null;
+		$this->on_filter = function ( string $hook ) use ( &$r2 ): void {
+			if ( null === $r2 && 'g2rd_connector_snapshots_dir' === $hook && $this->recovery_running() ) {
+				// R2, dans un autre processus, en base seulement.
+				$r2 = array_merge(
+					(array) UpdateTransaction::current(),
+					[
+						'recovery_token' => 'jeton-r2',
+						'updated_at'     => time(),
+					]
+				);
+				$this->options[ UpdateTransaction::OPTION_KEY ] = $r2;
+			}
+		};
+
+		ProtectedUpdate::recover( time() ); // R1.
+
+		self::assertIsArray( $r2 );
+		self::assertSame( $r2, $this->options[ UpdateTransaction::OPTION_KEY ] ?? null, 'La réservation de R2 reste en place.' );
+		self::assertArrayNotHasKey( UpdateTransaction::RECOVERY_TRACE_KEY, $this->options, 'Pas de trace sur la réservation de R2.' );
+		self::assertTrue( UpdateTransaction::is_live( $r2, time() ), 'R2 protège toujours sa restauration.' );
+		self::assertFalse( UpdateTransaction::open( [ 'plugin_file' => self::FILE ], time() ), 'Aucune mise à jour par-dessus R2.' );
+	}
+
 	// ── Outils ────────────────────────────────────────────────────────────────
+
+	/**
+	 * Rappels passés à register_shutdown_function() pendant le test.
+	 *
+	 * @return \ArrayObject<int, mixed>
+	 */
+	private function record_shutdown_nets(): \ArrayObject {
+		$nets = new \ArrayObject();
+		Functions\when( 'register_shutdown_function' )->alias(
+			static function ( $callback ) use ( $nets ): void {
+				$nets->append( $callback );
+			}
+		);
+		return $nets;
+	}
 
 	/**
 	 * Mise à jour morte à moitié : en-tête 2.0, fichier ajouté, fichier retiré,

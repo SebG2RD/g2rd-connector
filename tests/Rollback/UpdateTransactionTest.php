@@ -31,12 +31,19 @@ final class UpdateTransactionTest extends TestCase {
 		parent::setUp();
 		$this->cache = [];
 
+		// Comme WordPress : une option lue absente est mémorisée dans `notoptions`
+		// (même groupe), et get_option() la rend absente sans relire la base tant
+		// qu'elle y figure ; update_option() l'en retire, delete_option() l'y ajoute.
 		Functions\when( 'get_option' )->alias(
 			function ( string $key, $fallback = false ) {
+				if ( isset( $this->cache['notoptions'][ $key ] ) ) {
+					return $fallback;
+				}
 				if ( array_key_exists( $key, $this->cache ) ) {
 					return $this->cache[ $key ];
 				}
 				if ( ! array_key_exists( $key, $this->options ) ) {
+					$this->cache['notoptions'][ $key ] = true;
 					return $fallback;
 				}
 				$this->cache[ $key ] = $this->options[ $key ];
@@ -47,6 +54,7 @@ final class UpdateTransactionTest extends TestCase {
 			function ( string $key, $value ): bool {
 				$this->options[ $key ] = $value;
 				$this->cache[ $key ]   = $value;
+				unset( $this->cache['notoptions'][ $key ] );
 				return true;
 			}
 		);
@@ -56,6 +64,7 @@ final class UpdateTransactionTest extends TestCase {
 					return false; // Comme WordPress : rien en base, le cache reste tel quel.
 				}
 				unset( $this->options[ $key ], $this->cache[ $key ] );
+				$this->cache['notoptions'][ $key ] = true;
 				return true;
 			}
 		);
@@ -65,6 +74,17 @@ final class UpdateTransactionTest extends TestCase {
 					return false;
 				}
 				unset( $this->cache[ $key ] );
+				return true;
+			}
+		);
+		Functions\when( 'wp_cache_get' )->alias(
+			fn ( string $key, string $group = '' ) => 'options' === $group && array_key_exists( $key, $this->cache ) ? $this->cache[ $key ] : false
+		);
+		Functions\when( 'wp_cache_set' )->alias(
+			function ( string $key, $value, string $group = '' ): bool {
+				if ( 'options' === $group ) {
+					$this->cache[ $key ] = $value;
+				}
 				return true;
 			}
 		);
@@ -393,6 +413,91 @@ final class UpdateTransactionTest extends TestCase {
 		$this->options[ UpdateTransaction::OPTION_KEY ] = $dead;
 		UpdateTransaction::discard( $dead );
 		self::assertArrayNotHasKey( UpdateTransaction::OPTION_KEY, $this->options );
+	}
+
+	// ── Trace de reprise retirée avec sa transaction ─────────────────────────────
+
+	public function test_discard_retire_aussi_la_trace_de_la_transaction(): void {
+		$dead = $this->dead_transaction();
+		$this->options[ UpdateTransaction::OPTION_KEY ]         = $dead;
+		$this->options[ UpdateTransaction::RECOVERY_TRACE_KEY ] = [ 'txn' => UpdateTransaction::identity( $dead ) ];
+
+		UpdateTransaction::discard( $dead );
+
+		self::assertArrayNotHasKey( UpdateTransaction::OPTION_KEY, $this->options );
+		self::assertArrayNotHasKey( UpdateTransaction::RECOVERY_TRACE_KEY, $this->options, 'Plus de donnée orpheline.' );
+	}
+
+	/** Transaction toujours impossible à retirer : la trace reste, sans quoi chaque passage restaurerait de nouveau. */
+	public function test_discard_garde_la_trace_tant_que_la_transaction_reste(): void {
+		$dead  = $this->dead_transaction();
+		$trace = [ 'txn' => UpdateTransaction::identity( $dead ) ];
+		$this->options[ UpdateTransaction::OPTION_KEY ]         = $dead;
+		$this->options[ UpdateTransaction::RECOVERY_TRACE_KEY ] = $trace;
+		Functions\when( 'delete_option' )->alias(
+			function ( string $key ): bool {
+				if ( UpdateTransaction::OPTION_KEY === $key ) {
+					return false;
+				}
+				unset( $this->options[ $key ], $this->cache[ $key ] );
+				return true;
+			}
+		);
+
+		UpdateTransaction::discard( $dead );
+
+		self::assertSame( $trace, $this->options[ UpdateTransaction::RECOVERY_TRACE_KEY ] ?? null );
+	}
+
+	/** La trace d'une autre transaction n'est pas touchée. */
+	public function test_discard_ne_retire_pas_la_trace_d_une_autre_transaction(): void {
+		$dead  = $this->dead_transaction();
+		$trace = [ 'txn' => UpdateTransaction::identity( $this->other_transaction() ) ];
+		$this->options[ UpdateTransaction::OPTION_KEY ]         = $dead;
+		$this->options[ UpdateTransaction::RECOVERY_TRACE_KEY ] = $trace;
+
+		UpdateTransaction::discard( $dead );
+
+		self::assertArrayNotHasKey( UpdateTransaction::OPTION_KEY, $this->options );
+		self::assertSame( $trace, $this->options[ UpdateTransaction::RECOVERY_TRACE_KEY ] ?? null );
+	}
+
+	// ── Relecture sans cache, y compris « option absente » ───────────────────────
+
+	/**
+	 * Lue absente plus tôt dans la requête (par exemple par la reprise qui précède
+	 * l'ouverture), l'option est mémorisée comme absente. Un autre processus ouvre
+	 * ensuite sa mise à jour : la relecture sans cache doit la voir.
+	 */
+	public function test_la_relecture_voit_une_transaction_creee_apres_une_lecture_absente(): void {
+		self::assertNull( UpdateTransaction::current() );
+		$other = $this->other_transaction();
+		$this->options[ UpdateTransaction::OPTION_KEY ] = $other; // Autre processus, en base seulement.
+		self::assertNull( UpdateTransaction::current(), 'Le cache la croit toujours absente.' );
+
+		self::assertFalse( UpdateTransaction::open( [ 'plugin_file' => 'a/a.php' ], self::NOW + 650 ), 'Relue en base : la mise à jour en cours est vue.' );
+		self::assertSame( $other, $this->stored() );
+		self::assertTrue( UpdateTransaction::in_progress( self::NOW + 650 ) );
+	}
+
+	public function test_in_progress_relit_la_base(): void {
+		self::assertFalse( UpdateTransaction::in_progress( self::NOW ), 'Aucune transaction.' );
+
+		$this->reserved_by_another_process( $this->dead_transaction(), self::NOW - 30 );
+		self::assertTrue( UpdateTransaction::in_progress( self::NOW ), 'Reprise en cours dans un autre processus.' );
+
+		$this->options[ UpdateTransaction::OPTION_KEY ] = $this->dead_transaction();
+		self::assertFalse( UpdateTransaction::in_progress( self::NOW ), 'Transaction morte : plus rien en cours.' );
+	}
+
+	public function test_same_reservation_compare_identite_et_jeton(): void {
+		$dead     = $this->dead_transaction();
+		$reserved = array_merge( $dead, [ 'recovery_token' => 'r1' ] );
+
+		self::assertTrue( UpdateTransaction::same_reservation( $reserved, $reserved ) );
+		self::assertFalse( UpdateTransaction::same_reservation( array_merge( $reserved, [ 'recovery_token' => 'r2' ] ), $reserved ), 'Même transaction, autre reprise.' );
+		self::assertFalse( UpdateTransaction::same_reservation( $dead, $reserved ), 'Pas réservée.' );
+		self::assertFalse( UpdateTransaction::same_reservation( $this->other_transaction(), $dead ) );
 	}
 
 	// ── Outils ────────────────────────────────────────────────────────────────

@@ -36,7 +36,9 @@
  *   - la reprise d'une mise à jour protégée morte sans passer par le filet de
  *     shutdown (processus tué) : un contrôle ponctuel est programmé à l'ouverture
  *     de la transaction (schedule_recovery_check()), reprogrammé s'il a été perdu
- *     quand les fichiers vont changer (ensure_recovery_check()), puis suivi tant
+ *     quand les fichiers vont changer (ensure_recovery_check()), ainsi qu'à chaque
+ *     reprise, avant de restaurer (une reprise tuée en route est reprise à son
+ *     tour), puis suivi tant
  *     qu'elle reste ouverte sans être morte — au plus RECOVERY_CHECK_DELAY après, au
  *     lieu d'une heure avant. Jamais reprogrammé dans le passé, ni pour une
  *     transaction morte que la reprise n'a pas pu retirer (cf. follow_open_transaction()).
@@ -247,8 +249,11 @@ final class RestorePointPurgeJob {
 	 * programmé à l'ouverture de la transaction a pu être perdu (la liste des tâches
 	 * planifiées est une seule option, qu'un autre processus peut réécrire en même
 	 * temps). Appelé quand la mise à jour protégée va toucher aux fichiers
-	 * (ProtectedUpdate::run()) : sans contrôle en attente, une requête tuée à ce
-	 * moment-là ne serait reprise qu'à la purge biquotidienne, jusqu'à 12 h plus tard.
+	 * (ProtectedUpdate::run()), et quand une reprise vient de réserver une transaction,
+	 * avant de restaurer (ProtectedUpdate::recover() ; menée par le cron, l'événement
+	 * en cours a déjà été retiré par wp-cron.php) : sans contrôle en attente, une
+	 * requête tuée à ce moment-là ne serait reprise qu'à la purge biquotidienne,
+	 * jusqu'à 12 h plus tard.
 	 *
 	 * Rien n'est écrit si un contrôle attend déjà (il suit la transaction de lui-même,
 	 * cf. follow_open_transaction()) : lecture du tableau des tâches, déjà en mémoire.

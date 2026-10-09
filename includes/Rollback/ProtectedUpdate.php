@@ -39,6 +39,23 @@ final class ProtectedUpdate {
 	public const OUTCOME_AUTO_ROLLBACK_FAILED = 'auto_rollback_failed';
 	public const OUTCOME_UPDATE_FAILED        = 'update_failed';
 
+	/**
+	 * La transaction a été prise par une reprise pendant la mise à jour (étape de plus
+	 * de 10 minutes, fichiers peut-être à moitié remplacés) : la reprise restaure
+	 * l'ancienne version et consigne son propre résultat. La requête n'y touche plus.
+	 */
+	private const TAKEN_OVER_WHILE_UPDATING = 'protected update was taken over by a recovery while it was updating the plugin (a step took more than 10 minutes); the recovery puts the previous version back from the restore point and reports its own result';
+
+	/**
+	 * La transaction a été prise par une reprise pendant le contrôle de santé : la
+	 * reprise ne touche pas aux fichiers (mise à jour terminée), et la requête ne
+	 * restaure pas sans sa transaction. Le point est gardé pour un rollback manuel.
+	 */
+	private const TAKEN_OVER_BEFORE_ROLLBACK = 'protected update found the site broken after updating the plugin, but a recovery took over its transaction (a step took more than 10 minutes); the plugin was not rolled back automatically: its restore point is kept, roll it back from the platform';
+
+	/** Filet de shutdown déjà armé dans ce processus (cf. arm_shutdown_net()). */
+	private static bool $shutdown_net_armed = false;
+
 	public function __construct( private readonly Services $services ) {
 	}
 
@@ -52,7 +69,7 @@ final class ProtectedUpdate {
 	public function run( string $plugin_file, array $payload, callable $perform_upgrade ): array {
 		// Filet de shutdown armé d'abord : il couvre aussi la reprise ci-dessous. Il
 		// n'agit que sur la transaction que tient ce processus (cf. recover_on_shutdown()).
-		register_shutdown_function( [ self::class, 'recover_on_shutdown' ] );
+		self::arm_shutdown_net();
 
 		// ── Reprise d'une mise à jour morte, AVANT d'ouvrir ──────────────────────
 		// Une transaction morte que ni le filet de shutdown ni le contrôle du cron n'ont
@@ -84,7 +101,7 @@ final class ProtectedUpdate {
 		) ) {
 			// Refus avant tout changement, déjà connu de la plateforme (échec de
 			// l'élément, message affiché tel quel) : même début de phrase qu'avant.
-			throw new \RuntimeException( 'another protected update is still running on this site (or an interrupted one is being recovered); nothing was changed, retry in a few minutes' );
+			throw new \RuntimeException( UpdateTransaction::BUSY_MESSAGE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- constante, texte fixe.
 		}
 		// Filet du filet : un processus tué par le serveur ne passe pas par le
 		// shutdown. La purge locale (qui reprend aussi les transactions mortes) ne
@@ -99,7 +116,9 @@ final class ProtectedUpdate {
 		// morte, tant qu'aucune étape ne dépasse la durée supposée (cf.
 		// RestorePointPurgeJob::RECOVERY_CHECK_DELAY). Au-delà, si un contrôle a fermé
 		// ou réservé la transaction entre-temps, step() et touch() ne la recréent pas,
-		// et la mise à jour s'arrête avant de toucher à l'extension (cf. plus bas).
+		// et la mise à jour s'arrête : avant de toucher à l'extension, ou, après la
+		// mise à jour, sans plus rien mesurer ni restaurer — la reprise s'en charge
+		// (cf. plus bas et stop_taken_over()).
 
 		// ── Référence de santé, AVANT tout changement ────────────────────────────
 		$baseline = $s->health->measure();
@@ -160,6 +179,12 @@ final class ProtectedUpdate {
 		}
 
 		if ( true !== ( $result['updated'] ?? false ) ) {
+			if ( null === UpdateTransaction::held() ) {
+				// Prise par une reprise pendant la mise à jour : la version relue est
+				// peut-être déjà celle que la reprise a restaurée. Son point lui sert :
+				// ni suppression, ni résultat « not_updated ».
+				$this->stop_taken_over( $point['id'], $hold_until, self::TAKEN_OVER_WHILE_UPDATING );
+			}
 			// Rien n'a changé (version inchangée, licence premium…) : le point n'a pas de raison d'être.
 			$s->store->remove( $point['id'] );
 			UpdateTransaction::close();
@@ -171,7 +196,13 @@ final class ProtectedUpdate {
 		}
 
 		// ── Contrôle de santé, sur le NOUVEAU code ───────────────────────────────
-		UpdateTransaction::step( UpdateTransaction::STEP_HEALTH );
+		if ( ! UpdateTransaction::step( UpdateTransaction::STEP_HEALTH ) ) {
+			// Prise par une reprise pendant la mise à jour (étape d'origine `upgrading`) :
+			// elle restaure l'ancienne version. Mesurer, rendre « updated » ou restaurer
+			// à notre tour contredirait son résultat, ou déplacerait le même dossier
+			// qu'elle en même temps.
+			$this->stop_taken_over( $point['id'], $hold_until, self::TAKEN_OVER_WHILE_UPDATING );
+		}
 		$this->invalidate_opcache( $plugin_file );
 		$after   = $s->health->measure();
 		$verdict = HealthChecker::verdict( $baseline, $after );
@@ -202,7 +233,13 @@ final class ProtectedUpdate {
 		}
 
 		// ── Régression prouvée : rollback automatique ────────────────────────────
-		UpdateTransaction::step( UpdateTransaction::STEP_ROLLING_BACK );
+		if ( ! UpdateTransaction::step( UpdateTransaction::STEP_ROLLING_BACK ) ) {
+			// Prise par une reprise pendant la mesure (étape d'origine `health`) : elle
+			// ne touche pas aux fichiers. Pas de restauration sans transaction pour
+			// autant : si cette requête mourait en route, personne ne remettrait
+			// l'extension en état, et la plateforme a pu passer à la commande suivante.
+			$this->stop_taken_over( $point['id'], $hold_until, self::TAKEN_OVER_BEFORE_ROLLBACK );
+		}
 		$version_after = (string) ( $result['version_after'] ?? '' );
 		try {
 			$this->restore( $plugin_file, $point, $version, $version_after, (bool) ( $result['was_active'] ?? false ), (bool) ( $result['network_active'] ?? false ) );
@@ -331,6 +368,26 @@ final class ProtectedUpdate {
 			return false;
 		}
 
+		// La reprise elle-même peut mourir en route (erreur fatale, délai dépassé
+		// pendant l'extraction, processus tué) : extension désactivée, dossier peut-être
+		// mis de côté, transaction à l'étape `recovering`. Menée par le cron, elle n'a ni
+		// le filet de run() ni de contrôle en attente (wp-cron.php retire l'événement
+		// avant de l'exécuter) : rien ne la reprendrait avant la purge biquotidienne.
+		// D'où, AVANT toute restauration, le filet de shutdown (il reprend la
+		// réservation que tient ce processus) et un contrôle : la réservation date de
+		// `$now`, il la verra morte et la reprendra (cf. `recovering_from`). Une fois la
+		// reprise faite, ce contrôle ne trouve plus rien à faire.
+		if ( ! $force ) {
+			self::arm_shutdown_net();
+		}
+		try {
+			RestorePointPurgeJob::ensure_recovery_check( $now );
+		} catch ( \Throwable $e ) {
+			// Précaution (code tiers branché sur la planification) : elle ne doit
+			// jamais empêcher la reprise elle-même.
+			unset( $e );
+		}
+
 		$plugin_file = (string) $reserved['plugin_file'];
 		$point_id    = (string) ( $reserved['restore_point_id'] ?? '' );
 		$outcome     = [
@@ -352,7 +409,13 @@ final class ProtectedUpdate {
 					$outcome['outcome'] = 'recovered_no_restore_point';
 				}
 			} else {
-				// Mise à jour terminée mais santé non contrôlée : la plateforme le saura.
+				// Rien à restaurer : la mise à jour a été interrompue avant de toucher à
+				// l'extension (étape `snapshot`), ou après la mise à jour, santé non
+				// contrôlée (`health`) — ou, transaction d'une version d'avant, sans point.
+				// `step` dit laquelle. La plateforme ne lit aujourd'hui que `outcome` et
+				// l'affiche comme « mise à jour appliquée, non vérifiée », `snapshot`
+				// compris : la distinction attend qu'elle lise `step` (un nouveau résultat
+				// lui serait inconnu).
 				$outcome['outcome'] = 'interrupted_unverified';
 			}
 		} catch ( \Throwable $e ) {
@@ -364,9 +427,13 @@ final class ProtectedUpdate {
 		UpdateTransaction::close();
 
 		// Trace écrite seulement si la transaction est toujours là : le cas courant
-		// (fermeture réussie) ne coûte aucune écriture de plus.
+		// (fermeture réussie) ne coûte aucune écriture de plus. Et seulement si c'est
+		// encore NOTRE réservation (même identité, même jeton) : une restauration de
+		// plus de 10 minutes a pu être reprise par une autre reprise, encore en cours.
+		// La tracer la ferait passer pour faite : une mise à jour pourrait s'ouvrir
+		// par-dessus, ou un autre passage la retirer pendant sa restauration.
 		$left = UpdateTransaction::current();
-		if ( null !== $left && UpdateTransaction::identity( $left ) === UpdateTransaction::identity( $reserved ) ) {
+		if ( null !== $left && UpdateTransaction::same_reservation( $left, $reserved ) ) {
 			UpdateTransaction::record_recovery_attempt( $reserved, (string) $outcome['outcome'], $now );
 		}
 		return true;
@@ -384,6 +451,34 @@ final class ProtectedUpdate {
 			return;
 		}
 		self::recover( time(), true );
+	}
+
+	/**
+	 * Arme le filet de shutdown, une fois par processus : il reprend la transaction
+	 * que tient le processus à la fin du cycle PHP, qu'elle ait été ouverte (run())
+	 * ou réservée (recover()). Sans transaction tenue, il ne fait rien (aucune requête).
+	 */
+	private static function arm_shutdown_net(): void {
+		if ( self::$shutdown_net_armed ) {
+			return;
+		}
+		register_shutdown_function( [ self::class, 'recover_on_shutdown' ] );
+		self::$shutdown_net_armed = true;
+	}
+
+	/**
+	 * Arrêt d'une mise à jour dont une reprise a pris la transaction, APRÈS la mise à
+	 * jour : plus rien n'est mesuré ni restauré ici, la reprise s'en charge et
+	 * consigne son résultat. Le point est retenu (la reprise peut en avoir besoin,
+	 * ou un rollback manuel), la transaction n'est pas retirée (close() ne retire que
+	 * la sienne).
+	 *
+	 * @throws \RuntimeException Toujours : la plateforme reçoit un échec explicite.
+	 */
+	private function stop_taken_over( string $point_id, int $hold_until, string $message ): never {
+		$this->services->store->hold( $point_id, $hold_until );
+		UpdateTransaction::close();
+		throw new \RuntimeException( $message ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- constantes, texte fixe.
 	}
 
 	private function installed_version( string $plugin_file ): string {

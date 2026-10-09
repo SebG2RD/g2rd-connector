@@ -129,6 +129,20 @@ Lighter on the server: fewer WordPress boots and fewer calls to the manager, sam
   over during a step longer than 10 minutes stops before updating the plugin with an explicit
   error, and a lost recovery check is scheduled again right before the plugin files change
   instead of waiting up to 12 hours for the purge.
+* **Fix: recoveries, protected updates and manual rollbacks no longer cross each other.** A
+  recovery run by the cron arms the shutdown handler and keeps a one-off check pending before it
+  restores anything: a recovery killed mid-way is taken over in about 11 minutes instead of
+  waiting up to 12 hours for the purge. A protected update whose transaction was taken over while
+  it was updating stops right after the update with an explicit error: no health measure, no
+  second restore at the same time, no `updated` or `not_updated` result (the recovery restores the
+  previous version and reports its own result). Taken over during the health check, it does not
+  roll back without its transaction: it fails with an explicit error and keeps the restore point
+  for a rollback from the platform. A manual rollback (`rollback_plugin`) is refused with the same
+  "another protected update is still running on this site… retry in a few minutes" message while
+  a protected update or a recovery is running; a dead transaction does not block it. A recovery
+  that outlived its reservation no longer marks the next recovery as done. The transaction is
+  re-read even when it was read as missing earlier in the request (WordPress `notoptions` cache),
+  and the `g2rd_update_txn_recovery` record is removed along with its transaction.
 * **Uninstall also removes the failed-login counter** (`g2rd_connector_login_failed_window`
   transient), on every site of a multisite network.
 * **Performance: one SQL query less per page view.** The `g2rd_connector_settings` option
