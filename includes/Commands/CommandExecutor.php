@@ -67,6 +67,14 @@ final class CommandExecutor {
 	private const STRAY_OUTPUT_MAX_CHARS = 500;
 
 	/**
+	 * Extensions dont try_activate() a inclus le fichier principal dans ce processus sans
+	 * pouvoir les activer : un nouvel essai n'inclurait plus rien (cf. try_activate()).
+	 *
+	 * @var array<string, bool>
+	 */
+	private static array $sandbox_failed = [];
+
+	/**
 	 * Exécute une commande. Retourne :
 	 *   - [ 'status' => 'done', 'result' => array<string, mixed> ]
 	 *   - [ 'status' => 'failed', 'error' => string ]
@@ -328,10 +336,15 @@ final class CommandExecutor {
 	 *      hooks d'activation, le plugin ayant déjà été activé auparavant.
 	 *   2. Dernier recours : si activate_plugin() échoue (ex. validation transitoire
 	 *      juste après le remplacement des fichiers du plugin lors d'un self-update),
-	 *      on écrit DIRECTEMENT l'option active_plugins / active_sitewide_plugins.
-	 *      Si la nouvelle version était réellement cassée, le mode recovery natif de
-	 *      WordPress (>= 5.2) la re-désactivera et préviendra l'admin — on ne risque
-	 *      donc pas de bloquer durablement le site.
+	 *      on écrit DIRECTEMENT l'option active_plugins / active_sitewide_plugins,
+	 *      sans charger l'extension.
+	 *
+	 * WordPress ne désactive JAMAIS de lui-même une extension cassée ainsi forcée. Son
+	 * mode de récupération (≥ 5.2) la met seulement en pause pour l'administrateur qui
+	 * ouvre le lien reçu par e-mail ; les visiteurs, eux, voient « erreur critique » sur
+	 * toutes les pages tant que personne n'intervient. À réserver à des fichiers complets
+	 * (mise à jour terminée, restauration réussie) ; pour des fichiers douteux (restauration
+	 * qui a échoué, reprise abandonnée), cf. try_activate().
 	 *
 	 * @return bool true si le plugin est actif en sortie.
 	 */
@@ -365,8 +378,9 @@ final class CommandExecutor {
 			//
 			// On bascule sur la voie 2, qui n'exécute AUCUN code tiers : elle écrit
 			// l'option directement. Le chemin de chargement normal de WordPress ne
-			// repasse pas par ces hooks d'activation ; et si la version restaurée
-			// était réellement cassée, le mode recovery natif prend le relais.
+			// repasse pas par ces hooks d'activation. Cette voie suppose des fichiers
+			// complets (restauration RÉUSSIE) : une version réellement cassée, forcée
+			// ainsi, mettrait le site en « erreur critique » pour tous les visiteurs.
 			unset( $e );
 		}
 
@@ -398,10 +412,18 @@ final class CommandExecutor {
 	 * et n'écrit `active_plugins` que s'il s'est chargé. Jamais d'écriture forcée de
 	 * l'option, contrairement à force_reactivate().
 	 *
-	 * Pour des fichiers douteux (abandon d'une reprise, cf. ProtectedUpdate::recover()) :
-	 * une extension dont le fichier principal lève une erreur (classe ou fichier inclus
-	 * manquant, dossier à moitié extrait) ou est introuvable reste inactive. Forcée,
-	 * elle ferait tomber toutes les pages du site en « erreur critique ».
+	 * Pour des fichiers douteux (restauration qui a échoué, abandon d'une reprise, cf.
+	 * ProtectedUpdate::restore() et recover()) : une extension dont le fichier principal
+	 * lève une erreur (classe ou fichier inclus manquant, dossier à moitié extrait) ou
+	 * est introuvable reste inactive. Forcée, elle ferait tomber toutes les pages du site
+	 * en « erreur critique ».
+	 *
+	 * Limite : le bac à sable inclut le fichier principal par `include_once`. Dans un
+	 * processus qui l'a déjà inclus (requête où l'extension était active au démarrage),
+	 * rien n'est rechargé : l'extension est activée sans que ses fichiers sur le disque
+	 * soient chargés. Après un premier essai qui a levé (ou dont le processus est mort
+	 * pendant l'inclusion, filet de shutdown), un second essai dans le même processus est
+	 * donc refusé.
 	 *
 	 * @return bool Vrai si le plugin est actif en sortie.
 	 */
@@ -413,6 +435,15 @@ final class CommandExecutor {
 		if ( is_plugin_active( $file ) ) {
 			return true;
 		}
+
+		if ( isset( self::$sandbox_failed[ $file ] ) ) {
+			// Fichier principal déjà inclus par un essai qui a échoué : activate_plugin()
+			// ne le rechargerait pas, et activerait l'extension sans l'avoir chargée.
+			return false;
+		}
+		// Posé avant l'inclusion : un essai qui meurt en route (erreur fatale que rien ne
+		// rattrape) le laisse posé pour le filet de shutdown de ce processus.
+		self::$sandbox_failed[ $file ] = true;
 
 		$level = ob_get_level();
 		try {
@@ -429,6 +460,10 @@ final class CommandExecutor {
 			unset( $e );
 			return false;
 		}
+		// Rendu sans erreur levée : chargée, ou refusée AVANT l'inclusion (WP_Error de
+		// validation : fichier introuvable, en-tête absent…). Un nouvel essai serait un
+		// vrai chargement.
+		unset( self::$sandbox_failed[ $file ] );
 		if ( ! is_wp_error( $activated ) ) {
 			return true;
 		}

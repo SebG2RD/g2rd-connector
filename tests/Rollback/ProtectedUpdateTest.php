@@ -12,6 +12,7 @@ use G2RD\Connector\Rollback\HealthChecker;
 use G2RD\Connector\Rollback\PendingOutcomes;
 use G2RD\Connector\Rollback\PluginRestorer;
 use G2RD\Connector\Rollback\ProtectedUpdate;
+use G2RD\Connector\Rollback\RestoreException;
 use G2RD\Connector\Rollback\RestorePointStore;
 use G2RD\Connector\Rollback\Services;
 use G2RD\Connector\Rollback\Snapshotter;
@@ -29,6 +30,9 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 
 	private const FILE = 'akismet/akismet.php';
 
+	/** Ce que dit l'erreur d'une restauration manquée quand l'extension est restée inactive. */
+	private const LEFT_INACTIVE = '; the plugin was left inactive:';
+
 	private RestorePointStore $store;
 	/** @var list<array{code:int, body:string|callable, error?:string|null}> Réponses loopback, consommées dans l'ordre (home, admin, home, admin…). */
 	private array $responses = [];
@@ -44,19 +48,22 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 	private ?\Closure $on_probe = null;
 	/** @var array<string, array<string, string>>|null Liste des extensions en cache (cf. cache_plugin_list()). */
 	private ?array $plugin_list = null;
+	/** Le fichier principal de l'extension lève une Error au chargement (cf. restore_fails()). */
+	private bool $activation_throws = false;
 
 	protected function setUp(): void {
 		parent::setUp();
 		Plugin_Upgrader::reset();
-		$this->store           = new RestorePointStore();
-		$this->responses       = [];
-		$this->response_index  = 0;
-		$this->active          = true;
-		$this->deactivated     = [];
-		$this->activated       = [];
-		$this->single_events   = [];
-		$this->on_probe        = null;
-		$this->plugin_list     = null;
+		$this->store             = new RestorePointStore();
+		$this->responses         = [];
+		$this->response_index    = 0;
+		$this->active            = true;
+		$this->deactivated       = [];
+		$this->activated         = [];
+		$this->single_events     = [];
+		$this->on_probe          = null;
+		$this->plugin_list       = null;
+		$this->activation_throws = false;
 
 		// ── WordPress simulé ────────────────────────────────────────────────────
 		Functions\when( 'get_plugins' )->alias( fn (): array => $this->plugins_on_disk() );
@@ -92,6 +99,12 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		);
 		Functions\when( 'activate_plugin' )->alias(
 			function ( string $file ): ?WP_Error {
+				if ( $this->activation_throws ) {
+					// Comme activate_plugin() : tampon ouvert, puis inclusion du fichier
+					// principal, qui lève avant l'écriture de `active_plugins`.
+					ob_start();
+					throw new \Error( 'Class "Akismet\\Module" not found' );
+				}
 				$this->activated[] = $file;
 				$this->active      = true;
 				return null;
@@ -961,7 +974,7 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 	 * réactive pas, ni à la réactivation nominale (upgrade() rend un tableau vide) ni
 	 * par son filet de shutdown (upgrade() rend la WP_Error). activate_plugin()
 	 * inclurait un fichier à moitié extrait, puis l'option serait forcée, en même temps
-	 * que la reprise l'écrit. C'est la reprise qui réactive, dans son `finally`.
+	 * que la reprise l'écrit. C'est la reprise qui réactive, à la fin de restore().
 	 *
 	 * @param mixed $result_on_error Retour de Plugin_Upgrader::upgrade() quand le filtre rend une WP_Error (null : la WP_Error).
 	 */
@@ -1059,7 +1072,7 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 
 	/**
 	 * Chaque reprise meurt pendant la restauration (erreur fatale : code tiers lancé par
-	 * la désactivation, archive qui fait planter l'extraction) : son `finally` ne
+	 * la désactivation, archive qui fait planter l'extraction) : la fin de restore() ne
 	 * s'exécute pas, aucun résultat n'est consigné, l'extension reste désactivée, et le
 	 * contrôle reprogrammé la relance environ toutes les 11 min. Après
 	 * MAX_RECOVERY_ATTEMPTS reprises commencées, la suivante ne restaure plus : elle
@@ -1191,6 +1204,202 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		self::assertNull( UpdateTransaction::current() );
 	}
 
+	// ── Restauration qui échoue : réactivation seulement si l'extension se charge ──
+
+	/**
+	 * Rollback automatique dont la restauration échoue en pleine extraction (disque
+	 * plein, par exemple) : le dossier peut être à moitié remplacé. L'extension n'est
+	 * réactivée que si elle se charge sans erreur, jamais par une écriture forcée de
+	 * `active_plugins`, qui ferait tomber toutes les pages en « erreur critique ». Ici
+	 * son fichier principal lève une Error : elle reste inactive, y compris après les
+	 * filets de shutdown de la requête (celui de la mise à jour la forçait), et le
+	 * résultat remonté à la plateforme le dit.
+	 */
+	public function test_a_failed_automatic_rollback_never_forces_a_plugin_that_does_not_load(): void {
+		$nets            = $this->record_shutdown_nets();
+		$this->responses = [
+			[ 'code' => 200, 'body' => 'ok' ],
+			[ 'code' => 200, 'body' => self::ajax_ok() ],
+			[ 'code' => 500, 'body' => '' ],
+			[ 'code' => 200, 'body' => '<b>Fatal error</b>: Uncaught Error' ],
+		];
+		$this->restore_fails( then_activation_throws: true );
+		$level = ob_get_level();
+
+		$outcome = CommandExecutor::run( 'update_plugin', $this->payload( [ 'keep_on_success' => true, 'grace_seconds' => 3600 ] ) );
+		foreach ( $nets as $net ) { // Fin de la requête.
+			$net();
+		}
+
+		self::assertSame( 'done', $outcome['status'] );
+		$r = $outcome['result'];
+		self::assertSame( ProtectedUpdate::OUTCOME_AUTO_ROLLBACK_FAILED, $r['outcome'] );
+		self::assertSame( RestoreException::FAILED, $r['error_code'] );
+		self::assertStringStartsWith( 'extraction failed: disk full', $r['error'] );
+		self::assertStringContainsString( self::LEFT_INACTIVE, $r['error'] );
+		self::assertFalse( $this->active, 'Extension inactive : le site reste debout.' );
+		self::assertNotContains( self::FILE, (array) ( $this->options['active_plugins'] ?? [] ), 'active_plugins jamais écrite de force, filets de shutdown compris.' );
+		self::assertSame( $level, ob_get_level(), 'Tampon ouvert par activate_plugin() refermé.' );
+		self::assertTrue( $r['restore_point']['hold'], 'Point gardé pour un rollback depuis la plateforme.' );
+		self::assertNull( UpdateTransaction::current() );
+	}
+
+	/**
+	 * Même échec, mais l'extension se charge sans erreur : elle est réactivée par le bac
+	 * à sable, et l'erreur reste celle de la restauration, sans rien y ajouter.
+	 */
+	public function test_a_failed_automatic_rollback_reactivates_a_plugin_that_loads(): void {
+		$this->responses = [
+			[ 'code' => 200, 'body' => 'ok' ],
+			[ 'code' => 200, 'body' => self::ajax_ok() ],
+			[ 'code' => 500, 'body' => '' ],
+			[ 'code' => 200, 'body' => '<b>Fatal error</b>: Uncaught Error' ],
+		];
+		$this->restore_fails( then_activation_throws: false );
+
+		$r = CommandExecutor::run( 'update_plugin', $this->payload( [] ) )['result'];
+
+		self::assertSame( ProtectedUpdate::OUTCOME_AUTO_ROLLBACK_FAILED, $r['outcome'] );
+		self::assertSame( 'extraction failed: disk full', $r['error'] );
+		self::assertSame( [ self::FILE, self::FILE ], $this->activated, 'Après la mise à jour, puis après la restauration manquée.' );
+		self::assertTrue( $this->active );
+	}
+
+	/**
+	 * Reprise par le cron d'une mise à jour tuée en plein remplacement des fichiers, dont
+	 * la restauration échoue à son tour : les fichiers sont à moitié remplacés. Une
+	 * extension qui ne se charge pas reste inactive, et `recovery_failed` le dit.
+	 */
+	public function test_a_recovery_whose_restore_fails_never_forces_a_plugin_that_does_not_load(): void {
+		$point = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
+		( Plugin_Upgrader::$on_upgrade )(); // Mise à jour morte à moitié : en-tête 2.0, extension désactivée.
+		$this->dead_transaction( self::FILE, $point['id'] );
+		$this->restore_fails( then_activation_throws: true );
+		$level = ob_get_level();
+
+		ProtectedUpdate::recover( time() ); // Le contrôle du cron.
+
+		self::assertSame( [ self::FILE ], $this->deactivated, 'Restauration tentée.' );
+		self::assertSame( [], $this->activated );
+		self::assertFalse( $this->active );
+		self::assertNotContains( self::FILE, (array) ( $this->options['active_plugins'] ?? [] ), 'active_plugins jamais écrite de force.' );
+		self::assertSame( $level, ob_get_level() );
+		$pending = PendingOutcomes::all();
+		self::assertCount( 1, $pending );
+		self::assertSame( 'recovery_failed', $pending[0]['outcome'] );
+		self::assertStringStartsWith( 'extraction failed: disk full', $pending[0]['detail'] );
+		self::assertStringContainsString( self::LEFT_INACTIVE, $pending[0]['detail'] );
+		self::assertNull( UpdateTransaction::current() );
+	}
+
+	/** Même reprise manquée, extension qui se charge : réactivée par le bac à sable, détail inchangé. */
+	public function test_a_recovery_whose_restore_fails_reactivates_a_plugin_that_loads(): void {
+		$point = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
+		( Plugin_Upgrader::$on_upgrade )();
+		$this->dead_transaction( self::FILE, $point['id'] );
+		$this->restore_fails( then_activation_throws: false );
+
+		ProtectedUpdate::recover( time() );
+
+		self::assertSame( [ self::FILE ], $this->activated );
+		self::assertTrue( $this->active );
+		$pending = PendingOutcomes::all();
+		self::assertSame( 'recovery_failed', $pending[0]['outcome'] );
+		self::assertSame( 'extraction failed: disk full', $pending[0]['detail'] );
+	}
+
+	/**
+	 * Restauration RÉUSSIE par la reprise du cron : l'ancienne version, complète et
+	 * vérifiée, est en place. Réactivation garantie comme avant, même quand
+	 * activate_plugin() lève hors de l'administration (cas du 2026-09-23) : la voie de
+	 * secours écrit l'option. Verrouille le choix de garder force_reactivate() ici.
+	 */
+	public function test_a_successful_recovery_still_reactivates_the_plugin_when_its_activation_throws(): void {
+		$point       = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
+		$tree_before = $this->tree( $this->plugins . '/akismet' );
+		( Plugin_Upgrader::$on_upgrade )();
+		$this->dead_transaction( self::FILE, $point['id'] );
+		$this->activation_throws = true;
+		$level                   = ob_get_level();
+
+		ProtectedUpdate::recover( time() );
+
+		self::assertSame( $tree_before, $this->tree( $this->plugins . '/akismet' ) );
+		self::assertContains( self::FILE, (array) ( $this->options['active_plugins'] ?? [] ), 'Version saine remise en place : réactivée comme avant.' );
+		self::assertSame( [ [ self::FILE, 'recovered_rolled_back' ] ], $this->pending_outcomes() );
+		// force_reactivate() ne referme pas le tampon qu'activate_plugin() laisse ouvert sur
+		// une erreur (comportement historique, inchangé) : refermé ici pour PHPUnit.
+		while ( ob_get_level() > $level ) {
+			ob_end_clean();
+		}
+	}
+
+	/**
+	 * La reprise du cron meurt DANS le bac à sable (fichier principal qui inclut un
+	 * fichier manquant : erreur fatale que rien ne rattrape). Le filet de shutdown
+	 * reprend sa réservation et restaure de nouveau. Si cette restauration échoue aussi,
+	 * activate_plugin() n'inclurait plus le fichier principal (include_once : déjà fait
+	 * dans ce processus) et activerait l'extension sans l'avoir chargée. Elle reste
+	 * inactive.
+	 */
+	public function test_the_shutdown_net_never_activates_a_plugin_whose_sandbox_already_failed_in_this_process(): void {
+		$point = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
+		( Plugin_Upgrader::$on_upgrade )();
+		$this->dead_transaction( self::FILE, $point['id'] );
+		$this->restore_fails( then_activation_throws: false );
+		$calls = 0;
+		Functions\when( 'activate_plugin' )->alias(
+			function ( string $file ) use ( &$calls ): ?WP_Error {
+				++$calls;
+				if ( 1 === $calls ) {
+					// Tient lieu de l'erreur fatale : le fichier principal est déjà inclus.
+					throw new \Error( 'Failed opening required inc/missing.php' );
+				}
+				// include_once déjà fait : rien n'est chargé, l'option est écrite.
+				$this->options['active_plugins'][] = $file;
+				$this->active                      = true;
+				return null;
+			}
+		);
+		// Ce qu'a fait la reprise du cron avant de mourir dans le bac à sable.
+		self::assertNotNull( UpdateTransaction::reserve( (array) UpdateTransaction::current(), time() ) );
+		self::assertFalse( CommandExecutor::try_activate( self::FILE, false ) );
+
+		ProtectedUpdate::recover_on_shutdown();
+
+		self::assertSame( 1, $calls, 'Pas de second passage par activate_plugin() : il n\'inclurait plus rien.' );
+		self::assertFalse( $this->active );
+		self::assertNotContains( self::FILE, (array) ( $this->options['active_plugins'] ?? [] ) );
+		$pending = PendingOutcomes::all();
+		self::assertCount( 1, $pending );
+		self::assertSame( 'recovery_failed', $pending[0]['outcome'] );
+		self::assertStringContainsString( self::LEFT_INACTIVE, $pending[0]['detail'] );
+	}
+
+	/**
+	 * Une WP_Error de validation (fichier introuvable, en-tête absent) arrive AVANT
+	 * l'inclusion du fichier principal : un nouvel essai dans le même processus reste un
+	 * vrai chargement, il n'est pas refusé.
+	 */
+	public function test_try_activate_retries_after_an_error_raised_before_loading_the_plugin(): void {
+		$this->active = false;
+		$calls        = 0;
+		Functions\when( 'activate_plugin' )->alias(
+			function () use ( &$calls ): ?WP_Error {
+				++$calls;
+				if ( 1 === $calls ) {
+					return new WP_Error( 'plugin_not_found', 'Plugin file does not exist.' );
+				}
+				$this->active = true;
+				return null;
+			}
+		);
+
+		self::assertFalse( CommandExecutor::try_activate( self::FILE, false ) );
+		self::assertTrue( CommandExecutor::try_activate( self::FILE, false ) );
+		self::assertSame( 2, $calls );
+	}
+
 	// ── Trace de reprise : seulement sur sa propre réservation ───────────────
 
 	/**
@@ -1245,6 +1454,27 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 	}
 
 	/**
+	 * La prochaine restauration échoue en pleine extraction (« disk full ») : fichier
+	 * principal de l'ancienne version écrit à moitié, puis erreur ; le restaurateur
+	 * retire l'extraction partielle et remet le dossier d'avant. Avec
+	 * `$then_activation_throws`, le fichier principal lève ensuite au chargement
+	 * (activate_plugin() lève une Error), à partir de cette restauration seulement.
+	 */
+	private function restore_fails( bool $then_activation_throws ): void {
+		$s        = Services::make();
+		$restorer = new PluginRestorer(
+			$this->plugins,
+			function ( string $zip, string $destination ) use ( $then_activation_throws ): void {
+				mkdir( $destination . '/akismet', 0777, true );
+				file_put_contents( $destination . '/akismet/akismet.php', "<?php\n/**\n * Plugin Name: akismet\n" );
+				$this->activation_throws = $then_activation_throws;
+				throw new \RuntimeException( 'disk full' );
+			}
+		);
+		Services::override( new Services( $s->store, $s->snapshotter, $restorer, $s->health, $s->plugins_root ) );
+	}
+
+	/**
 	 * Mise à jour morte à moitié : en-tête 2.0, fichier ajouté, fichier retiré,
 	 * extension désactivée par le cœur.
 	 */
@@ -1281,16 +1511,26 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 
 	/**
 	 * Exécute `$fn` comme un autre processus PHP : sans la transaction que tient
-	 * celui du test (statique, propre à chaque processus).
+	 * celui du test, ni ses rollbacks commencés, ni ses essais d'activation (statiques,
+	 * propres à chaque processus).
 	 */
 	private function as_another_process( callable $fn ): void {
-		$held = new \ReflectionProperty( UpdateTransaction::class, 'held' );
-		$mine = $held->getValue();
-		$held->setValue( null, null );
+		$statics = [
+			[ new \ReflectionProperty( UpdateTransaction::class, 'held' ), null ],
+			[ new \ReflectionProperty( ProtectedUpdate::class, 'rollback_started' ), [] ],
+			[ new \ReflectionProperty( CommandExecutor::class, 'sandbox_failed' ), [] ],
+		];
+		$mine = [];
+		foreach ( $statics as $i => [ $property, $fresh ] ) {
+			$mine[ $i ] = $property->getValue();
+			$property->setValue( null, $fresh );
+		}
 		try {
 			$fn();
 		} finally {
-			$held->setValue( null, $mine );
+			foreach ( $statics as $i => [ $property ] ) {
+				$property->setValue( null, $mine[ $i ] );
+			}
 		}
 	}
 

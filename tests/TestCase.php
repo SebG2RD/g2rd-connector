@@ -11,6 +11,7 @@ namespace G2RD\Connector\Tests;
 
 use Brain\Monkey;
 use Brain\Monkey\Functions;
+use G2RD\Connector\Commands\CommandExecutor;
 use G2RD\Connector\Rollback\ProtectedUpdate;
 use G2RD\Connector\Rollback\UpdateTransaction;
 use PHPUnit\Framework\TestCase as PHPUnitTestCase;
@@ -61,6 +62,8 @@ abstract class TestCase extends PHPUnitTestCase {
 		// précédent a pu les laisser — quel que soit l'ordre des tests.
 		( new \ReflectionProperty( UpdateTransaction::class, 'held' ) )->setValue( null, null );
 		( new \ReflectionProperty( ProtectedUpdate::class, 'shutdown_net_armed' ) )->setValue( null, false );
+		( new \ReflectionProperty( ProtectedUpdate::class, 'rollback_started' ) )->setValue( null, [] );
+		( new \ReflectionProperty( CommandExecutor::class, 'sandbox_failed' ) )->setValue( null, [] );
 	}
 
 	protected function tearDown(): void {

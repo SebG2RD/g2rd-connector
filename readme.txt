@@ -161,6 +161,12 @@ Lighter on the server: fewer WordPress boots and fewer calls to the manager, sam
   as done. The transaction is re-read even when it was read as missing earlier in the request
   (WordPress `notoptions` cache), and the `g2rd_update_txn_recovery` record is removed along
   with its transaction.
+* **Fix: a restore that fails no longer forces the plugin active.** After a failed restore
+  (automatic rollback, recovery of an interrupted update or manual rollback), the plugin is
+  reactivated only through the WordPress activation sandbox, never by writing `active_plugins`
+  directly (its folder may be half replaced, which would take every page of the site down with
+  a critical error), and if it does not load there it stays inactive and the error sent to the
+  platform says so ("the plugin was left inactive…").
 * **Uninstall also removes the failed-login counter** (`g2rd_connector_login_failed_window`
   transient), on every site of a multisite network.
 * **Performance: one SQL query less per page view.** The `g2rd_connector_settings` option

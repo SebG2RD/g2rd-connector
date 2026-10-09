@@ -22,8 +22,8 @@ final class RestoreException extends \RuntimeException {
 	/** Échec pendant la restauration ; les fichiers d'origine ont été remis en place. */
 	public const FAILED = 'rollback_failed';
 
-	private function __construct( private readonly string $error_code, string $message ) {
-		parent::__construct( $message );
+	private function __construct( private readonly string $error_code, string $message, ?\Throwable $previous = null ) {
+		parent::__construct( $message, 0, $previous );
 	}
 
 	public static function integrity( string $message ): self {
@@ -40,5 +40,15 @@ final class RestoreException extends \RuntimeException {
 
 	public function error_code(): string {
 		return $this->error_code;
+	}
+
+	/**
+	 * Le même échec (même code pour la plateforme), message complété de ce qui a été
+	 * fait ensuite de l'extension (cf. ProtectedUpdate::restore()).
+	 *
+	 * @param string $detail Texte fixe, ajouté tel quel à la fin du message.
+	 */
+	public function with_detail( string $detail ): self {
+		return new self( $this->error_code, $this->getMessage() . $detail, $this );
 	}
 }

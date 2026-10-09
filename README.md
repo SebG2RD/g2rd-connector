@@ -296,6 +296,11 @@ dont le loopback est impossible donne « non vérifiable », jamais « cassé »
   Une reprise qui a dépassé sa réservation ne fait plus passer la suivante pour faite ; la
   transaction est relue même lue absente plus tôt dans la requête (cache `notoptions` de
   WordPress) ; la trace `g2rd_update_txn_recovery` est retirée avec sa transaction.
+- Une restauration qui échoue (rollback automatique, reprise ou rollback manuel) ne force plus
+  l'extension active : elle n'est réactivée que par le bac à sable d'activation de WordPress,
+  jamais par une écriture directe d'`active_plugins` (son dossier peut être à moitié remplacé, ce
+  qui mettrait tout le site en « erreur critique »), et si elle ne s'y charge pas elle reste
+  inactive et l'erreur remontée à la plateforme le dit (« the plugin was left inactive… »).
 - Après un rollback, la version retirée est bloquée pour les mises à jour automatiques de
   WordPress jusqu'à la version suivante.
 - Le plugin ne se rollback jamais lui-même. La capacité `restore_points` n'est annoncée dans

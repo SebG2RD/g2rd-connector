@@ -169,6 +169,58 @@ final class RestoreCommandsTest extends FilesystemTestCase {
 	}
 
 	/**
+	 * La voie de secours ne vaut QUE pour une restauration réussie. Restauration qui
+	 * échoue en pleine extraction (disque plein) : le dossier peut être à moitié
+	 * remplacé. L'extension n'est réactivée que si elle se charge sans erreur ; ici
+	 * elle lève une Error, elle reste inactive (jamais d'écriture forcée
+	 * d'`active_plugins`, qui mettrait tout le site en « erreur critique »), et le
+	 * résultat le dit.
+	 */
+	public function test_a_failed_restore_never_forces_a_plugin_that_does_not_load(): void {
+		$s = Services::make();
+		Services::override(
+			new Services(
+				$s->store,
+				$s->snapshotter,
+				new PluginRestorer(
+					$this->plugins,
+					static function ( string $zip, string $destination ): void {
+						mkdir( $destination . '/akismet', 0777, true );
+						file_put_contents( $destination . '/akismet/akismet.php', "<?php\n/**\n * Plugin Name: akismet\n" );
+						throw new \RuntimeException( 'disk full' );
+					}
+				),
+				$s->health,
+				$s->plugins_root
+			)
+		);
+		$level = ob_get_level();
+		Functions\when( 'activate_plugin' )->alias(
+			static function (): void {
+				ob_start(); // Comme activate_plugin(), avant d'inclure le fichier principal.
+				throw new \Error( 'Class "Akismet\\Module" not found' );
+			}
+		);
+
+		$outcome = CommandExecutor::run( 'rollback_plugin', [
+			'file'                     => self::FILE,
+			'restore_point_id'         => $this->point['id'],
+			'expected_sha256'          => $this->point['sha256'],
+			'expected_version'         => '1.0',
+			'expected_current_version' => '2.0',
+		] );
+
+		self::assertSame( 'done', $outcome['status'] );
+		$r = $outcome['result'];
+		self::assertSame( 'rollback_failed', $r['outcome'] );
+		self::assertStringStartsWith( 'extraction failed: disk full; the plugin was left inactive:', $r['error'] );
+		self::assertFalse( $this->active, 'L\'extension reste inactive : le site reste debout.' );
+		self::assertNotContains( self::FILE, (array) ( $this->options['active_plugins'] ?? [] ), 'active_plugins jamais écrite de force.' );
+		self::assertSame( $level, ob_get_level() );
+		self::assertSame( '2.0', $this->plugins_on_disk()[ self::FILE ]['Version'], 'Dossier d\'origine remis en place par le restaurateur.' );
+	}
+
+	/**
 	 * Une reprise du cron (ou une mise à jour protégée) est en cours : elle peut
 	 * restaurer la même extension. Le rollback manuel est refusé avant tout
 	 * changement, avec le message déjà connu de la plateforme.
