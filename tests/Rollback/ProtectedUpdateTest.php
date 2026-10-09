@@ -39,6 +39,8 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 	private array $activated = [];
 	/** @var list<array{0:int, 1:string}> Événements ponctuels programmés (date, hook). */
 	private array $single_events = [];
+	/** @var (\Closure(int): void)|null Appelé à chaque sonde loopback, avec son rang (0, 1, 2…). */
+	private ?\Closure $on_probe = null;
 
 	protected function setUp(): void {
 		parent::setUp();
@@ -50,6 +52,7 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		$this->deactivated     = [];
 		$this->activated       = [];
 		$this->single_events   = [];
+		$this->on_probe        = null;
 
 		// ── WordPress simulé ────────────────────────────────────────────────────
 		Functions\when( 'get_plugins' )->alias( fn (): array => $this->plugins_on_disk() );
@@ -102,6 +105,9 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 
 		$health = new HealthChecker(
 			function ( string $url ): array {
+				if ( null !== $this->on_probe ) {
+					( $this->on_probe )( $this->response_index );
+				}
 				$r = $this->responses[ $this->response_index ] ?? [ 'code' => 200, 'body' => 'ok' ];
 				++$this->response_index;
 				$body = $r['body'];
@@ -296,9 +302,74 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 
 		self::assertCount( 1, $this->single_events );
 		[ $timestamp, $hook ] = $this->single_events[0];
-		self::assertSame( RestorePointPurgeJob::HOOK, $hook );
+		self::assertSame( RestorePointPurgeJob::RECOVERY_HOOK, $hook, 'Le contrôle a son propre hook : il ne lance pas la purge des points.' );
 		self::assertGreaterThanOrEqual( $before + RestorePointPurgeJob::RECOVERY_CHECK_DELAY, $timestamp );
 		self::assertLessThanOrEqual( $after + RestorePointPurgeJob::RECOVERY_CHECK_DELAY, $timestamp );
+	}
+
+	/**
+	 * Mesure de référence lente (plus de 10 min d'horloge) : la transaction est
+	 * rafraîchie juste après. Un contrôle de reprise qui tombe pendant la création du
+	 * point (autre processus) ne prend donc pas la mise à jour vivante pour morte.
+	 */
+	public function test_a_slow_baseline_measure_does_not_let_a_concurrent_check_take_the_live_update_for_dead(): void {
+		$this->script_health( ok: 2, then_ok: 2 );
+		$this->on_probe = function ( int $probe ): void {
+			if ( 1 === $probe ) { // Dernière sonde de la référence : la mesure a duré plus de 10 min.
+				$this->age_transaction( UpdateTransaction::STALE_AFTER_SECONDS + 100 );
+			}
+		};
+		$checked_during_snapshot = false;
+		$this->on_filter         = function ( string $hook ) use ( &$checked_during_snapshot ): void {
+			if ( 'g2rd_connector_snapshots_dir' === $hook && 2 === $this->response_index && ! $checked_during_snapshot ) {
+				$checked_during_snapshot = true;
+				ProtectedUpdate::recover( time() ); // Le contrôle de reprise du cron, pendant la création du point.
+			}
+		};
+
+		$r = CommandExecutor::run( 'update_plugin', $this->payload( [ 'keep_on_success' => true, 'grace_seconds' => 3600 ] ) )['result'];
+
+		self::assertTrue( $checked_during_snapshot );
+		self::assertSame( [], PendingOutcomes::all(), 'Aucune reprise : la mise à jour était vivante.' );
+		self::assertSame( ProtectedUpdate::OUTCOME_UPDATED, $r['outcome'] );
+		self::assertNull( UpdateTransaction::current() );
+	}
+
+	/**
+	 * Restauration lente : la transaction est rafraîchie avant la mesure qui suit le
+	 * rollback. Un contrôle de reprise qui tombe pendant cette mesure ne restaure pas
+	 * une seconde fois sous les pieds de la requête vivante.
+	 */
+	public function test_a_slow_restore_does_not_let_a_concurrent_check_restore_again(): void {
+		$this->responses = [
+			[ 'code' => 200, 'body' => 'ok' ],
+			[ 'code' => 200, 'body' => self::ajax_ok() ],
+			[ 'code' => 500, 'body' => '' ],
+			[ 'code' => 200, 'body' => "<b>Fatal error</b>: Uncaught Error" ],
+			[ 'code' => 200, 'body' => 'ok' ],
+			[ 'code' => 200, 'body' => self::ajax_ok() ],
+		];
+		$restore_started = false;
+		$this->on_filter = function ( string $hook ) use ( &$restore_started ): void {
+			// Premier accès au dossier des points après le contrôle : début de la restauration.
+			if ( 'g2rd_connector_snapshots_dir' === $hook && 4 === $this->response_index && ! $restore_started ) {
+				$restore_started = true;
+				$this->age_transaction( UpdateTransaction::STALE_AFTER_SECONDS + 100 ); // La restauration dure plus de 10 min.
+			}
+		};
+		$this->on_probe = static function ( int $probe ): void {
+			if ( 4 === $probe ) {
+				ProtectedUpdate::recover( time() ); // Le contrôle de reprise du cron, pendant la mesure d'après rollback.
+			}
+		};
+
+		$r = CommandExecutor::run( 'update_plugin', $this->payload( [ 'keep_on_success' => true, 'grace_seconds' => 3600 ] ) )['result'];
+
+		self::assertTrue( $restore_started );
+		self::assertSame( ProtectedUpdate::OUTCOME_AUTO_ROLLED_BACK, $r['outcome'] );
+		self::assertSame( [ self::FILE ], $this->deactivated, 'Une seule restauration.' );
+		self::assertSame( [], PendingOutcomes::all(), 'Aucune reprise : la mise à jour était vivante.' );
+		self::assertNull( UpdateTransaction::current() );
 	}
 
 	/**
@@ -352,6 +423,15 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 			],
 			$extra
 		);
+	}
+
+	/**
+	 * Fait comme si `$seconds` s'étaient écoulées depuis la dernière étape de la
+	 * transaction en cours (l'horloge des tests ne bouge pas).
+	 */
+	private function age_transaction( int $seconds ): void {
+		self::assertNotNull( UpdateTransaction::current(), 'Une transaction doit être ouverte.' );
+		$this->options[ UpdateTransaction::OPTION_KEY ]['updated_at'] -= $seconds;
 	}
 
 	private function script_health( int $ok, int $then_ok ): void {

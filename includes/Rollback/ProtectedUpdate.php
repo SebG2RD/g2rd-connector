@@ -65,13 +65,20 @@ final class ProtectedUpdate {
 		}
 		register_shutdown_function( [ self::class, 'recover_on_shutdown' ] );
 		// Filet du filet : un processus tué par le serveur ne passe pas par le
-		// shutdown. La purge locale (qui reprend les transactions mortes) ne passant
-		// que deux fois par jour, on lui demande un passage juste après le délai au-delà
-		// duquel cette transaction pourra être déclarée morte.
+		// shutdown. La purge locale (qui reprend aussi les transactions mortes) ne
+		// passant que deux fois par jour, un contrôle de reprise ponctuel (reprise
+		// seule, sans purge) est programmé juste après le délai au-delà duquel cette
+		// transaction pourra être déclarée morte.
 		RestorePointPurgeJob::schedule_recovery_check( $now );
+
+		// Chaque étape qui peut durer est suivie d'un rafraîchissement de la
+		// transaction (step() ou touch()) : un contrôle de reprise qui tombe pendant
+		// l'étape suivante (autre processus) ne prend pas cette requête vivante pour
+		// morte. Durée d'étape supposée : cf. RestorePointPurgeJob::RECOVERY_CHECK_DELAY.
 
 		// ── Référence de santé, AVANT tout changement ────────────────────────────
 		$baseline = $s->health->measure();
+		UpdateTransaction::touch();
 
 		// ── Point de restauration ────────────────────────────────────────────────
 		$keep    = ! empty( $payload['keep_on_success'] );
@@ -160,6 +167,7 @@ final class ProtectedUpdate {
 		try {
 			$this->restore( $plugin_file, $point, $version, $version_after, (bool) ( $result['was_active'] ?? false ), (bool) ( $result['network_active'] ?? false ) );
 			$s->store->hold( $point['id'], $hold_until );
+			UpdateTransaction::touch();
 			$health['after_rollback'] = $s->health->measure();
 			UpdateTransaction::close();
 			// array_replace (pas `+`) : `updated` et `version_after` doivent refléter l'état

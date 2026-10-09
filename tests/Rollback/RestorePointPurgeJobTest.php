@@ -88,33 +88,64 @@ final class RestorePointPurgeJobTest extends FilesystemTestCase {
 	}
 
 	/**
-	 * Une mise à jour protégée encore ouverte, pas encore déclarée morte : le cron
-	 * repassera dès qu'elle pourra l'être, sans attendre son passage biquotidien.
+	 * Une mise à jour protégée en cours (transaction fraîche) : la purge ne touche à
+	 * rien. Le point de la mise à jour vaut `expires_at = now` sur les plans sans délai
+	 * de grâce, et son zip peut être écrit mais pas encore indexé : les supprimer
+	 * pendant le contrôle de santé laisserait un rollback automatique sans archive.
 	 */
-	public function test_run_follows_a_transaction_that_is_still_open(): void {
-		$scheduled = [];
-		Functions\when( 'wp_schedule_single_event' )->alias(
-			function ( int $timestamp, string $hook ) use ( &$scheduled ): bool {
-				$scheduled[] = [ $timestamp, $hook ];
-				return true;
-			}
-		);
-		$updated_at = time() - 30;
+	public function test_purge_is_deferred_while_a_protected_update_is_running(): void {
+		$now = self::NOW;
+		$this->add( 'point-en-cours', plugin: 'z/z.php', expires: $now );
+		file_put_contents( $this->snapshots . '/z-2.0-pas-encore-indexe.zip', 'z' );
+		PendingOutcomes::add( [ 'plugin_file' => 'x/x.php', 'outcome' => 'old' ], $now - PendingOutcomes::TTL - 1 );
+		UpdateTransaction::open( [ 'plugin_file' => 'z/z.php' ], $now - 30 );
+
+		self::assertNull( RestorePointPurgeJob::purge( $this->store, $now ), 'Purge reportée.' );
+
+		self::assertNotNull( $this->store->get( 'point-en-cours' ) );
+		self::assertFileExists( $this->snapshots . '/point-en-cours.zip' );
+		self::assertFileExists( $this->snapshots . '/z-2.0-pas-encore-indexe.zip', 'Zip renommé mais pas encore indexé : pas un orphelin.' );
+		self::assertSame( [ 'old' ], array_column( PendingOutcomes::all(), 'outcome' ), 'Résultats en attente non purgés.' );
+		self::assertNotNull( UpdateTransaction::current(), 'Transaction fraîche : jamais reprise par le cron.' );
+	}
+
+	/**
+	 * Passage biquotidien pendant une mise à jour protégée : rien n'est supprimé, et
+	 * seul le contrôle de reprise (hook à lui) est reprogrammé, juste après le délai
+	 * au-delà duquel la transaction pourra être déclarée morte.
+	 */
+	public function test_run_deletes_nothing_and_schedules_the_recovery_check_while_an_update_is_running(): void {
+		$scheduled = $this->record_single_events();
+		$now       = time();
+		$this->add( 'point-en-cours', plugin: 'z/z.php', expires: $now );
+		file_put_contents( $this->snapshots . '/z-2.0-pas-encore-indexe.zip', 'z' );
+		$updated_at = $now - 30;
 		UpdateTransaction::open( [ 'plugin_file' => 'z/z.php' ], $updated_at );
 
 		( new RestorePointPurgeJob() )->run();
 
+		self::assertNotNull( $this->store->get( 'point-en-cours' ) );
+		self::assertFileExists( $this->snapshots . '/point-en-cours.zip' );
+		self::assertFileExists( $this->snapshots . '/z-2.0-pas-encore-indexe.zip' );
 		self::assertNotNull( UpdateTransaction::current(), 'Transaction fraîche : pas encore reprise.' );
-		self::assertSame( [ [ $updated_at + RestorePointPurgeJob::RECOVERY_CHECK_DELAY, RestorePointPurgeJob::HOOK ] ], $scheduled );
+		self::assertSame( [ [ $updated_at + RestorePointPurgeJob::RECOVERY_CHECK_DELAY, RestorePointPurgeJob::RECOVERY_HOOK ] ], $scheduled->getArrayCopy() );
 	}
 
-	public function test_run_schedules_nothing_once_a_dead_transaction_is_recovered(): void {
-		Functions\expect( 'wp_schedule_single_event' )->never();
-		UpdateTransaction::open( [ 'plugin_file' => 'z/z.php' ], time() - 5000 );
+	/** Transaction morte : reprise d'abord, puis purge normale, et plus rien à suivre. */
+	public function test_run_recovers_a_dead_transaction_then_purges_normally(): void {
+		$scheduled = $this->record_single_events();
+		$now       = time();
+		$this->add( 'expire', expires: $now - 1 );
+		file_put_contents( $this->snapshots . '/orphelin-1-abcd.zip', 'x' );
+		UpdateTransaction::open( [ 'plugin_file' => 'z/z.php' ], $now - 5000 );
 
 		( new RestorePointPurgeJob() )->run();
 
 		self::assertNull( UpdateTransaction::current() );
+		self::assertSame( [ 'interrupted_unverified' ], array_column( PendingOutcomes::all(), 'outcome' ) );
+		self::assertNull( $this->store->get( 'expire' ) );
+		self::assertFileDoesNotExist( $this->snapshots . '/orphelin-1-abcd.zip' );
+		self::assertSame( [], $scheduled->getArrayCopy() );
 	}
 
 	public function test_run_schedules_nothing_without_an_open_transaction(): void {
@@ -123,6 +154,57 @@ final class RestorePointPurgeJobTest extends FilesystemTestCase {
 		( new RestorePointPurgeJob() )->run();
 
 		self::assertNull( UpdateTransaction::current() );
+	}
+
+	/**
+	 * Le contrôle ponctuel ne fait que reprendre une transaction morte : ni purge des
+	 * points (expirés, orphelins), ni reprogrammation une fois la transaction fermée.
+	 */
+	public function test_recovery_check_recovers_a_dead_transaction_and_purges_nothing(): void {
+		$scheduled = $this->record_single_events();
+		$now       = time();
+		$this->add( 'expire', expires: $now - 1 );
+		file_put_contents( $this->snapshots . '/orphelin-1-abcd.zip', 'x' );
+		UpdateTransaction::open( [ 'plugin_file' => 'z/z.php' ], $now - 5000 );
+
+		( new RestorePointPurgeJob() )->run_recovery_check();
+
+		self::assertNull( UpdateTransaction::current() );
+		self::assertSame( [ 'interrupted_unverified' ], array_column( PendingOutcomes::all(), 'outcome' ) );
+		self::assertNotNull( $this->store->get( 'expire' ), 'La purge des points attend le passage biquotidien.' );
+		self::assertFileExists( $this->snapshots . '/orphelin-1-abcd.zip' );
+		self::assertSame( [], $scheduled->getArrayCopy() );
+	}
+
+	/** Transaction encore fraîche au moment du contrôle : il se reprogramme, sans rien toucher. */
+	public function test_recovery_check_follows_a_transaction_still_open(): void {
+		$scheduled  = $this->record_single_events();
+		$updated_at = time() - 30;
+		$this->add( 'point-en-cours', plugin: 'z/z.php', expires: $updated_at );
+		UpdateTransaction::open( [ 'plugin_file' => 'z/z.php' ], $updated_at );
+
+		( new RestorePointPurgeJob() )->run_recovery_check();
+
+		self::assertNotNull( UpdateTransaction::current() );
+		self::assertNotNull( $this->store->get( 'point-en-cours' ) );
+		self::assertSame( [], PendingOutcomes::all() );
+		self::assertSame( [ [ $updated_at + RestorePointPurgeJob::RECOVERY_CHECK_DELAY, RestorePointPurgeJob::RECOVERY_HOOK ] ], $scheduled->getArrayCopy() );
+	}
+
+	/**
+	 * Événements ponctuels programmés pendant le test (date, hook).
+	 *
+	 * @return \ArrayObject<int, array{0:int, 1:string}>
+	 */
+	private function record_single_events(): \ArrayObject {
+		$scheduled = new \ArrayObject();
+		Functions\when( 'wp_schedule_single_event' )->alias(
+			static function ( int $timestamp, string $hook ) use ( $scheduled ): bool {
+				$scheduled->append( [ $timestamp, $hook ] );
+				return true;
+			}
+		);
+		return $scheduled;
 	}
 
 	private function add( string $id, string $plugin = 'a/a.php', ?int $expires = null, bool $hold = false, ?int $hold_until = null, int $created = self::NOW ): void {

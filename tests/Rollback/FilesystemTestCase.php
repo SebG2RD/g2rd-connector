@@ -19,15 +19,32 @@ abstract class FilesystemTestCase extends TestCase {
 	protected string $snapshots = '';
 	protected string $plugins   = '';
 
+	/**
+	 * Appelé à chaque apply_filters() simulé, avec le nom du filtre : permet à un
+	 * test d'agir au milieu d'une opération (le dossier des points est demandé par
+	 * chaque accès du magasin aux fichiers).
+	 *
+	 * @var (\Closure(string): void)|null
+	 */
+	protected ?\Closure $on_filter = null;
+
 	protected function setUp(): void {
 		parent::setUp();
 
 		$this->root      = sys_get_temp_dir() . '/g2rd-rp-' . bin2hex( random_bytes( 6 ) );
 		$this->snapshots = $this->root . '/snapshots';
 		$this->plugins   = $this->root . '/plugins';
+		$this->on_filter = null;
 		mkdir( $this->plugins, 0777, true );
 
-		Functions\when( 'apply_filters' )->alias( fn ( string $hook, $value ) => 'g2rd_connector_snapshots_dir' === $hook ? $this->snapshots : $value );
+		Functions\when( 'apply_filters' )->alias(
+			function ( string $hook, $value ) {
+				if ( null !== $this->on_filter ) {
+					( $this->on_filter )( $hook );
+				}
+				return 'g2rd_connector_snapshots_dir' === $hook ? $this->snapshots : $value;
+			}
+		);
 		Functions\when( 'wp_mkdir_p' )->alias( static fn ( string $dir ): bool => is_dir( $dir ) || mkdir( $dir, 0777, true ) );
 	}
 

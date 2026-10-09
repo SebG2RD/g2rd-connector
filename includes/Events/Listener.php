@@ -11,9 +11,10 @@
  *   - wp_login_failed          → user.login_failed (sécurité)
  *
  * Les connexions échouées sont le seul événement qu'un tiers peut déclencher à
- * volonté (force brute, xmlrpc `system.multicall`) : elles partent sans bloquer la
- * page et au plus LoginFailedThrottle::MAX_PER_MINUTE fois par minute. Les autres
- * événements restent envoyés comme avant.
+ * volonté (force brute, xmlrpc `system.multicall`) : elles partent avec une attente
+ * plafonnée à 2 s (au lieu de 15), réponse non lue, et au plus
+ * LoginFailedThrottle::MAX_PER_MINUTE fois par minute. Les autres événements
+ * restent envoyés comme avant.
  *
  * @package G2RD\Connector
  */
@@ -56,9 +57,10 @@ final class Listener {
 	}
 
 	/**
-	 * Une tentative au-delà du plafond de la minute est seulement comptée : aucun
-	 * appel à la plateforme (cf. LoginFailedThrottle). Sinon l'événement part sans
-	 * bloquer : la page de connexion (ou xmlrpc.php) n'attend pas la plateforme.
+	 * Une tentative au-delà du plafond de la minute n'est ni envoyée ni comptée
+	 * (cf. LoginFailedThrottle). Sinon l'événement part avec une attente plafonnée
+	 * à 2 s (au lieu de 15), réponse non lue : la page de connexion (ou xmlrpc.php)
+	 * attend la plateforme 2 s au plus.
 	 */
 	public function on_login_failed( string $user_login ): void {
 		if ( ! $this->login_failed_throttle->allow() ) {

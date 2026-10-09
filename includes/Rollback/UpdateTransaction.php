@@ -18,7 +18,11 @@ final class UpdateTransaction {
 
 	public const OPTION_KEY = 'g2rd_update_txn';
 
-	/** Au-delà, une transaction encore ouverte est tenue pour morte (cron). */
+	/**
+	 * Au-delà, une transaction encore ouverte est tenue pour morte (cron). Suppose
+	 * qu'aucune étape d'une mise à jour vivante ne dure davantage entre deux
+	 * rafraîchissements (step(), touch() ; cf. RestorePointPurgeJob::RECOVERY_CHECK_DELAY).
+	 */
 	public const STALE_AFTER_SECONDS = 600;
 
 	public const STEP_SNAPSHOT     = 'snapshot';
@@ -60,6 +64,19 @@ final class UpdateTransaction {
 		$current['step']       = $step;
 		$current['updated_at'] = $now ?? time();
 		self::write( array_merge( $current, $changes ) );
+	}
+
+	/**
+	 * Signe de vie : rafraîchit `updated_at` sans changer d'étape, après une
+	 * opération qui peut être longue (mesure de santé, restauration). Sans effet si
+	 * aucune transaction n'est ouverte.
+	 */
+	public static function touch( ?int $now = null ): void {
+		$current = self::current();
+		if ( null === $current ) {
+			return;
+		}
+		self::step( (string) $current['step'], [], $now );
 	}
 
 	public static function close(): void {

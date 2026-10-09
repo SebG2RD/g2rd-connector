@@ -25,14 +25,16 @@ final class ManagerClient {
 	private const TIMEOUT = 15;
 
 	/**
-	 * Délai (secondes) d'un envoi non bloquant (`'blocking' => false`).
+	 * Attente maximale (secondes) d'un envoi à réponse non lue (`'blocking' => false`).
 	 *
-	 * Avec le transport cURL de WordPress, un envoi non bloquant attend tout de même
-	 * que la requête soit partie, jusqu'à ce délai ; il ne lit ni n'interprète la
-	 * réponse. Le délai doit donc couvrir DNS, connexion et TLS jusqu'à la plateforme
-	 * (via le CDN de l'hébergeur), sans quoi l'événement serait perdu : 2 s, en
-	 * secondes entières (un délai inférieur à la seconde est mal tenu par certains
-	 * résolveurs DNS de cURL), contre 15 s pour un envoi bloquant.
+	 * « Non bloquant » au sens de WordPress seulement : avec le transport cURL de
+	 * Requests (transfert retourné, sans fonction d'écriture), curl_exec() attend la
+	 * réponse COMPLÈTE de la plateforme, jusqu'à ce délai ; WordPress ne la lit ni ne
+	 * l'interprète ensuite. La page qui envoie attend donc jusqu'à 2 s (au lieu de
+	 * 15), pas seulement le départ de la requête. Le délai doit couvrir DNS,
+	 * connexion et TLS jusqu'à la plateforme (via le CDN de l'hébergeur), sans quoi
+	 * l'événement serait perdu : 2 s, en secondes entières (un délai inférieur à la
+	 * seconde est mal tenu par certains résolveurs DNS de cURL).
 	 */
 	public const NON_BLOCKING_TIMEOUT = 2;
 
@@ -141,11 +143,11 @@ final class ManagerClient {
 	/**
 	 * Push d'un event temps réel (login, plugin install, update fail, etc.).
 	 *
-	 * `$blocking = false` : la requête part avec un délai court
-	 * (NON_BLOCKING_TIMEOUT) et sa réponse n'est pas lue — un refus de la plateforme
-	 * n'est alors pas remonté. Même adresse, mêmes en-têtes, même corps qu'un envoi
-	 * bloquant. Réservé aux événements qu'on ne veut jamais voir retenir une page
-	 * WordPress (connexions échouées, cf. Events\Listener).
+	 * `$blocking = false` : attente plafonnée à NON_BLOCKING_TIMEOUT (2 s au lieu de
+	 * 15), réponse non lue — un refus de la plateforme n'est alors pas remonté. Même
+	 * adresse, mêmes en-têtes, même corps qu'un envoi bloquant. Réservé aux
+	 * événements qui ne doivent retenir une page WordPress que brièvement
+	 * (connexions échouées, cf. Events\Listener).
 	 *
 	 * @param array<string, mixed> $context
 	 * @param bool                 $blocking Attendre et contrôler la réponse (par défaut, comme avant).
@@ -239,7 +241,7 @@ final class ManagerClient {
 
 	/**
 	 * @param array<string, mixed> $payload
-	 * @param bool                 $blocking Faux : délai court, réponse ni attendue ni lue (cf. send_event).
+	 * @param bool                 $blocking Faux : attente plafonnée à 2 s, réponse non lue (cf. send_event).
 	 * @return array<string, mixed>|WP_Error
 	 */
 	private function post( string $relative_path, array $payload, bool $blocking = true ): array|WP_Error {

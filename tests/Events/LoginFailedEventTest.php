@@ -17,7 +17,7 @@ use G2RD\Connector\Tests\TestCase;
  * plusieurs essais par requête — la plateforme démarrait à chaque mot de passe
  * essayé (jusqu'à 896 événements par jour mesurés sur un site).
  *
- * Désormais : envoi non bloquant (délai court), et au plus
+ * Désormais : attente plafonnée à 2 s (au lieu de 15), réponse non lue, et au plus
  * LoginFailedThrottle::MAX_PER_MINUTE événements par minute et par site. Les
  * autres événements ne changent pas.
  */
@@ -36,11 +36,15 @@ final class LoginFailedEventTest extends TestCase {
 	/** @var array<string, array{value: mixed, expiration: int}> */
 	private array $transients = [];
 
+	/** Écritures du compteur (set_transient) : chacune coûte deux écritures d'options sans cache objet. */
+	private int $transient_writes = 0;
+
 	protected function setUp(): void {
 		parent::setUp();
-		$this->now        = self::NOW;
-		$this->posts      = [];
-		$this->transients = [];
+		$this->now              = self::NOW;
+		$this->posts            = [];
+		$this->transients       = [];
+		$this->transient_writes = 0;
 
 		// Jeton stocké en clair (valeur legacy, acceptée telle quelle par decrypt_token).
 		$this->options[ Settings::OPTION_KEY ] = array_merge(
@@ -73,6 +77,7 @@ final class LoginFailedEventTest extends TestCase {
 		);
 		Functions\when( 'set_transient' )->alias(
 			function ( string $key, $value, int $expiration = 0 ): bool {
+				++$this->transient_writes;
 				$this->transients[ $key ] = [
 					'value'      => $value,
 					'expiration' => $expiration,
@@ -89,14 +94,14 @@ final class LoginFailedEventTest extends TestCase {
 		parent::tearDown();
 	}
 
-	public function test_la_connexion_echouee_part_sans_bloquer_avec_un_delai_court(): void {
+	public function test_la_connexion_echouee_part_avec_une_attente_plafonnee_et_sans_lire_la_reponse(): void {
 		$this->listener()->on_login_failed( 'admin' );
 
 		self::assertCount( 1, $this->posts );
 		self::assertSame( 'https://manager.invalid/api/agent/sites/7/events', $this->posts[0]['url'] );
-		self::assertFalse( $this->posts[0]['args']['blocking'], 'La page WordPress n\'attend plus la réponse de la plateforme.' );
+		self::assertFalse( $this->posts[0]['args']['blocking'], 'Réponse de la plateforme non lue.' );
 		self::assertSame( ManagerClient::NON_BLOCKING_TIMEOUT, $this->posts[0]['args']['timeout'] );
-		self::assertLessThanOrEqual( 2, ManagerClient::NON_BLOCKING_TIMEOUT, 'Délai court : plus jamais 15 s par mot de passe essayé.' );
+		self::assertLessThanOrEqual( 2, ManagerClient::NON_BLOCKING_TIMEOUT, 'Attente plafonnée à 2 s : plus jamais 15 s par mot de passe essayé.' );
 	}
 
 	/** Même adresse, mêmes en-têtes (Bearer), même corps : la plateforme ne voit aucune différence. */
@@ -132,7 +137,21 @@ final class LoginFailedEventTest extends TestCase {
 		self::assertSame( 30, LoginFailedThrottle::MAX_PER_MINUTE );
 		self::assertCount( LoginFailedThrottle::MAX_PER_MINUTE, $this->posts, 'Au-delà du plafond, rien ne part.' );
 		self::assertSame( 'admin29', $this->posts[29]['body']['context']['user_login'], 'Les 30 premières tentatives de la minute sont envoyées.' );
-		self::assertSame( 45, $this->transients[ LoginFailedThrottle::TRANSIENT_KEY ]['value']['count'], 'Les tentatives au-delà du plafond restent comptées.' );
+	}
+
+	/**
+	 * Au-delà du plafond, plus aucune écriture : en force brute (xmlrpc
+	 * `system.multicall`, des centaines d'essais par requête), le compteur n'est plus
+	 * réécrit pour rien — personne ne lit les tentatives en trop.
+	 */
+	public function test_au_dela_du_plafond_le_compteur_n_est_plus_reecrit(): void {
+		$listener = $this->listener();
+		for ( $i = 0; $i < 45; $i++ ) {
+			$listener->on_login_failed( 'admin' . $i );
+		}
+
+		self::assertSame( LoginFailedThrottle::MAX_PER_MINUTE, $this->transient_writes, 'Une écriture par événement envoyé, aucune au-delà.' );
+		self::assertSame( LoginFailedThrottle::MAX_PER_MINUTE, $this->transients[ LoginFailedThrottle::TRANSIENT_KEY ]['value']['count'] );
 	}
 
 	/**

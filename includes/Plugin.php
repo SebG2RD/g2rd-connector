@@ -128,6 +128,8 @@ final class Plugin {
 		// Purge locale des points de restauration, deux fois par jour : fonctionne hors
 		// connexion à la plateforme. Planification réparée à chaque démarrage, comme la
 		// découverte des MAJ, et ancienne planification horaire migrée (une fois).
+		// register() branche aussi le contrôle de reprise ponctuel d'une mise à jour
+		// protégée (hook à lui, programmé par ProtectedUpdate : reprise seule).
 		( new RestorePointPurgeJob() )->register();
 		RestorePointPurgeJob::schedule();
 

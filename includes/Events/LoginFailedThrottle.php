@@ -9,8 +9,10 @@
  *
  * Au plus MAX_PER_MINUTE événements partent par minute calendaire et par site
  * (sous la limite de 120 par minute de la plateforme). Au-delà, les tentatives de
- * la minute sont seulement comptées, et le compteur repart de zéro à la minute
- * suivante.
+ * la minute ne sont ni envoyées ni comptées : le compteur n'est plus réécrit (une
+ * écriture de transient coûte deux écritures d'options sans cache objet, et
+ * xmlrpc `system.multicall` enchaîne des centaines d'essais par requête). Il
+ * repart de zéro à la minute suivante.
  *
  * Pas d'événement récapitulatif : le format existant n'en prévoit pas. Les types
  * d'événements du connecteur (`user.login`, `user.login_failed`,
@@ -58,7 +60,8 @@ final class LoginFailedThrottle {
 	}
 
 	/**
-	 * Compte une tentative échouée et dit si son événement peut partir.
+	 * Dit si l'événement d'une tentative échouée peut partir, et le compte s'il part.
+	 * Plafond atteint : refus, sans aucune écriture.
 	 */
 	public function allow(): bool {
 		$window = intdiv( ( $this->clock )(), self::WINDOW_SECONDS );
@@ -67,6 +70,9 @@ final class LoginFailedThrottle {
 		$count = 0;
 		if ( is_array( $state ) && isset( $state['window'], $state['count'] ) && (int) $state['window'] === $window ) {
 			$count = (int) $state['count'];
+		}
+		if ( $count >= self::MAX_PER_MINUTE ) {
+			return false;
 		}
 		++$count;
 
@@ -79,6 +85,6 @@ final class LoginFailedThrottle {
 			self::TRANSIENT_TTL
 		);
 
-		return $count <= self::MAX_PER_MINUTE;
+		return true;
 	}
 }

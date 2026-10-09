@@ -12,7 +12,7 @@
 | --- | --- |
 | **Inventaire WP** | Expose `GET /wp-json/g2rd/v1/snapshot` (Bearer auth) — version WP, plugins installés/actifs/à jour, thèmes, serveur. Consommé par le manager pour la page Site détaillé. |
 | **Heartbeat** | WP-Cron horaire `POST {manager}/api/sites/{id}/heartbeat` — métriques légères (espace disque, utilisateurs, plugins actifs). |
-| **Webhook events** | Push temps réel au manager : `user.login`, `user.login_failed`, `plugin.activated/deactivated`, `core.updated`, `core.auto_update`. `user.login_failed` part sans bloquer la page (délai de 2 s, réponse non lue), 30 fois par minute au plus (`Events\LoginFailedThrottle`) ; pas d'événement récapitulatif au-delà. |
+| **Webhook events** | Push temps réel au manager : `user.login`, `user.login_failed`, `plugin.activated/deactivated`, `core.updated`, `core.auto_update`. `user.login_failed` part avec une attente plafonnée à 2 s (au lieu de 15), réponse non lue, 30 fois par minute au plus (`Events\LoginFailedThrottle`) ; au-delà, ni envoi ni écriture, pas d'événement récapitulatif. |
 | **Commandes distantes** | `POST /wp-json/g2rd/v1/command` (Bearer auth) — `clear_cache`, `check_updates`, `update_core` déclenchables depuis le manager. |
 | **Connexion directe** | `admin-ajax.php?action=g2rd_login&ticket=…` — ouvre l'administration sans mot de passe depuis le manager (ticket signé, 60 s, usage unique). Case « Autoriser la connexion directe depuis G2RD », cochée par défaut. |
 | **Intégration thème** | Si le thème [`g2rd-theme`](https://github.com/SebG2RD/g2rd-theme) ≥ v1.19 est actif, le plugin s'enregistre comme **onglet dans Apparence → Options G2RD**. Sinon, menu top-level autonome. |
@@ -243,8 +243,12 @@ dont le loopback est impossible donne « non vérifiable », jamais « cassé »
   défaut) ou immédiatement sur les plans sans délai ; budget disque global (300 Mo par défaut) ;
   un point retenu après un échec est supprimé au plus tard après 7 jours ; jamais plus de 3 points
   par extension. La purge est un cron WordPress local, deux fois par jour, elle fonctionne hors
-  connexion au manager. Une mise à jour protégée dont la requête a été tuée (sans passer par le
-  shutdown) est reprise par un passage ponctuel programmé 11 minutes après son ouverture.
+  connexion au manager ; elle est reportée au passage suivant tant qu'une mise à jour protégée
+  est en cours (son point et son zip ne sont jamais supprimés sous elle). Une mise à jour
+  protégée dont la requête a été tuée (sans passer par le shutdown) est reprise par un contrôle
+  ponctuel à part (`g2rd_connector_update_recovery_check`, reprise seule, sans purge), programmé
+  11 minutes après son ouverture puis suivi tant qu'elle reste ouverte. La mise à jour rafraîchit
+  sa transaction après chaque étape longue : aucune étape ne doit dépasser 10 minutes d'horloge.
 - Après un rollback, la version retirée est bloquée pour les mises à jour automatiques de
   WordPress jusqu'à la version suivante.
 - Le plugin ne se rollback jamais lui-même. La capacité `restore_points` n'est annoncée dans

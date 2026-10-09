@@ -14,8 +14,12 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
     exit;
 }
 
-// Suppression de l'option principale (URL manager, token site, toggles).
+// Suppression de l'option principale (URL manager, token site, toggles), et du
+// compteur des connexions échouées de la minute (cf. Events\LoginFailedThrottle :
+// il expire seul en 120 s, mais sans cache objet sa ligne resterait jusqu'au
+// ménage quotidien de WordPress).
 delete_option( 'g2rd_connector_settings' );
+delete_transient( 'g2rd_connector_login_failed_window' );
 
 // Si multisite, suppression sur chaque blog.
 if ( is_multisite() ) {
@@ -23,6 +27,7 @@ if ( is_multisite() ) {
     foreach ( $blog_ids as $blog_id ) {
         switch_to_blog( (int) $blog_id );
         delete_option( 'g2rd_connector_settings' );
+        delete_transient( 'g2rd_connector_login_failed_window' );
         restore_current_blog();
     }
 }
@@ -96,8 +101,9 @@ if ( class_exists( \G2RD\Connector\DirectLogin\UsedTickets::class ) ) {
 	}
 }
 
-// Dé-planification des crons si encore présents.
-foreach ( [ 'g2rd_connector_heartbeat', 'g2rd_connector_refresh_updates', 'g2rd_connector_restore_points_purge' ] as $g2rd_hook ) {
+// Dé-planification des crons si encore présents (dont un contrôle de reprise
+// ponctuel d'une mise à jour protégée, cf. Cron\RestorePointPurgeJob::RECOVERY_HOOK).
+foreach ( [ 'g2rd_connector_heartbeat', 'g2rd_connector_refresh_updates', 'g2rd_connector_restore_points_purge', 'g2rd_connector_update_recovery_check' ] as $g2rd_hook ) {
     $timestamp = wp_next_scheduled( $g2rd_hook );
     if ( $timestamp ) {
         wp_unschedule_event( $timestamp, $g2rd_hook );

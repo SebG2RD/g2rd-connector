@@ -18,7 +18,7 @@ Connects this WordPress site to the centralized G2RD WP Manager dashboard (https
 
 * **Inventory snapshot** — secure REST endpoint exposing WordPress core, plugins, themes and server info to the manager.
 * **Optional hourly heartbeat** — light telemetry payload (disk usage, active plugin count, user count) sent to your manager instance via WP-Cron. Disabled until you opt in.
-* **Optional event stream** — push real-time notifications (user logins, login failures, plugin activations, core/plugin/theme updates, auto-update failures) to the manager. Login failures are sent without blocking the page, at most 30 per minute. Disabled until you opt in.
+* **Optional event stream** — push real-time notifications (user logins, login failures, plugin activations, core/plugin/theme updates, auto-update failures) to the manager. Login failures are sent with a 2-second cap instead of 15, at most 30 per minute. Disabled until you opt in.
 * **Optional remote commands** — let the manager trigger cache clearing, update checks, core/plugin/theme updates and database maintenance (delete spam comments, delete post revisions, empty trash, delete expired transients, optimize database) remotely. Disabled until you opt in.
 * **Direct login from the manager** — the manager can open this site's dashboard without a password, through a signed one-time link valid for one minute, for staff whose manager account uses two-factor authentication. On by default; can be turned off in the plugin settings ("Allow direct login from G2RD").
 * **Theme integration** — when the optional companion theme `g2rd-theme` (>= 1.19) is active, the plugin registers itself as a tab in *Appearance → G2RD Options* instead of adding a top-level menu, for a tidy admin UX.
@@ -91,22 +91,29 @@ Lighter on the server: fewer WordPress boots and fewer calls to the manager, sam
   which was nearly every sync since the manager syncs about every 7 hours. The threshold is now
   13 hours: WP-Cron is woken only when the scheduled discovery is late (WP-Cron disabled or
   stuck, site without visits). With no capture at all, nothing changes.
-* **Performance: a failed login no longer holds a WordPress page.** The `user.login_failed`
-  event is sent without blocking (2-second timeout instead of 15, response not read; same
+* **Performance: a failed login holds a WordPress page 2 seconds at most.** The
+  `user.login_failed` event is sent with a 2-second cap instead of 15, response not read (same
   address, headers and body), and at most 30 of them are sent per minute and per site, counted
-  in a transient that expires by itself. Beyond that, attempts are only counted, and sending
-  resumes the next minute. No summary event is sent: the existing event format has none, and
-  adding one needs a change on the manager side. Other events (successful logins, plugins,
-  updates) are unchanged.
+  in a transient that expires by itself. Beyond that, attempts are neither sent nor counted (no
+  database write), and sending resumes the next minute. No summary event is sent: the existing
+  event format has none, and adding one needs a change on the manager side. Other events
+  (successful logins, plugins, updates) are unchanged.
 * **Performance: the local purge of restore points and used direct-login tickets runs twice a
   day instead of hourly.** The hourly schedule is migrated once, on load and on activation,
   keeping its next run time. Ticket validation does not depend on the purge: expiry is checked
   before single use, so an expired ticket is refused whether or not it was purged (covered by
-  tests). The purge also recovers a protected update whose request was killed without reaching
-  the shutdown handler: a one-off check is now scheduled 11 minutes after such an update starts,
-  and again while it stays open, so this recovery happens sooner than with the hourly run.
-  Expired restore points may stay on disk up to 12 hours longer, still within the per-plugin cap
-  and the disk budget. Deactivation now also removes a pending one-off check.
+  tests). A protected update whose request was killed without reaching the shutdown handler is
+  now recovered by a one-off check of its own (`g2rd_connector_update_recovery_check`),
+  scheduled 11 minutes after such an update starts and again while it stays open, so this
+  recovery happens sooner than with the hourly run. That check only recovers: it never purges
+  restore points or tickets. The purge itself is skipped while a protected update is running,
+  so the restore point and archive of an update in progress are never deleted under it. The
+  update refreshes its transaction after each long step (health measures, restore), so a check
+  never takes a live update for a dead one. Expired restore points may stay on disk up to 12
+  hours longer (24 hours if an update was running at purge time), still within the per-plugin
+  cap and the disk budget. Deactivation and uninstall also remove a pending one-off check.
+* **Uninstall also removes the failed-login counter** (`g2rd_connector_login_failed_window`
+  transient), on every site of a multisite network.
 * **Performance: one SQL query less per page view.** The `g2rd_connector_settings` option
   (about 0.5 KB) is now autoloaded. Existing installs are switched once with
   `wp_set_option_autoload()`, without rewriting the value.
