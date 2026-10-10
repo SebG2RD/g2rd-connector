@@ -109,6 +109,16 @@ final class ProtectedUpdate {
 	 */
 	private static array $rollback_started = [];
 
+	/**
+	 * Transactions (identité) que ce processus a fermées lui-même alors qu'elles étaient
+	 * encore les siennes : aucune reprise d'un autre processus ne les avait prises. Le
+	 * filet de shutdown de la mise à jour ne réactive l'extension qu'après une de ces
+	 * fermetures, ou tant que la transaction est encore la sienne (cf. may_reactivate()).
+	 *
+	 * @var array<string, bool>
+	 */
+	private static array $closed_here = [];
+
 	public function __construct( private readonly Services $services ) {
 	}
 
@@ -236,19 +246,20 @@ final class ProtectedUpdate {
 		// celle de cette requête.
 		//
 		// Droit de réactiver l'extension (réactivation nominale et filet de shutdown de
-		// la mise à jour) : refusé tant qu'une reprise d'un autre processus tient cette
-		// transaction. Elle a désactivé l'extension et extrait l'archive ; activate_plugin()
-		// inclurait des fichiers à moitié extraits, en même temps qu'elle écrit
-		// `active_plugins`. Elle réactive elle-même, à la fin de restore().
+		// la mise à jour, cf. may_reactivate()) : seulement tant que la transaction est
+		// encore celle de cette requête, ou après que la requête l'a fermée elle-même.
+		// Jamais après une reprise faite par un autre processus (décision du
+		// 2026-10-10), en cours ou finie : elle a désactivé l'extension, extrait
+		// l'archive, et décide seule de la réactiver. Si sa restauration a échoué et
+		// qu'elle a laissé inactive une extension qui ne se charge pas, la forcer active
+		// ici (force_reactivate()) ferait tomber toutes les pages du site en « erreur
+		// critique ».
 		//
 		// Refusé aussi dès que ce processus a commencé le rollback automatique ou la
 		// reprise de cette transaction (filet de shutdown d'une requête morte en route) :
-		// restore() décide seul, alors, de l'activation. Après une restauration qui a
-		// échoué, il laisse inactive une extension qui ne se charge pas ; le filet de la
-		// mise à jour (force_reactivate()) la forcerait active en fin de requête.
+		// restore() décide seul, alors, de l'activation.
 		$guard          = new PreInstallGuard( $plugin_file, self::TAKEN_OVER_BEFORE_INSTALL );
-		$may_reactivate = static fn (): bool => ! isset( self::$rollback_started[ $identity ] )
-			&& ! UpdateTransaction::recovering_elsewhere( $identity, time() );
+		$may_reactivate = static fn (): bool => self::may_reactivate( $identity );
 		add_filter( 'upgrader_pre_install', $guard, self::PRE_INSTALL_PRIORITY, 2 );
 		try {
 			$result = $perform_upgrade( $may_reactivate );
@@ -256,13 +267,11 @@ final class ProtectedUpdate {
 			if ( $guard->stopped ) {
 				$this->stop_taken_over( $point['id'], $hold_until, self::TAKEN_OVER_BEFORE_INSTALL );
 			}
-			// Lue avant close(), qui oublie la transaction tenue.
-			$taken_over = null === UpdateTransaction::held();
 			// WordPress ≥ 6.3 remet lui-même les fichiers d'origine quand l'upgrade échoue ;
 			// le point est retenu jusqu'à résolution (design §5.6), l'erreur remonte comme avant.
 			$s->store->hold( $point['id'], $hold_until );
-			UpdateTransaction::close();
-			if ( $taken_over ) {
+			if ( ! self::close_own( $identity ) ) {
+				// Prise par une reprise entre-temps : elle consigne son propre résultat.
 				// Message déjà échappé par celui qui l'a levé (CommandExecutor), suffixe fixe.
 				throw new \RuntimeException( $e->getMessage() . self::TAKEN_OVER_SUFFIX, 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- cf. ci-dessus.
 			}
@@ -287,7 +296,7 @@ final class ProtectedUpdate {
 			}
 			// Rien n'a changé (version inchangée, licence premium…) : le point n'a pas de raison d'être.
 			$s->store->remove( $point['id'] );
-			UpdateTransaction::close();
+			self::close_own( $identity );
 			return $result + [
 				'outcome'       => self::OUTCOME_NOT_UPDATED,
 				'health'        => [ 'baseline' => $baseline ],
@@ -325,7 +334,7 @@ final class ProtectedUpdate {
 			}
 			// Un point plus ancien du même plugin n'a plus de raison d'être : un seul par plugin.
 			$this->drop_older_points( $plugin_file, $point['id'] ?? null );
-			UpdateTransaction::close();
+			self::close_own( $identity );
 			return $result + [
 				'outcome'       => self::OUTCOME_UPDATED,
 				'health'        => $health,
@@ -668,6 +677,45 @@ final class ProtectedUpdate {
 		}
 		register_shutdown_function( [ self::class, 'recover_on_shutdown' ] );
 		self::$shutdown_net_armed = true;
+	}
+
+	/**
+	 * Droit de réactiver l'extension d'une mise à jour protégée (réactivation nominale
+	 * et filet de shutdown de perform_plugin_upgrade(), cf. run()) : liste blanche. Hors
+	 * de ces cas, l'extension reste telle que l'a laissée celui qui a repris la main.
+	 *
+	 *  - jamais une fois le rollback automatique ou la reprise de la transaction commencé
+	 *    par ce processus : restore() décide ;
+	 *  - après une fermeture faite par la requête elle-même, la transaction encore la
+	 *    sienne (aucune reprise ne l'avait prise) : oui, sauf reprise réservée juste avant
+	 *    cette fermeture (réservation non atomique, cf. UpdateTransaction::reserve()) ;
+	 *  - sinon, seulement tant que la transaction est encore la sienne en base : une
+	 *    reprise d'un autre processus qui l'a prise, en cours ou finie (transaction
+	 *    fermée), décide seule (décision du 2026-10-10).
+	 */
+	private static function may_reactivate( string $identity ): bool {
+		if ( isset( self::$rollback_started[ $identity ] ) ) {
+			return false;
+		}
+		if ( isset( self::$closed_here[ $identity ] ) ) {
+			return ! UpdateTransaction::recovering_elsewhere( $identity, time() );
+		}
+		return UpdateTransaction::held_identity() === $identity && null !== UpdateTransaction::held();
+	}
+
+	/**
+	 * Fermeture de sa transaction par la mise à jour, sur un chemin normal (mise à jour
+	 * finie, sans objet, ou échec du cœur) : retenue pour le droit de réactiver si elle
+	 * était encore la sienne (cf. may_reactivate()).
+	 *
+	 * @return bool Vrai si elle l'était : aucune reprise ne l'avait prise.
+	 */
+	private static function close_own( string $identity ): bool {
+		$mine = UpdateTransaction::close();
+		if ( $mine ) {
+			self::$closed_here[ $identity ] = true;
+		}
+		return $mine;
 	}
 
 	/**

@@ -1024,13 +1024,79 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		self::assertSame( [], PendingOutcomes::all(), 'Le résultat est celui de la reprise, à venir.' );
 		self::assertSame( 2, $this->response_index );
 
-		// La reprise a fermé sans réactiver (point introuvable, par exemple) : le filet
-		// de la requête rétablit l'extension, comme avant.
+		// La reprise a fermé sans réactiver (restauration manquée, extension qui ne se
+		// charge pas, par exemple). Décision du 2026-10-10 : la requête d'origine ne
+		// réactive jamais l'extension après une reprise faite par un autre processus,
+		// pas même par son filet (avant : il la rétablissait).
 		unset( $this->options[ UpdateTransaction::OPTION_KEY ] );
 		foreach ( $nets as $net ) {
 			$net();
 		}
+		self::assertSame( [], $this->activated, 'La reprise a décidé : la requête n\'y revient pas.' );
+		self::assertFalse( $this->active );
+	}
+
+	/**
+	 * Croisement entre processus (décision du 2026-10-10) : le remplacement des fichiers
+	 * dure plus de 10 minutes, la reprise du cron prend la transaction, restaure, échoue
+	 * et laisse l'extension inactive (elle ne se charge pas). La requête d'origine, encore
+	 * vivante, ne la réactive jamais : ni à la réactivation nominale (la reprise a déjà
+	 * fermé la transaction), ni par son filet de shutdown. Avant, elle la forçait active :
+	 * « erreur critique » sur toutes les pages.
+	 */
+	public function test_the_update_never_reactivates_a_plugin_that_a_recovery_from_another_process_left_inactive(): void {
+		$nets = $this->record_shutdown_nets();
+		$this->script_health( ok: 2, then_ok: 2 );
+		$this->loaded_at_boot();
+		$upgrade                     = Plugin_Upgrader::$on_upgrade;
+		Plugin_Upgrader::$on_upgrade = function () use ( $upgrade ): void {
+			$upgrade();
+			$this->age_transaction( UpdateTransaction::STALE_AFTER_SECONDS + 100 ); // La copie dure plus de 10 min.
+			$this->restore_fails( then_activation_throws: true );
+			$this->as_another_process( static fn () => ProtectedUpdate::recover( time() ) ); // Le contrôle du cron.
+		};
+		$level = ob_get_level();
+
+		$outcome = CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+		foreach ( $nets as $net ) { // Fin de la requête d'origine.
+			$net();
+		}
+		$leaked = 0;
+		while ( ob_get_level() > $level ) { // Tampon laissé par un activate_plugin() qui lève (code d'avant).
+			ob_end_clean();
+			++$leaked;
+		}
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assertStringContainsString( 'taken over by a recovery', $outcome['error'] );
+		self::assertSame( [ [ self::FILE, 'recovery_failed' ] ], $this->pending_outcomes() );
+		self::assertStringContainsString( self::LEFT_INACTIVE, PendingOutcomes::all()[0]['detail'] );
+		self::assertSame( [], $this->activated );
+		self::assertFalse( $this->active, 'Laissée inactive par la reprise, elle le reste.' );
+		self::assertNotContains( self::FILE, (array) ( $this->options['active_plugins'] ?? [] ), 'active_plugins jamais écrite de force par la requête d\'origine.' );
+		self::assertSame( 0, $leaked, 'Aucun essai d\'activation par la requête d\'origine.' );
+	}
+
+	/**
+	 * Le cœur échoue (WP_Error) sans qu'aucune reprise ait pris la transaction : la
+	 * requête l'a fermée elle-même, son filet rétablit l'extension désactivée par le
+	 * cœur, comme avant (WordPress a remis les fichiers d'origine).
+	 */
+	public function test_the_shutdown_net_still_reactivates_after_an_upgrader_error_without_takeover(): void {
+		$nets                         = $this->record_shutdown_nets();
+		Plugin_Upgrader::$next_result = new WP_Error( 'copy_failed', 'Could not copy file.' );
+		$this->script_health( ok: 2, then_ok: 0 );
+
+		$outcome = CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+		self::assertFalse( $this->active, 'Désactivée par le cœur.' );
+		foreach ( $nets as $net ) {
+			$net();
+		}
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assertSame( 'Could not copy file.', $outcome['error'] );
 		self::assertSame( [ self::FILE ], $this->activated );
+		self::assertTrue( $this->active );
 	}
 
 	/** Téléchargement lent sans reprise : le contrôle d'avant la copie rafraîchit la transaction, la mise à jour continue. */
@@ -1650,6 +1716,7 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		$statics = [
 			[ new \ReflectionProperty( UpdateTransaction::class, 'held' ), null ],
 			[ new \ReflectionProperty( ProtectedUpdate::class, 'rollback_started' ), [] ],
+			[ new \ReflectionProperty( ProtectedUpdate::class, 'closed_here' ), [] ],
 			[ new \ReflectionProperty( CommandExecutor::class, 'sandbox_failed' ), [] ],
 		];
 		$mine = [];

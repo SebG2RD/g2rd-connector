@@ -154,8 +154,13 @@ final class UpdateTransaction {
 	 * sans cache, elle n'est retirée que si elle porte encore son identité (et, pour
 	 * une reprise, son jeton). Une transaction ouverte entre-temps par une autre mise
 	 * à jour, ou réservée par une reprise, reste en place.
+	 *
+	 * @return bool Vrai si la transaction en base était encore la sienne (retirée, ou
+	 *              tentée : delete_option() peut échouer) ; faux si elle avait été
+	 *              fermée, remplacée ou réservée par un autre processus entre-temps
+	 *              (cf. ProtectedUpdate::run(), droit de réactiver).
 	 */
-	public static function close(): void {
+	public static function close(): bool {
 		$held       = self::$held;
 		self::$held = null;
 		// La relecture vide aussi la copie du cache : un cache objet désynchronisé
@@ -163,9 +168,10 @@ final class UpdateTransaction {
 		// voir la transaction comme ouverte.
 		$stored = self::fresh();
 		if ( null === $held || null === $stored || ! self::is( $stored, $held ) ) {
-			return;
+			return false;
 		}
 		self::delete();
+		return true;
 	}
 
 	/**
@@ -275,9 +281,10 @@ final class UpdateTransaction {
 	 * processus : réservée par une reprise encore vivante, que ce processus ne tient
 	 * pas ? Relue en base sans cache.
 	 *
-	 * Une mise à jour protégée prise par une reprise ne réactive pas son extension tant
-	 * que la reprise restaure : celle-ci l'a désactivée, extrait l'archive, et la
-	 * réactive elle-même (cf. ProtectedUpdate::run()).
+	 * Une mise à jour protégée prise par une reprise ne réactive jamais son extension :
+	 * la reprise l'a désactivée, extrait l'archive, et décide seule de la réactiver (cf.
+	 * ProtectedUpdate::run()). Ce contrôle couvre la fenêtre où une reprise a réservé la
+	 * transaction juste avant que la mise à jour la ferme (réservation non atomique).
 	 */
 	public static function recovering_elsewhere( string $identity, int $now ): bool {
 		$stored = self::fresh();

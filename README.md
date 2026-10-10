@@ -288,8 +288,8 @@ dont le loopback est impossible donne « non vérifiable », jamais « cassé »
   n'est réactivée que si elle se charge sans erreur (sinon elle reste inactive) : ses fichiers
   sont alors les plus douteux (peut-être à moitié extraits), et `active_plugins` n'est jamais
   écrite de force, ce qui ferait tomber toutes les pages du site en « erreur critique ». Une mise
-  à jour protégée arrêtée parce qu'une reprise a pris sa transaction ne réactive plus l'extension
-  pendant que cette reprise la restaure (la reprise la réactive elle-même, une fois finie). Le
+  à jour protégée arrêtée parce qu'une reprise a pris sa transaction ne réactive plus l'extension,
+  ni pendant ni après cette reprise (c'est la reprise qui décide de la réactiver). Le
   rollback manuel (`rollback_plugin`) est refusé avec le même message
   (« another protected update is still running on this site… retry in a few minutes ») tant
   qu'une mise à jour protégée ou une reprise est en cours ; une transaction morte ne le bloque pas.
@@ -311,6 +311,14 @@ dont le loopback est impossible donne « non vérifiable », jamais « cassé »
   not be checked because its code was already loaded earlier in this request… »). Une
   restauration ne désactive plus l'extension qu'une fois son dossier mis de côté : un refus
   d'avant (`version_drift`, intégrité) la laisse active et intacte au lieu de la désactiver.
+- Une mise à jour protégée ne réactive jamais son extension après une reprise faite par un
+  autre processus. Quand une étape dure plus de 10 minutes, la reprise du cron prend la
+  transaction, restaure l'extension et décide seule de la réactiver. Si sa restauration a
+  échoué et l'a laissée inactive (elle ne se charge pas), la requête de mise à jour, encore
+  vivante, la forçait active une fois la reprise finie (réactivation nominale ou filet de
+  shutdown) : « erreur critique » sur toutes les pages. La requête ne réactive plus l'extension
+  que tant que la transaction est encore la sienne, ou après l'avoir fermée elle-même ; son
+  filet ne réactive plus une extension qu'une reprise a laissée inactive.
 - Après un rollback, la version retirée est bloquée pour les mises à jour automatiques de
   WordPress jusqu'à la version suivante.
 - Le plugin ne se rollback jamais lui-même. La capacité `restore_points` n'est annoncée dans

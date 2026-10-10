@@ -209,10 +209,12 @@ final class CommandExecutor {
 	 *
 	 * @param array<string, array<string, mixed>> $plugins        Sortie de get_plugins(), déjà contrôlée.
 	 * @param (callable(): bool)|null             $may_reactivate Mise à jour protégée seulement (cf.
-	 *                                                            ProtectedUpdate::run()) : faux quand une
-	 *                                                            reprise d'un autre processus tient sa
-	 *                                                            transaction, et réactivera elle-même
-	 *                                                            l'extension. Null : chemin historique.
+	 *                                                            ProtectedUpdate::run()) : faux dès qu'une
+	 *                                                            reprise d'un autre processus a pris sa
+	 *                                                            transaction (en cours ou finie), qui
+	 *                                                            décide seule de l'extension, ou que ce
+	 *                                                            processus a commencé un rollback. Null :
+	 *                                                            chemin historique.
 	 * @return array<string, mixed>
 	 */
 	private static function perform_plugin_upgrade( string $file, array $plugins, ?callable $may_reactivate = null ): array {
@@ -243,10 +245,11 @@ final class CommandExecutor {
 		// plugin que l'admin avait volontairement laissé éteint).
 		//
 		// Mise à jour protégée : le filet demande d'abord le droit de réactiver. Une
-		// reprise d'un autre processus qui tient la transaction (étape de plus de 10
-		// minutes) a désactivé l'extension et extrait l'archive : activate_plugin()
-		// inclurait des fichiers à moitié extraits, puis l'option serait forcée en même
-		// temps que la reprise l'écrit. La reprise réactive elle-même, une fois finie.
+		// reprise d'un autre processus qui a pris la transaction (étape de plus de 10
+		// minutes) a désactivé l'extension et extrait l'archive : en cours, l'option
+		// serait forcée en même temps qu'elle l'écrit ; finie, c'est elle qui a décidé,
+		// et une extension qu'elle a laissée inactive (restauration manquée) ne doit pas
+		// être forcée active ici (décision du 2026-10-10).
 		if ( $was_active ) {
 			if ( null === $may_reactivate ) {
 				register_shutdown_function( [ self::class, 'force_reactivate' ], $file, $was_network_active );
@@ -285,8 +288,9 @@ final class CommandExecutor {
 		// Réactivation nominale (synchrone) : si le plugin était actif, on le
 		// rétablit immédiatement. force_reactivate gère le mode silencieux et un
 		// repli défensif ; le filet shutdown reste armé en cas d'échec du code aval.
-		// Pas pendant qu'une reprise d'un autre processus restaure (cf. le filet plus
-		// haut) : la mise à jour protégée s'arrête ensuite sans rendre ce résultat.
+		// Jamais après qu'une reprise d'un autre processus a pris la transaction (cf. le
+		// filet plus haut) : la mise à jour protégée s'arrête ensuite sans rendre ce
+		// résultat.
 		$reactivated = $was_active;
 		if ( $was_active ) {
 			$reactivated = ( null === $may_reactivate || $may_reactivate() )

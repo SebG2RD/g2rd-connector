@@ -93,6 +93,15 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   was already loaded earlier in this request…"). A restore now deactivates the plugin only once
   its folder has been set aside: a refusal before that (`version_drift`, integrity) leaves the
   plugin active and untouched instead of deactivated.
+* **Fix: a protected update never reactivates its plugin after a recovery run by another
+  process.** When a step lasts more than 10 minutes, a recovery started by the cron takes the
+  transaction over, restores the plugin and alone decides whether it is reactivated. If that
+  restore failed and left the plugin inactive (it does not load), the update request, still
+  running, used to force it active once the recovery had closed the transaction (nominal
+  reactivation or shutdown handler), taking every page down with a critical error. The update
+  request now reactivates the plugin only while the transaction is still its own, or after it
+  closed it itself; its shutdown handler no longer reactivates a plugin that a recovery closed
+  without reactivating.
 
 = 1.13.0-rc.2 =
 

@@ -63,6 +63,7 @@ abstract class TestCase extends PHPUnitTestCase {
 		( new \ReflectionProperty( UpdateTransaction::class, 'held' ) )->setValue( null, null );
 		( new \ReflectionProperty( ProtectedUpdate::class, 'shutdown_net_armed' ) )->setValue( null, false );
 		( new \ReflectionProperty( ProtectedUpdate::class, 'rollback_started' ) )->setValue( null, [] );
+		( new \ReflectionProperty( ProtectedUpdate::class, 'closed_here' ) )->setValue( null, [] );
 		( new \ReflectionProperty( CommandExecutor::class, 'sandbox_failed' ) )->setValue( null, [] );
 	}
 

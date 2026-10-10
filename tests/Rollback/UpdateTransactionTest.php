@@ -223,7 +223,7 @@ final class UpdateTransactionTest extends TestCase {
 	public function test_close_retire_la_transaction_ouverte_par_la_requete(): void {
 		UpdateTransaction::open( [ 'plugin_file' => 'a/a.php' ], self::NOW );
 
-		UpdateTransaction::close();
+		self::assertTrue( UpdateTransaction::close(), 'La sienne : fermée par la requête elle-même.' );
 
 		self::assertArrayNotHasKey( UpdateTransaction::OPTION_KEY, $this->options );
 		self::assertNull( UpdateTransaction::current() );
@@ -235,7 +235,7 @@ final class UpdateTransactionTest extends TestCase {
 		$other = $this->other_transaction();
 		$this->options[ UpdateTransaction::OPTION_KEY ] = $other; // En base seulement.
 
-		UpdateTransaction::close();
+		self::assertFalse( UpdateTransaction::close(), 'Plus la sienne.' );
 
 		self::assertSame( $other, $this->options[ UpdateTransaction::OPTION_KEY ] ?? null );
 	}
@@ -253,7 +253,7 @@ final class UpdateTransactionTest extends TestCase {
 		self::assertFalse( UpdateTransaction::step( UpdateTransaction::STEP_UPGRADING, [ 'restore_point_id' => 'p1' ], self::NOW + 701 ) );
 		UpdateTransaction::touch( self::NOW + 702 );
 		self::assertNull( UpdateTransaction::held(), 'Le filet de shutdown ne la reprendra pas une seconde fois.' );
-		UpdateTransaction::close();
+		self::assertFalse( UpdateTransaction::close(), 'Prise par une reprise : pas fermée par la requête.' );
 
 		self::assertSame( $reserved, $this->options[ UpdateTransaction::OPTION_KEY ] ?? null );
 	}
