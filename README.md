@@ -319,6 +319,17 @@ dont le loopback est impossible donne « non vérifiable », jamais « cassé »
   shutdown) : « erreur critique » sur toutes les pages. La requête ne réactive plus l'extension
   que tant que la transaction est encore la sienne, ou après l'avoir fermée elle-même ; son
   filet ne réactive plus une extension qu'une reprise a laissée inactive.
+- Toute mise à jour d'extension (`update_plugin`, avec ou sans point de restauration, le
+  connecteur compris) : le filet de shutdown ne réactive l'extension que si la mise à jour de
+  WordPress (`Plugin_Upgrader::upgrade()`) a rendu la main. Après une erreur fatale ou un délai
+  dépassé en pleine copie, il la forçait active : le fichier principal, déjà chargé par la
+  requête, n'était pas rechargé et `active_plugins` était écrite quand même, des fichiers à
+  moitié copiés pouvant mettre tout le site en « erreur critique ». L'extension reste désormais
+  désactivée, le connecteur lui-même compris (la plateforme le verra injoignable). Une exception
+  levée pendant la mise à jour, après la désactivation par WordPress, la laisse aussi
+  désactivée, et l'erreur le dit (« the plugin was left inactive: the update stopped while
+  WordPress was replacing it… »). Une mise à jour qui rend une erreur (WordPress a remis les
+  fichiers d'origine) ne change pas : l'extension est réactivée.
 - Après un rollback, la version retirée est bloquée pour les mises à jour automatiques de
   WordPress jusqu'à la version suivante.
 - Le plugin ne se rollback jamais lui-même. La capacité `restore_points` n'est annoncée dans

@@ -1078,6 +1078,38 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 	}
 
 	/**
+	 * Du code branché sur la mise à jour lève en pleine copie (extension déjà désactivée
+	 * par le cœur) : upgrade() n'a pas rendu la main, les fichiers sont peut-être à
+	 * moitié remplacés. Ni réactivation nominale, ni filet (décision du 2026-10-10) :
+	 * l'extension reste désactivée, l'erreur le dit, le point est retenu.
+	 */
+	public function test_an_exception_while_upgrading_leaves_the_plugin_inactive_and_keeps_the_point(): void {
+		$nets = $this->record_shutdown_nets();
+		$this->script_health( ok: 2, then_ok: 2 );
+		$this->loaded_at_boot();
+		$upgrade                     = Plugin_Upgrader::$on_upgrade;
+		Plugin_Upgrader::$on_upgrade = static function () use ( $upgrade ): void {
+			$upgrade();
+			throw new \RuntimeException( 'Copy interrupted by a third-party hook.' );
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+		foreach ( $nets as $net ) { // Fin de la requête.
+			$net();
+		}
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assertStringStartsWith( 'Copy interrupted by a third-party hook.; the plugin was left inactive:', $outcome['error'] );
+		self::assertSame( [], $this->activated );
+		self::assertFalse( $this->active );
+		$points = array_values( $this->store->all() );
+		self::assertCount( 1, $points );
+		self::assertTrue( $points[0]['hold'], 'Point retenu pour un rollback depuis la plateforme.' );
+		self::assertNull( UpdateTransaction::current() );
+		self::assertSame( [], PendingOutcomes::all() );
+	}
+
+	/**
 	 * Le cœur échoue (WP_Error) sans qu'aucune reprise ait pris la transaction : la
 	 * requête l'a fermée elle-même, son filet rétablit l'extension désactivée par le
 	 * cœur, comme avant (WordPress a remis les fichiers d'origine).

@@ -67,6 +67,13 @@ final class CommandExecutor {
 	private const STRAY_OUTPUT_MAX_CHARS = 500;
 
 	/**
+	 * Ajouté à l'erreur d'une mise à jour interrompue par une exception pendant que
+	 * WordPress remplaçait les fichiers, quand l'extension, désactivée par le cœur, n'est
+	 * pas réactivée (cf. perform_plugin_upgrade()). Sans caractère que esc_html() change.
+	 */
+	private const LEFT_INACTIVE_MID_UPDATE = '; the plugin was left inactive: the update stopped while WordPress was replacing it, and its files may be incomplete; check its files and the PHP error log, then update it again, roll it back or reinstall it';
+
+	/**
 	 * Extensions dont try_activate() a inclus le fichier principal dans ce processus sans
 	 * pouvoir les activer : un nouvel essai n'inclurait plus rien (cf. try_activate()).
 	 *
@@ -231,37 +238,40 @@ final class CommandExecutor {
 		require_once ABSPATH . 'wp-admin/includes/file.php';
 		require_once ABSPATH . 'wp-admin/includes/misc.php';
 
-		// Filet de sécurité « réactivation quoi qu'il arrive ». Cas critique : le
-		// connecteur se met à jour LUI-MÊME. Si la requête meurt (erreur fatale ou
-		// dépassement de max_execution_time) ENTRE la désactivation silencieuse du
-		// coeur et la réactivation nominale plus bas — ou si l'upgrade renvoie une
-		// WP_Error qui jette avant cette réactivation — le plugin resterait éteint.
-		// Et, étant éteint, plus aucun cron ne tournerait pour le rétablir : le site
-		// deviendrait injoignable par le manager, irrécupérable à distance.
-		// register_shutdown_function s'exécute AUSSI sur arrêt fatal / timeout, ce
-		// qui garantit la réactivation dans tous ces cas. force_reactivate() est
-		// idempotent : si la réactivation nominale a déjà réussi, ce filet ne fait
-		// rien. On ne l'arme que si le plugin était actif (on ne réactive jamais un
-		// plugin que l'admin avait volontairement laissé éteint).
+		// Filet de sécurité de la réactivation. Si la requête meurt (erreur fatale ou
+		// dépassement de max_execution_time) APRÈS que upgrade() a rendu la main mais
+		// avant la réactivation nominale plus bas — ou si l'upgrade renvoie une WP_Error
+		// qui jette avant cette réactivation —, le plugin désactivé par le cœur
+		// resterait éteint. register_shutdown_function s'exécute AUSSI sur arrêt fatal /
+		// timeout. force_reactivate() est idempotent : si la réactivation nominale a déjà
+		// réussi, ce filet ne fait rien. On ne l'arme que si le plugin était actif (on ne
+		// réactive jamais un plugin que l'admin avait volontairement laissé éteint).
 		//
-		// Mise à jour protégée : le filet demande d'abord le droit de réactiver. Une
+		// Seulement si upgrade() a rendu la main (décision du 2026-10-10). Une requête
+		// morte EN PLEINE COPIE laisse des fichiers peut-être à moitié remplacés :
+		// activate_plugin() ne rechargerait pas le fichier principal, déjà inclus au
+		// démarrage de la requête, puis l'option serait forcée, et toutes les pages du
+		// site tomberaient en « erreur critique ». L'extension reste alors désactivée.
+		// Cela vaut aussi pour le connecteur lui-même, qui passe toujours par ce chemin :
+		// désactivé, il ne se rétablit pas seul et la plateforme le verra injoignable,
+		// ce que le propriétaire préfère à un site en erreur critique.
+		//
+		// Mise à jour protégée : le filet demande aussi le droit de réactiver. Une
 		// reprise d'un autre processus qui a pris la transaction (étape de plus de 10
 		// minutes) a désactivé l'extension et extrait l'archive : en cours, l'option
 		// serait forcée en même temps qu'elle l'écrit ; finie, c'est elle qui a décidé,
 		// et une extension qu'elle a laissée inactive (restauration manquée) ne doit pas
 		// être forcée active ici (décision du 2026-10-10).
+		$upgrade_returned = false;
 		if ( $was_active ) {
-			if ( null === $may_reactivate ) {
-				register_shutdown_function( [ self::class, 'force_reactivate' ], $file, $was_network_active );
-			} else {
-				register_shutdown_function(
-					static function () use ( $file, $was_network_active, $may_reactivate ): void {
-						if ( $may_reactivate() ) {
-							self::force_reactivate( $file, $was_network_active );
-						}
+			register_shutdown_function(
+				static function () use ( $file, $was_network_active, $may_reactivate, &$upgrade_returned ): void {
+					/** @var bool $upgrade_returned Passé à vrai plus bas, par référence, quand upgrade() rend la main. */
+					if ( $upgrade_returned && ( null === $may_reactivate || $may_reactivate() ) ) {
+						self::force_reactivate( $file, $was_network_active );
 					}
-				);
-			}
+				}
+			);
 		}
 
 		// Force le refresh du transient update_plugins avant l'upgrade pour
@@ -276,7 +286,19 @@ final class CommandExecutor {
 
 		// Automatic_Upgrader_Skin = skin sans output, adapté à un contexte REST/cron.
 		$upgrader = new Plugin_Upgrader( new Automatic_Upgrader_Skin() );
-		$result   = $upgrader->upgrade( $file );
+		try {
+			$result = $upgrader->upgrade( $file );
+		} catch ( \Throwable $e ) {
+			// upgrade() n'a pas rendu la main : du code branché sur la mise à jour a levé,
+			// peut-être en pleine copie. Comme pour une requête morte, le filet ne réactive
+			// pas une extension que le cœur a déjà désactivée : elle reste désactivée, et
+			// l'erreur remontée à la plateforme le dit.
+			if ( $was_active && ! is_plugin_active( $file ) ) {
+				throw new \RuntimeException( esc_html( $e->getMessage() . self::LEFT_INACTIVE_MID_UPDATE ), 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message échappé ; `$e` est l'exception chaînée, pas une sortie.
+			}
+			throw $e;
+		}
+		$upgrade_returned = true;
 
 		if ( is_wp_error( $result ) ) {
 			// Le filet shutdown armé plus haut réactivera le plugin (le coeur l'a

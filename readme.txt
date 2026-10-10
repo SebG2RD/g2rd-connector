@@ -102,6 +102,17 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   request now reactivates the plugin only while the transaction is still its own, or after it
   closed it itself; its shutdown handler no longer reactivates a plugin that a recovery closed
   without reactivating.
+* **Fix: the shutdown handler of a plugin update reactivates the plugin only if the WordPress
+  upgrade returned.** This covers every `update_plugin`, with or without a restore point, the
+  connector included. After a fatal error or a time limit hit while WordPress was replacing the
+  files, the handler used to force the plugin active: its main file, already loaded by the
+  request, was not loaded again and `active_plugins` was written anyway, so half-copied files
+  could take every page down with a critical error. The plugin now stays deactivated, the
+  connector included (the platform will see it unreachable). An exception thrown during the
+  upgrade after WordPress deactivated the plugin also leaves it deactivated, and the error says
+  so ("the plugin was left inactive: the update stopped while WordPress was replacing it…"). An
+  upgrade that returns an error (WordPress put the previous files back) is unchanged: the
+  plugin is reactivated.
 
 = 1.13.0-rc.2 =
 

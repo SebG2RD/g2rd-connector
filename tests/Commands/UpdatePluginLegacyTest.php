@@ -8,6 +8,7 @@ use Brain\Monkey\Functions;
 use G2RD\Connector\Commands\CommandExecutor;
 use G2RD\Connector\Rollback\RestorePointStore;
 use G2RD\Connector\Tests\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Plugin_Upgrader;
 use WP_Error;
 
@@ -151,5 +152,139 @@ final class UpdatePluginLegacyTest extends TestCase {
 
 	public function test_unknown_command_returns_null(): void {
 		self::assertNull( CommandExecutor::run( 'format_disk', [] ) );
+	}
+
+	// ── Filet de shutdown (décision du 2026-10-10) ──────────────────────────────
+
+	/**
+	 * La requête meurt pendant que WordPress remplace les fichiers (erreur fatale, délai
+	 * dépassé) : upgrade() n'a pas rendu la main, les fichiers sont peut-être à moitié
+	 * copiés. Le filet ne force plus la réactivation (activate_plugin() ne rechargerait
+	 * pas un fichier principal inclus au démarrage, puis l'option serait forcée) :
+	 * l'extension reste désactivée. Vaut aussi pour le connecteur lui-même, qui passe
+	 * toujours par ce chemin : la plateforme le verra injoignable.
+	 *
+	 * @param array<string, mixed> $payload
+	 */
+	#[DataProvider( 'updated_plugins' )]
+	public function test_the_shutdown_net_leaves_the_plugin_inactive_when_the_request_dies_while_upgrading( string $file, array $payload ): void {
+		$this->plugins[ $file ]      = [ 'Version' => '1.0' ];
+		$nets                        = $this->record_shutdown_nets();
+		$at_death                    = null;
+		Plugin_Upgrader::$on_upgrade = function () use ( $nets, &$at_death ): void {
+			$this->active = false; // Le cœur désactive avant de copier…
+			// …puis la requête meurt en pleine copie : PHP exécute ses filets de shutdown.
+			foreach ( $nets as $net ) {
+				$net();
+			}
+			$at_death = [
+				'active'      => $this->active,
+				'activations' => $this->activations,
+				'option'      => $this->options['active_plugins'] ?? null,
+			];
+		};
+
+		CommandExecutor::run( 'update_plugin', [ 'file' => $file ] + $payload );
+
+		self::assertSame(
+			[
+				'active'      => false,
+				'activations' => [],
+				'option'      => null,
+			],
+			$at_death,
+			'Ni activate_plugin(), ni écriture forcée d\'active_plugins.'
+		);
+	}
+
+	/** @return array<string, array{0: string, 1: array<string, mixed>}> */
+	public static function updated_plugins(): array {
+		return [
+			'une extension'          => [ 'akismet/akismet.php', [] ],
+			// Point de restauration demandé, mais jamais pour le connecteur : chemin simple.
+			'le connecteur lui-même' => [ 'g2rd-connector/g2rd-connector.php', [ 'snapshot' => true ] ],
+		];
+	}
+
+	/**
+	 * upgrade() a rendu la main sur un échec (WP_Error) : WordPress a remis les fichiers
+	 * d'origine. Le filet rétablit l'extension désactivée par le cœur, comme avant.
+	 */
+	public function test_the_shutdown_net_still_reactivates_when_the_upgrade_returned_an_error(): void {
+		$nets                         = $this->record_shutdown_nets();
+		Plugin_Upgrader::$next_result = new WP_Error( 'copy_failed', 'Could not copy file.' );
+		Plugin_Upgrader::$on_upgrade  = function (): void {
+			$this->active = false;
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] );
+		foreach ( $nets as $net ) {
+			$net();
+		}
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assertSame( 'Could not copy file.', $outcome['error'] );
+		self::assertCount( 1, $this->activations );
+		self::assertTrue( $this->active );
+	}
+
+	/**
+	 * upgrade() lève (code tiers branché sur la copie) après que le cœur a désactivé
+	 * l'extension : elle n'a pas rendu la main, les fichiers sont peut-être à moitié
+	 * copiés. L'extension reste désactivée, et l'erreur le dit à la plateforme.
+	 */
+	public function test_an_exception_while_upgrading_leaves_the_plugin_inactive_and_says_so(): void {
+		$nets                        = $this->record_shutdown_nets();
+		Plugin_Upgrader::$on_upgrade = function (): void {
+			$this->active = false;
+			throw new \RuntimeException( 'Copy interrupted by a third-party hook.' );
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] );
+		foreach ( $nets as $net ) {
+			$net();
+		}
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assertStringStartsWith( 'Copy interrupted by a third-party hook.; the plugin was left inactive:', $outcome['error'] );
+		self::assertStringContainsString( 'its files may be incomplete', $outcome['error'] );
+		self::assertSame( [], $this->activations );
+		self::assertFalse( $this->active );
+	}
+
+	/** Même exception avant toute désactivation (téléchargement) : extension active, erreur inchangée. */
+	public function test_an_exception_before_the_plugin_is_deactivated_leaves_it_active(): void {
+		$nets                         = $this->record_shutdown_nets();
+		Plugin_Upgrader::$on_download = static function (): void {
+			throw new \RuntimeException( 'Download interrupted.' );
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] );
+		foreach ( $nets as $net ) {
+			$net();
+		}
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assertSame( 'Download interrupted.', $outcome['error'] );
+		self::assertSame( [], $this->activations );
+		self::assertTrue( $this->active );
+	}
+
+	/**
+	 * Rappels passés à register_shutdown_function() pendant le test.
+	 *
+	 * @return \ArrayObject<int, mixed>
+	 */
+	private function record_shutdown_nets(): \ArrayObject {
+		$nets = new \ArrayObject();
+		Functions\when( 'register_shutdown_function' )->alias(
+			static function ( $callback, ...$args ) use ( $nets ): void {
+				$nets->append( static fn () => $callback( ...$args ) );
+			}
+		);
+		// Chemin simple choisi pour le connecteur malgré `snapshot` (cf. update_plugin()).
+		Functions\when( 'get_filesystem_method' )->justReturn( 'direct' );
+		Functions\when( 'plugin_basename' )->justReturn( 'g2rd-connector/g2rd-connector.php' );
+		return $nets;
 	}
 }
