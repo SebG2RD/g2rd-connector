@@ -113,6 +113,9 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   so ("the plugin was left inactive: the update stopped while WordPress was replacing it…"). An
   upgrade that returns an error (WordPress put the previous files back) is unchanged: the
   plugin is reactivated.
+* **Fix: on a multisite network, an automatic rollback reactivates a network-active plugin
+  network-wide.** It was reactivated for the current site only: the network state was read from
+  a key that the update result never contains.
 
 = 1.13.0-rc.2 =
 

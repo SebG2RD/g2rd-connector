@@ -273,6 +273,40 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		self::assertNull( UpdateTransaction::current() );
 	}
 
+	/**
+	 * Multisite, extension active pour tout le réseau : le rollback automatique la
+	 * réactive pour tout le réseau, comme la réactivation d'après la mise à jour. run()
+	 * lisait `network_active` dans le résultat de perform_plugin_upgrade(), qui ne le
+	 * rend pas : elle n'était réactivée que pour le site courant.
+	 */
+	public function test_an_automatic_rollback_reactivates_a_network_active_plugin_network_wide(): void {
+		Functions\when( 'is_multisite' )->justReturn( true );
+		Functions\when( 'is_plugin_active_for_network' )->alias( fn (): bool => $this->active );
+		$network_wide = [];
+		Functions\when( 'activate_plugin' )->alias(
+			function ( string $file, string $redirect = '', bool $network = false ) use ( &$network_wide ): ?WP_Error {
+				$network_wide[]    = $network;
+				$this->activated[] = $file;
+				$this->active      = true;
+				return null;
+			}
+		);
+		$this->responses = [
+			[ 'code' => 200, 'body' => 'ok' ],
+			[ 'code' => 200, 'body' => self::ajax_ok() ],
+			[ 'code' => 500, 'body' => '' ],
+			[ 'code' => 200, 'body' => '<b>Fatal error</b>: Uncaught Error' ],
+			[ 'code' => 200, 'body' => 'ok' ],
+			[ 'code' => 200, 'body' => self::ajax_ok() ],
+		];
+
+		$r = CommandExecutor::run( 'update_plugin', $this->payload( [] ) )['result'];
+
+		self::assertSame( ProtectedUpdate::OUTCOME_AUTO_ROLLED_BACK, $r['outcome'] );
+		self::assertSame( [ true, true ], $network_wide, 'Après la mise à jour, puis après le rollback : pour tout le réseau.' );
+		self::assertTrue( $this->active );
+	}
+
 	/** Loopback impossible après la MAJ : « non vérifiable » ≠ cassé ; le point est gardé même sans plan (D3). */
 	public function test_unverifiable_health_keeps_the_update_and_the_point(): void {
 		$this->responses = [

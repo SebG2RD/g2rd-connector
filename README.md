@@ -330,6 +330,9 @@ dont le loopback est impossible donne « non vérifiable », jamais « cassé »
   désactivée, et l'erreur le dit (« the plugin was left inactive: the update stopped while
   WordPress was replacing it… »). Une mise à jour qui rend une erreur (WordPress a remis les
   fichiers d'origine) ne change pas : l'extension est réactivée.
+- En multisite, le rollback automatique réactive une extension active pour tout le réseau…
+  pour tout le réseau. Elle n'était réactivée que pour le site courant : l'état réseau était lu
+  dans une clé que le résultat de la mise à jour ne contient jamais.
 - Après un rollback, la version retirée est bloquée pour les mises à jour automatiques de
   WordPress jusqu'à la version suivante.
 - Le plugin ne se rollback jamais lui-même. La capacité `restore_points` n'est annoncée dans

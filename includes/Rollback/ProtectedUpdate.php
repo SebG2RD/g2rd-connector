@@ -152,13 +152,16 @@ final class ProtectedUpdate {
 		$now     = time();
 		$s       = $this->services;
 		$version = $this->installed_version( $plugin_file );
+		// Active pour tout le réseau (multisite) : gardé pour le rollback automatique.
+		// perform_plugin_upgrade() ne le rend pas dans son résultat (forme historique).
+		$network_active = is_multisite() && is_plugin_active_for_network( $plugin_file );
 
 		if ( ! UpdateTransaction::open(
 			[
 				'plugin_file'    => $plugin_file,
 				'version_before' => $version,
 				'was_active'     => is_plugin_active( $plugin_file ),
-				'network_active' => is_multisite() && is_plugin_active_for_network( $plugin_file ),
+				'network_active' => $network_active,
 			],
 			$now
 		) ) {
@@ -363,7 +366,7 @@ final class ProtectedUpdate {
 		// L'activation de l'extension revient désormais à restore() (cf. droit de réactiver).
 		self::$rollback_started[ $identity ] = true;
 		try {
-			$this->restore( $plugin_file, $point, $version, $version_after, (bool) ( $result['was_active'] ?? false ), (bool) ( $result['network_active'] ?? false ) );
+			$this->restore( $plugin_file, $point, $version, $version_after, (bool) ( $result['was_active'] ?? false ), $network_active );
 			$s->store->hold( $point['id'], $hold_until );
 			UpdateTransaction::touch();
 			$health['after_rollback'] = $s->health->measure();
