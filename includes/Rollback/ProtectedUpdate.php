@@ -17,9 +17,11 @@
  * sienne.
  *
  * Résultat : la forme historique d'update_plugin, plus `outcome`, `health`,
- * `restore_point` (et `error_code` / `error` quand pertinent). Les cas prévus
- * (espace disque, rollback automatique…) sont des RÉSULTATS, pas des exceptions :
- * la plateforme les lit dans `outcome`.
+ * `restore_point` (et `error_code` / `error` quand pertinent, `upgrade_error` quand
+ * WordPress a levé une exception une fois la nouvelle version copiée : la mise à jour
+ * continue, contrôle de santé compris, cf. CommandExecutor::perform_plugin_upgrade()).
+ * Les cas prévus (espace disque, rollback automatique…) sont des RÉSULTATS, pas des
+ * exceptions : la plateforme les lit dans `outcome`.
  *
  * @package G2RD\Connector
  */
@@ -68,6 +70,22 @@ final class ProtectedUpdate {
 	private const TAKEN_OVER_SUFFIX = ' (its transaction was taken over by a recovery, which reports its own result)';
 
 	/**
+	 * Ajouté à une exception levée par WordPress une fois la nouvelle version copiée
+	 * (`upgrade_error`, cf. CommandExecutor::perform_plugin_upgrade()) : la mise à jour ne
+	 * s'arrête pas pour elle, elle continue comme après une copie réussie (contrôle de
+	 * santé, rollback automatique si le site est cassé). Rien ici sur l'issue : `outcome`
+	 * la dit (une version inchangée, par exemple, n'est pas mesurée).
+	 */
+	private const UPGRADE_ERROR_WENT_ON = '; WordPress had already installed the new version when this error occurred (its files are complete), so the protected update did not stop on it and went on as after a successful copy (see outcome); check the PHP error log for the code that raised it';
+
+	/**
+	 * Ajouté à l'erreur d'une mise à jour prise en route par une reprise quand WordPress
+	 * avait aussi levé une exception une fois la nouvelle version copiée : elle ne se perd
+	 * pas. `%s` : son message, déjà échappé.
+	 */
+	private const UPGRADE_ERROR_TOO = '; WordPress had also raised an error once the new version was installed: %s; check the PHP error log for the code that raised it';
+
+	/**
 	 * Détail du résultat `recovery_failed` quand les reprises précédentes sont toutes
 	 * mortes en route (cf. recover()). `%1$d` : nombre de reprises, `%2$s` : ce qui est
 	 * fait de l'extension.
@@ -90,14 +108,32 @@ final class ProtectedUpdate {
 	private const LEFT_INACTIVE_NOT_CHECKED = '; the plugin was left inactive: after this failed restore its files may be incomplete, and it is reactivated only if it loads without error, which could not be checked because its code was already loaded earlier in this request; check its files and the PHP error log, then roll it back again from the platform or reinstall it';
 
 	/**
+	 * Même ajout quand WordPress a refusé l'activation AVANT tout chargement
+	 * (CommandExecutor::ACTIVATION_INVALID : chemin invalide, fichier principal
+	 * introuvable, en-tête illisible, exigences de version ou dépendances non remplies) :
+	 * aucune erreur de chargement, contrairement à LEFT_INACTIVE.
+	 */
+	private const LEFT_INACTIVE_INVALID = '; the plugin was left inactive: after this failed restore WordPress refused to activate it before loading it (main file missing, plugin header unreadable, or requirements not met); reinstall it or roll it back again from the platform';
+
+	/**
 	 * Ce qu'ajoute à l'erreur d'une restauration manquée chaque issue de la réactivation
-	 * par le bac à sable (cf. restore_archive()) : rien quand l'extension est active.
+	 * par le bac à sable quand l'extension reste inactive (cf. restore_archive()).
 	 */
 	private const LEFT_INACTIVE_DETAILS = [
 		CommandExecutor::ACTIVATION_LOAD_ERROR     => self::LEFT_INACTIVE,
-		CommandExecutor::ACTIVATION_INVALID        => self::LEFT_INACTIVE,
+		CommandExecutor::ACTIVATION_INVALID        => self::LEFT_INACTIVE_INVALID,
 		CommandExecutor::ACTIVATION_ALREADY_LOADED => self::LEFT_INACTIVE_NOT_CHECKED,
 	];
+
+	/**
+	 * Ajouté à l'erreur d'une restauration manquée quand le bac à sable a rallumé
+	 * l'extension, inactive juste avant (cf. restore_archive()) : elle se charge, mais ses
+	 * fichiers sont ceux qu'a laissés l'échec. En pratique, une reprise menée par un autre
+	 * processus (cron, mise à jour suivante), qui n'a pas chargé l'extension à son
+	 * démarrage : le rollback automatique et le rollback manuel tournent dans une requête
+	 * qui l'a chargée (ACTIVATION_ALREADY_LOADED). Le point est retenu dans tous ces cas.
+	 */
+	private const REACTIVATED_FILES_UNCHECKED = '; the plugin was reactivated: it loads without error, but its files may not be those of the restore point; check the site, then roll it back again from the platform: its restore point is kept';
 
 	/**
 	 * Ajouté à l'erreur d'un rollback manuel qui a échoué une fois le dossier mis de côté,
@@ -106,6 +142,13 @@ final class ProtectedUpdate {
 	 * restore_archive()).
 	 */
 	private const PUT_BACK_AS_BEFORE = '; the plugin was put back as it was before this rollback: the files it had when the rollback started were restored unchanged and it was reactivated; fix the cause of the error, then retry the rollback from the platform';
+
+	/**
+	 * Même cas, mais la réactivation a échoué (écriture forcée qui lève : base de données,
+	 * code tiers branché sur les options) : les fichiers sont ceux d'avant, intacts, mais
+	 * l'extension est inactive.
+	 */
+	private const PUT_BACK_NOT_REACTIVATED = '; the plugin was put back as it was before this rollback: the files it had when the rollback started were restored unchanged, but reactivating it failed, so it is inactive; reactivate it from the Plugins screen of WordPress, then retry the rollback from the platform';
 
 	/**
 	 * Issue de la réactivation (cf. reactivation(), champ `reactivation` des résultats
@@ -138,7 +181,7 @@ final class ProtectedUpdate {
 		CommandExecutor::ACTIVATION_ACTIVE         => 'was reactivated: it loads without error, but its files may still be those of the interrupted update',
 		CommandExecutor::ACTIVATION_LOAD_ERROR     => 'was left inactive: it raised an error while loading, so its files are probably incomplete',
 		CommandExecutor::ACTIVATION_ALREADY_LOADED => 'was left inactive: whether it loads without error could not be checked, because its code was already loaded earlier in this request',
-		CommandExecutor::ACTIVATION_INVALID        => 'was left inactive: WordPress refused to activate it (main file missing or plugin header unreadable)',
+		CommandExecutor::ACTIVATION_INVALID        => 'was left inactive: WordPress refused to activate it before loading it (main file missing, plugin header unreadable, or requirements not met)',
 	];
 
 	/**
@@ -357,6 +400,13 @@ final class ProtectedUpdate {
 			// arrêt que ci-dessus, rien n'a changé sur l'extension.
 			$this->stop_taken_over( $point['id'], $hold_until, self::TAKEN_OVER_BEFORE_INSTALL );
 		}
+		// Exception levée par WordPress une fois la nouvelle version copiée (cf.
+		// CommandExecutor::perform_plugin_upgrade(), message déjà échappé) : la mise à jour
+		// continue. Tous les résultats la portent, expliquée ; chaque arrêt ci-dessous la redit.
+		$upgrade_error = isset( $result['upgrade_error'] ) ? (string) $result['upgrade_error'] : null;
+		if ( null !== $upgrade_error ) {
+			$result['upgrade_error'] = $upgrade_error . self::UPGRADE_ERROR_WENT_ON;
+		}
 
 		if ( true !== ( $result['updated'] ?? false ) ) {
 			if ( null === UpdateTransaction::held() ) {
@@ -364,7 +414,7 @@ final class ProtectedUpdate {
 				// contrôle d'avant copie) : la version relue est peut-être déjà celle que
 				// la reprise a restaurée. Son point lui sert : ni suppression, ni résultat
 				// « not_updated ».
-				$this->stop_taken_over( $point['id'], $hold_until, self::TAKEN_OVER_WHILE_UPDATING );
+				$this->stop_taken_over( $point['id'], $hold_until, self::TAKEN_OVER_WHILE_UPDATING, $upgrade_error );
 			}
 			// Rien n'a changé (version inchangée, licence premium…) : le point n'a pas de raison d'être.
 			$s->store->remove( $point['id'] );
@@ -383,7 +433,7 @@ final class ProtectedUpdate {
 			// l'ancienne version. Mesurer, rendre « updated » ou restaurer à notre tour
 			// contredirait son résultat, ou déplacerait le même dossier qu'elle en même
 			// temps.
-			$this->stop_taken_over( $point['id'], $hold_until, self::TAKEN_OVER_WHILE_UPDATING );
+			$this->stop_taken_over( $point['id'], $hold_until, self::TAKEN_OVER_WHILE_UPDATING, $upgrade_error );
 		}
 		$this->invalidate_opcache( $plugin_file );
 		$after   = $s->health->measure();
@@ -429,7 +479,7 @@ final class ProtectedUpdate {
 			// reprise puis rouvrir une transaction ferait rendre deux résultats
 			// contradictoires (`interrupted_unverified` et `auto_rolled_back`) pour la
 			// même mise à jour.
-			$this->stop_taken_over( $point['id'], $hold_until, self::TAKEN_OVER_BEFORE_ROLLBACK );
+			$this->stop_taken_over( $point['id'], $hold_until, self::TAKEN_OVER_BEFORE_ROLLBACK, $upgrade_error );
 		}
 		$version_after = (string) ( $result['version_after'] ?? '' );
 		// L'activation de l'extension revient désormais à restore() (cf. droit de réactiver).
@@ -505,11 +555,15 @@ final class ProtectedUpdate {
 	 *    tel quel par le restaurateur : ce dossier est celui qui tournait au démarrage de
 	 *    la commande. Revenir à l'état d'avant la commande n'est jamais pire que cet état :
 	 *    l'extension est réactivée comme avant (force_reactivate()), et l'erreur le dit
-	 *    (cf. PUT_BACK_AS_BEFORE) ;
+	 *    (cf. PUT_BACK_AS_BEFORE) ; si cette réactivation échoue, l'erreur dit que les
+	 *    fichiers d'avant sont en place mais l'extension inactive (cf.
+	 *    PUT_BACK_NOT_REACTIVATED) ;
 	 *  - sinon (rollback automatique, reprise : le dossier remis en place est la nouvelle
 	 *    version mesurée cassée, ou des fichiers à moitié copiés ; ou remise en place
 	 *    manquée), seulement si l'extension se charge sans erreur, sinon elle reste
-	 *    inactive et le message de l'exception le dit (cf. LEFT_INACTIVE). Jamais dans un
+	 *    inactive et le message de l'exception dit pourquoi (cf. LEFT_INACTIVE_DETAILS) ;
+	 *    rallumée, le message dit que ses fichiers ne sont peut-être pas ceux du point
+	 *    (cf. REACTIVATED_FILES_UNCHECKED). Jamais dans un
 	 *    processus qui avait déjà chargé son fichier principal (requête où elle était
 	 *    active au démarrage : rollback automatique, filet de shutdown de la mise à jour,
 	 *    rollback manuel) : rien ne peut y vérifier qu'elle se charge, elle reste
@@ -561,11 +615,20 @@ final class ProtectedUpdate {
 				$this->reactivation = self::REACTIVATION_AS_BEFORE;
 				throw $e;
 			}
-			if ( $previous_folder_trusted && $e instanceof RestoreException && $e->previous_folder_restored() && self::force_reactivate_quietly( $plugin_file, $network ) ) {
+			if ( $previous_folder_trusted && $e instanceof RestoreException && $e->previous_folder_restored() ) {
 				// Rollback manuel : le dossier remis en place est celui qui tournait au
 				// démarrage de la commande, intact. L'état d'avant la commande est rétabli.
-				$this->reactivation = CommandExecutor::ACTIVATION_ACTIVE;
-				throw $e->with_detail( self::PUT_BACK_AS_BEFORE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message déjà échappé par celui qui l'a levé, suffixe fixe.
+				if ( self::force_reactivate_quietly( $plugin_file, $network ) ) {
+					$this->reactivation = CommandExecutor::ACTIVATION_ACTIVE;
+					throw $e->with_detail( self::PUT_BACK_AS_BEFORE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message déjà échappé par celui qui l'a levé, suffixe fixe.
+				}
+				// La réactivation forcée a levé (base de données, code tiers branché sur les
+				// options). Dernier essai par le bac à sable, qui ne fait rien si le fichier
+				// principal est déjà chargé (cas courant : requête où l'extension était
+				// active). Les fichiers restent ceux d'avant, intacts : l'erreur ne parle pas
+				// de fichiers douteux, elle dit que la réactivation a échoué.
+				$this->reactivation = self::reactivate_if_it_loads( $plugin_file, $network );
+				throw $e->with_detail( CommandExecutor::ACTIVATION_ACTIVE === $this->reactivation ? self::PUT_BACK_AS_BEFORE : self::PUT_BACK_NOT_REACTIVATED ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message déjà échappé par celui qui l'a levé, suffixe fixe.
 			}
 			// Restauration ÉCHOUÉE, dossier douteux : il n'est peut-être plus un tout
 			// cohérent. Le restaurateur remet le dossier d'avant en place quand il le peut,
@@ -575,12 +638,17 @@ final class ProtectedUpdate {
 			// `active_plugins` ferait alors tomber toutes les pages du site en « erreur
 			// critique ». Réactivation par le bac à sable d'activate_plugin() seulement :
 			// une extension qui ne se charge pas, ou qui ne peut pas être essayée ici,
-			// reste inactive, et l'erreur remontée à la plateforme dit pourquoi. Refus
-			// d'avant la mise de côté : l'extension n'a pas été désactivée, rien à faire.
+			// reste inactive, et l'erreur remontée à la plateforme dit pourquoi. Une
+			// extension que le bac à sable rallume se charge, mais ses fichiers sont ceux
+			// qu'a laissés l'échec : l'erreur le dit aussi (REACTIVATED_FILES_UNCHECKED).
+			// Refus d'avant la mise de côté, extension encore active : elle n'a pas été
+			// désactivée, rien à faire ni à dire.
+			$inactive_before    = ! self::is_active_quietly( $plugin_file );
 			$this->reactivation = self::reactivate_if_it_loads( $plugin_file, $network );
-			$left_inactive      = self::LEFT_INACTIVE_DETAILS[ $this->reactivation ] ?? null;
-			if ( null !== $left_inactive ) {
-				throw self::left_inactive( $e, $left_inactive ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message déjà échappé par celui qui l'a levé, suffixe fixe.
+			$detail             = self::LEFT_INACTIVE_DETAILS[ $this->reactivation ]
+				?? ( $inactive_before ? self::REACTIVATED_FILES_UNCHECKED : null );
+			if ( null !== $detail ) {
+				throw self::with_detail( $e, $detail ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message déjà échappé par celui qui l'a levé, suffixe fixe.
 			}
 			throw $e;
 		}
@@ -741,7 +809,7 @@ final class ProtectedUpdate {
 						}
 						if ( self::REACTIVATION_AS_BEFORE === $reactivation ) {
 							// Rien ne le disait : inactive avant, elle n'a pas été essayée.
-							throw self::left_inactive( $e, self::LEFT_INACTIVE_AS_BEFORE_UPDATE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message déjà échappé par celui qui l'a levé, suffixe fixe.
+							throw self::with_detail( $e, self::LEFT_INACTIVE_AS_BEFORE_UPDATE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message déjà échappé par celui qui l'a levé, suffixe fixe.
 						}
 						throw $e;
 					}
@@ -898,12 +966,19 @@ final class ProtectedUpdate {
 	 * point est retenu (la reprise peut en avoir besoin, ou un rollback manuel), la
 	 * transaction n'est pas retirée (close() ne retire que la sienne).
 	 *
+	 * @param string|null $upgrade_error Exception levée par WordPress une fois la nouvelle
+	 *                                   version copiée, message déjà échappé (cf.
+	 *                                   CommandExecutor::perform_plugin_upgrade()) : ajoutée au
+	 *                                   message pour ne pas se perdre.
 	 * @throws \RuntimeException Toujours : la plateforme reçoit un échec explicite.
 	 */
-	private function stop_taken_over( string $point_id, int $hold_until, string $message ): never {
+	private function stop_taken_over( string $point_id, int $hold_until, string $message, ?string $upgrade_error = null ): never {
 		$this->services->store->hold( $point_id, $hold_until );
 		UpdateTransaction::close();
-		throw new \RuntimeException( $message ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- constantes, texte fixe.
+		if ( null !== $upgrade_error ) {
+			$message .= sprintf( self::UPGRADE_ERROR_TOO, $upgrade_error );
+		}
+		throw new \RuntimeException( $message ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- constantes, et `upgrade_error` déjà échappé par CommandExecutor.
 	}
 
 	private function installed_version( string $plugin_file ): string {
@@ -1006,12 +1081,25 @@ final class ProtectedUpdate {
 	}
 
 	/**
+	 * L'extension est-elle active ? Faux si la question elle-même lève (précaution :
+	 * l'erreur de la restauration doit remonter, pas celle-ci).
+	 */
+	private static function is_active_quietly( string $plugin_file ): bool {
+		try {
+			return is_plugin_active( $plugin_file );
+		} catch ( \Throwable $e ) {
+			unset( $e );
+			return false;
+		}
+	}
+
+	/**
 	 * L'erreur d'une restauration qui a échoué, complétée de ce qui a été fait de
 	 * l'extension (`$detail`, texte fixe). Même classe et même code pour une
 	 * RestoreException (la plateforme lit `error_code`) ; toute autre erreur devient une
 	 * RuntimeException qui la porte.
 	 */
-	private static function left_inactive( \Throwable $e, string $detail ): \Throwable {
+	private static function with_detail( \Throwable $e, string $detail ): \Throwable {
 		if ( $e instanceof RestoreException ) {
 			return $e->with_detail( $detail );
 		}

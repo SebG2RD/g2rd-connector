@@ -245,7 +245,9 @@ final class CommandExecutor {
 	 *                                                            décide seule de l'extension, ou que ce
 	 *                                                            processus a commencé un rollback. Null :
 	 *                                                            chemin historique.
-	 * @return array<string, mixed>
+	 * @return array<string, mixed> Forme historique ; mise à jour protégée seulement, plus
+	 *                              `upgrade_error` quand WordPress a levé une exception après la
+	 *                              copie des fichiers (cf. plus bas).
 	 */
 	private static function perform_plugin_upgrade( string $file, array $plugins, ?callable $may_reactivate = null ): array {
 		$version_before = isset( $plugins[ $file ]['Version'] ) ? (string) $plugins[ $file ]['Version'] : '';
@@ -336,12 +338,26 @@ final class CommandExecutor {
 
 		// Automatic_Upgrader_Skin = skin sans output, adapté à un contexte REST/cron.
 		$upgrader = new Plugin_Upgrader( new Automatic_Upgrader_Skin() );
+		// Exception levée après la copie, dans une mise à jour protégée (cf. plus bas).
+		$upgrade_error = null;
 		add_filter( 'upgrader_post_install', $mark_installed, PHP_INT_MAX, 2 );
 		try {
 			$result = $upgrader->upgrade( $file );
 		} catch ( \Throwable $e ) {
-			if ( $files_installed ) {
-				// Levée APRÈS la copie (`upgrader_process_complete`) : fichiers complets, comme
+			if ( $files_installed && null !== $may_reactivate ) {
+				// Mise à jour PROTÉGÉE, exception levée APRÈS la copie (`upgrader_process_complete`) :
+				// fichiers complets, la nouvelle version est en place. Elle n'arrête pas la mise
+				// à jour : relever ici ferait sauter le contrôle de santé et le rollback
+				// automatique (ProtectedUpdate::run() s'arrête sur une exception), alors que la
+				// nouvelle version, réactivée sans essai de chargement, peut faire tomber toutes
+				// les pages en « erreur critique ». La suite est celle d'une copie réussie :
+				// réactivation nominale (sous réserve du droit de réactiver), relecture de la
+				// version, puis contrôle de santé dans run(). L'erreur est rendue dans le
+				// résultat (`upgrade_error`).
+				$upgrade_error = $e->getMessage();
+				$result        = true;
+			} elseif ( $files_installed ) {
+				// Mise à jour simple (connecteur compris), même cas : fichiers complets, comme
 				// si upgrade() avait rendu la main. L'extension est réactivée tout de suite
 				// (le filet le refera si la suite meurt), et l'erreur dit que la nouvelle
 				// version était déjà installée.
@@ -356,15 +372,16 @@ final class CommandExecutor {
 					unset( $reactivation_error );
 				}
 				throw new \RuntimeException( esc_html( $e->getMessage() . ( $reactivated ? self::INSTALLED_THEN_FAILED_REACTIVATED : self::INSTALLED_THEN_FAILED ) ), 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message échappé ; `$e` est l'exception chaînée, pas une sortie.
+			} else {
+				// upgrade() n'a pas rendu la main, la copie n'était pas terminée : du code
+				// branché sur la mise à jour a levé, peut-être en pleine copie. Comme pour une
+				// requête morte, le filet ne réactive pas une extension que le cœur a déjà
+				// désactivée : elle reste désactivée, et l'erreur remontée à la plateforme le dit.
+				if ( $was_active && ! is_plugin_active( $file ) ) {
+					throw new \RuntimeException( esc_html( $e->getMessage() . self::LEFT_INACTIVE_MID_UPDATE ), 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message échappé ; `$e` est l'exception chaînée, pas une sortie.
+				}
+				throw $e;
 			}
-			// upgrade() n'a pas rendu la main, la copie n'était pas terminée : du code
-			// branché sur la mise à jour a levé, peut-être en pleine copie. Comme pour une
-			// requête morte, le filet ne réactive pas une extension que le cœur a déjà
-			// désactivée : elle reste désactivée, et l'erreur remontée à la plateforme le dit.
-			if ( $was_active && ! is_plugin_active( $file ) ) {
-				throw new \RuntimeException( esc_html( $e->getMessage() . self::LEFT_INACTIVE_MID_UPDATE ), 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message échappé ; `$e` est l'exception chaînée, pas une sortie.
-			}
-			throw $e;
 		} finally {
 			remove_filter( 'upgrader_post_install', $mark_installed, PHP_INT_MAX );
 		}
@@ -406,7 +423,7 @@ final class CommandExecutor {
 		// On ne les compte pas comme mis à jour : ça éviterait un faux succès côté manager.
 		$changed = ( true === $result ) && ( '' !== $version_after ) && ( $version_after !== $version_before );
 
-		return [
+		$outcome = [
 			'updated'        => $changed,
 			'file'           => $file,
 			'version_before' => $version_before,
@@ -415,6 +432,13 @@ final class CommandExecutor {
 			'reactivated'    => $reactivated,
 			'reason'         => $changed ? null : ( true === $result ? 'version_unchanged' : 'upgrade_failed' ),
 		];
+		if ( null !== $upgrade_error ) {
+			// Le message, échappé : ProtectedUpdate::run() le complète et le rend dans tous
+			// ses résultats (`updated`, `auto_rolled_back`…), ou dans son erreur si une
+			// reprise l'a prise en route.
+			$outcome['upgrade_error'] = esc_html( $upgrade_error );
+		}
+		return $outcome;
 	}
 
 	/**

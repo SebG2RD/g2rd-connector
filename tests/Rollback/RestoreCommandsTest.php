@@ -249,6 +249,41 @@ final class RestoreCommandsTest extends FilesystemTestCase {
 	}
 
 	/**
+	 * Même échec, dossier d'avant remis en place tel quel, mais sa réactivation forcée
+	 * échoue (activate_plugin() lève, puis l'écriture d'`active_plugins` aussi). Les
+	 * fichiers sont ceux qui tournaient au démarrage de la commande : l'erreur le dit, et
+	 * dit que la réactivation a échoué. Elle disait « its files may be incomplete », faux
+	 * ici.
+	 */
+	public function test_a_failed_manual_rollback_whose_folder_was_put_back_says_when_it_could_not_reactivate_it(): void {
+		$tree = $this->tree( $this->plugins . '/akismet' );
+		$this->restore_fails( partial: true, aside_lost: false );
+		Functions\when( 'activate_plugin' )->alias(
+			static function (): void {
+				throw new \Error( 'Call to a member function dirlist() on null' );
+			}
+		);
+		Functions\when( 'update_option' )->alias(
+			function ( string $key, $value ): bool {
+				if ( 'active_plugins' === $key ) {
+					throw new \RuntimeException( 'base indisponible' );
+				}
+				$this->options[ $key ] = $value;
+				return true;
+			}
+		);
+
+		$r = CommandExecutor::run( 'rollback_plugin', $this->rollback_payload( 'restore_point' ) )['result'];
+
+		self::assertSame( 'rollback_failed', $r['outcome'] );
+		self::assertSame( 'rollback_failed', $r['error_code'] );
+		self::assertSame( 'extraction failed: disk full; the plugin was put back as it was before this rollback: the files it had when the rollback started were restored unchanged, but reactivating it failed, so it is inactive; reactivate it from the Plugins screen of WordPress, then retry the rollback from the platform', $r['error'] );
+		self::assertStringNotContainsString( 'may be incomplete', $r['error'] );
+		self::assertFalse( $this->active );
+		self::assertSame( $tree, $this->tree( $this->plugins . '/akismet' ), 'Dossier d\'avant intact.' );
+	}
+
+	/**
 	 * Même échec, mais le dossier d'avant n'a pas pu être remis en place : ce qui reste
 	 * sur le disque n'a jamais tourné. La requête a chargé l'extension à son démarrage :
 	 * le bac à sable ne la rechargerait pas et l'activerait sans l'avoir essayée. Elle
@@ -437,6 +472,7 @@ final class RestoreCommandsTest extends FilesystemTestCase {
 		self::assertSame( $error_code, $r['outcome'] );
 		self::assertSame( $error_code, $r['error_code'] );
 		self::assertStringNotContainsString( 'left inactive', $r['error'] );
+		self::assertStringNotContainsString( 'reactivated', $r['error'], 'Restée active, jamais réactivée : rien à en dire.' );
 		self::assertSame( 0, $this->deactivations, 'Jamais désactivée.' );
 		self::assertTrue( $this->active );
 		self::assertSame( '2.0', $this->plugins_on_disk()[ self::FILE ]['Version'] );

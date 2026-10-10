@@ -319,9 +319,11 @@ dont le loopback est impossible donne « non vérifiable », jamais « cassé »
   tournait au démarrage, et l'extension, active avant, est réactivée. Elle restait désactivée :
   une boutique WooCommerce dont le rollback manquait restait éteinte alors qu'elle fonctionnait
   avant. L'erreur le dit, avec le même code (« the plugin was put back as it was before this
-  rollback… retry the rollback from the platform »). Si ce dossier n'a pas pu être remis en
-  place, rien ne change : l'extension n'est réactivée que si elle se charge, sinon elle reste
-  désactivée et l'erreur le dit. Le rollback automatique et les reprises ne sont pas concernés :
+  rollback… retry the rollback from the platform »). Si cette réactivation échoue, l'erreur dit
+  que les fichiers d'avant sont en place mais l'extension inactive (« …but reactivating it
+  failed, so it is inactive; reactivate it from the Plugins screen of WordPress… »). Si ce
+  dossier n'a pas pu être remis en place, rien ne change : l'extension n'est réactivée que si
+  elle se charge, sinon elle reste désactivée et l'erreur le dit. Le rollback automatique et les reprises ne sont pas concernés :
   le dossier qu'ils remettent en place est la nouvelle version mesurée cassée, ou des fichiers à
   moitié copiés.
 - Le rollback manuel depuis une archive téléchargée suit désormais exactement le chemin du point
@@ -360,8 +362,18 @@ dont le loopback est impossible donne « non vérifiable », jamais « cassé »
   désormais. Une exception levée à cet endroit la réactive tout de suite, et l'erreur dit que la
   nouvelle version était déjà installée (« WordPress had already installed the new version when
   this error occurred (its files are complete), so the plugin was reactivated… »), au lieu de
-  « left inactive… files may be incomplete », faux dans ce cas. Mise à jour protégée : même
-  règle, sous réserve du droit de réactiver (aucune reprise n'a pris la transaction).
+  « left inactive… files may be incomplete », faux dans ce cas.
+- Une mise à jour protégée ne saute plus son contrôle de santé quand WordPress lève une
+  exception une fois les nouveaux fichiers copiés. Elle s'arrêtait là, nouvelle version
+  réactivée mais jamais vérifiée : une version qui cassait le site restait en place, toutes les
+  pages en « erreur critique », sans rollback automatique. L'exception n'arrête plus la mise à
+  jour protégée : elle continue comme après une copie réussie (réactivation, contrôle de santé,
+  rollback automatique si le site est cassé), et son résultat (`updated`, `auto_rolled_back`…)
+  porte l'erreur dans un nouveau champ `upgrade_error` (« …so the protected update did not stop
+  on it and went on as after a successful copy… »). Si une reprise a pris sa transaction
+  entre-temps, elle s'arrête comme toute mise à jour prise en route, et son erreur reprend
+  celle-ci (« WordPress had also raised an error once the new version was installed… »). La
+  mise à jour simple et celle du connecteur ne changent pas (ci-dessus).
 - En multisite, le rollback automatique réactive une extension active pour tout le réseau…
   pour tout le réseau. Elle n'était réactivée que pour le site courant : l'état réseau était lu
   dans une clé que le résultat de la mise à jour ne contient jamais.
@@ -378,7 +390,13 @@ dont le loopback est impossible donne « non vérifiable », jamais « cassé »
   consigné avant l'essai de réactivation (il disait seulement « reactivated only if it loads
   without error »), est complété après l'essai avec la cause exacte et l'action à mener. Une
   reprise manquée sur une extension inactive avant la mise à jour le dit aussi (« the plugin was
-  inactive before the update and stays inactive… »).
+  inactive before the update and stays inactive… »). Après toute restauration manquée, une
+  extension que le bac à sable d'activation a rallumée n'est plus signalée par l'erreur brute :
+  l'erreur dit qu'elle a été réactivée, que ses fichiers ne sont peut-être pas ceux du point, et
+  quoi faire (« the plugin was reactivated: it loads without error, but… »). Une extension que
+  WordPress a refusé d'activer avant de la charger (fichier principal introuvable, en-tête
+  illisible, exigences non remplies) n'est plus présentée comme ne se chargeant pas
+  (« WordPress refused to activate it before loading it… »).
 - Après un rollback, la version retirée est bloquée pour les mises à jour automatiques de
   WordPress jusqu'à la version suivante.
 - Le plugin ne se rollback jamais lui-même. La capacité `restore_points` n'est annoncée dans

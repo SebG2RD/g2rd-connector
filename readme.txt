@@ -100,10 +100,13 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   was running when the command started is put back unchanged, and the plugin, active before, is
   now reactivated. It used to stay deactivated: a WooCommerce shop whose rollback failed stayed
   down although it worked before. The error says so, with the same error code ("the plugin was
-  put back as it was before this rollback… retry the rollback from the platform"). If that folder
-  could not be put back, nothing changes: the plugin is reactivated only if it loads, otherwise
-  it stays deactivated and the error says so. Automatic rollbacks and recoveries are not
-  affected: the folder they put back is the new version found broken, or half-copied files.
+  put back as it was before this rollback… retry the rollback from the platform"). If
+  reactivating it fails, the error says the previous files are in place but the plugin is
+  inactive ("…but reactivating it failed, so it is inactive; reactivate it from the Plugins
+  screen of WordPress…"). If that folder could not be put back, nothing changes: the plugin is
+  reactivated only if it loads, otherwise it stays deactivated and the error says so. Automatic
+  rollbacks and recoveries are not affected: the folder they put back is the new version found
+  broken, or half-copied files.
 * **Fix: a manual rollback from a downloaded archive follows the same path as one from a local
   restore point.** The plugin is now deactivated while its files are extracted (it stayed active
   while they were replaced), a refusal before its folder is set aside leaves it untouched, and a
@@ -141,8 +144,18 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   the plugin. An exception thrown there reactivates it at once, and the error says the new
   version was already installed ("WordPress had already installed the new version when this
   error occurred (its files are complete), so the plugin was reactivated…") instead of the
-  wrong "left inactive… files may be incomplete". Protected updates follow the same rule, as
-  long as no recovery took their transaction over.
+  wrong "left inactive… files may be incomplete".
+* **Fix: a protected update no longer skips its health check when WordPress throws an exception
+  once the new files are copied.** It used to stop there, with the new version reactivated but
+  never checked: a version that broke the site stayed in place, every page down with a critical
+  error, and no automatic rollback. The exception no longer stops a protected update: it carries
+  on as after a successful copy (reactivation, health check, automatic rollback if the site is
+  broken), and its result (`updated`, `auto_rolled_back`…) carries the error in a new
+  `upgrade_error` field ("…so the protected update did not stop on it and went on as after a
+  successful copy…"). If a recovery took its transaction over meanwhile, it stops like any update
+  taken over, and its error repeats this one ("WordPress had also raised an error once the new
+  version was installed…"). Simple updates and the connector's own update are unchanged (see
+  above).
 * **Fix: on a multisite network, an automatic rollback reactivates a network-active plugin
   network-wide.** It was reactivated for the current site only: the network state was read from
   a key that the update result never contains.
@@ -159,7 +172,13 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   recoveries), the detail, written before the reactivation attempt (it only said "reactivated
   only if it loads without error"), is completed after it with the exact cause and what to do. A
   failed recovery of a plugin that was inactive before the update now says so too ("the plugin
-  was inactive before the update and stays inactive…").
+  was inactive before the update and stays inactive…"). After any failed restore, a plugin that
+  the activation sandbox turned back on is no longer reported with the bare error: the error
+  says it was reactivated, that its files may not be those of the restore point, and what to do
+  ("the plugin was reactivated: it loads without error, but…"). A plugin that WordPress refused
+  to activate before loading it (main file missing, plugin header unreadable, requirements not
+  met) is no longer reported as failing to load ("WordPress refused to activate it before
+  loading it…").
 
 = 1.13.0-rc.2 =
 

@@ -36,6 +36,9 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 	/** …quand elle n'a pas pu être essayée : son fichier principal était déjà chargé par le processus. */
 	private const NOT_CHECKED = 'which could not be checked because its code was already loaded earlier in this request';
 
+	/** Début du texte d'`upgrade_error` : exception levée une fois la nouvelle version copiée. */
+	private const INSTALLED_THEN_FAILED = '; WordPress had already installed the new version when this error occurred (its files are complete), so the protected update did not stop on it and went on as after a successful copy (see outcome)';
+
 	private RestorePointStore $store;
 	/** @var list<array{code:int, body:string|callable, error?:string|null}> Réponses loopback, consommées dans l'ordre (home, admin, home, admin…). */
 	private array $responses = [];
@@ -1146,11 +1149,12 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 
 	/**
 	 * Une exception levée par `upgrader_process_complete`, une fois la nouvelle version
-	 * copiée : fichiers complets, transaction encore la sienne. L'extension est réactivée
-	 * (droit de réactiver accordé), l'erreur le dit, le point est retenu pour un rollback
-	 * depuis la plateforme.
+	 * copiée : fichiers complets, transaction encore la sienne. La mise à jour protégée ne
+	 * s'arrête pas là : réactivation nominale, contrôle de santé, et le résultat normal
+	 * porte l'erreur (`upgrade_error`). Elle s'arrêtait sans contrôle de santé, nouvelle
+	 * version réactivée sans vérification.
 	 */
-	public function test_an_exception_once_the_files_are_installed_reactivates_the_plugin_and_keeps_the_point(): void {
+	public function test_an_exception_once_the_files_are_installed_still_runs_the_health_check_and_reports_it(): void {
 		$nets = $this->record_shutdown_nets();
 		$this->script_health( ok: 2, then_ok: 2 );
 		$this->loaded_at_boot();
@@ -1163,16 +1167,92 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 			$net();
 		}
 
-		self::assertSame( 'failed', $outcome['status'] );
-		self::assertStringStartsWith( 'Language pack download timed out.; WordPress had already installed the new version when this error occurred (its files are complete), so the plugin was reactivated', $outcome['error'] );
+		self::assertSame( 'done', $outcome['status'] );
+		$r = $outcome['result'];
+		self::assertSame( ProtectedUpdate::OUTCOME_UPDATED, $r['outcome'] );
+		self::assertSame( 'healthy', $r['health']['verdict'] );
+		self::assertSame( 4, $this->response_index, 'Référence, puis mesure d\'après la mise à jour.' );
+		self::assertTrue( $r['updated'] );
+		self::assertSame( '2.0', $r['version_after'] );
+		self::assertTrue( $r['reactivated'] );
+		self::assertStringStartsWith( 'Language pack download timed out.' . self::INSTALLED_THEN_FAILED, $r['upgrade_error'] );
+		self::assertStringContainsString( 'check the PHP error log', $r['upgrade_error'] );
 		self::assertSame( [ self::FILE ], $this->activated );
 		self::assertTrue( $this->active );
 		self::assertSame( '2.0', $this->plugins_on_disk()[ self::FILE ]['Version'] );
-		$points = array_values( $this->store->all() );
-		self::assertCount( 1, $points );
-		self::assertTrue( $points[0]['hold'], 'Point retenu pour un rollback depuis la plateforme.' );
 		self::assertNull( UpdateTransaction::current() );
 		self::assertSame( [], PendingOutcomes::all() );
+	}
+
+	/**
+	 * Même exception, nouvelle version qui casse le site : le contrôle de santé le voit,
+	 * le rollback automatique remet l'ancienne version, et le résultat porte l'erreur.
+	 * Avant, la nouvelle version restait active sans contrôle : « erreur critique » sur
+	 * toutes les pages, sans rollback.
+	 */
+	public function test_an_exception_once_the_files_are_installed_still_rolls_a_broken_update_back(): void {
+		$nets        = $this->record_shutdown_nets();
+		$tree_before = $this->tree( $this->plugins . '/akismet' );
+		$this->responses = [
+			[ 'code' => 200, 'body' => 'ok' ],
+			[ 'code' => 200, 'body' => self::ajax_ok() ],
+			[ 'code' => 500, 'body' => '' ],
+			[ 'code' => 200, 'body' => '<b>Fatal error</b>: Uncaught Error' ],
+			[ 'code' => 200, 'body' => 'ok' ],
+			[ 'code' => 200, 'body' => self::ajax_ok() ],
+		];
+		$this->loaded_at_boot();
+		Plugin_Upgrader::$on_complete = static function (): void {
+			throw new \RuntimeException( 'Language pack download timed out.' );
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+		foreach ( $nets as $net ) { // Fin de la requête.
+			$net();
+		}
+
+		self::assertSame( 'done', $outcome['status'] );
+		$r = $outcome['result'];
+		self::assertSame( ProtectedUpdate::OUTCOME_AUTO_ROLLED_BACK, $r['outcome'] );
+		self::assertSame( 'broken', $r['health']['verdict'] );
+		self::assertSame( [ 'from' => '2.0', 'to' => '1.0' ], $r['rolled_back'] );
+		self::assertSame( '1.0', $r['version_after'] );
+		self::assertStringStartsWith( 'Language pack download timed out.' . self::INSTALLED_THEN_FAILED, $r['upgrade_error'] );
+		self::assertSame( $tree_before, $this->tree( $this->plugins . '/akismet' ), 'Ancienne version remise à l\'identique.' );
+		self::assertTrue( $this->active, 'Ancienne version réactivée.' );
+		self::assertSame( [ self::FILE => '2.0' ], AutoUpdateGuard::all() );
+		self::assertTrue( $r['restore_point']['hold'] );
+		self::assertNull( UpdateTransaction::current() );
+		self::assertSame( [], PendingOutcomes::all() );
+	}
+
+	/**
+	 * Même exception, mais une reprise d'un autre processus a pris la transaction pendant
+	 * la copie (plus de 10 minutes) et remis l'ancienne version : la mise à jour s'arrête
+	 * comme toute mise à jour prise en route, sans réactiver ni mesurer, et son erreur dit
+	 * aussi celle qu'a levée WordPress (elle ne se perd pas).
+	 */
+	public function test_an_exception_once_the_files_are_installed_after_a_takeover_keeps_both_errors(): void {
+		$this->script_health( ok: 2, then_ok: 2 );
+		$upgrade                     = Plugin_Upgrader::$on_upgrade;
+		Plugin_Upgrader::$on_upgrade = function () use ( $upgrade ): void {
+			$upgrade();
+			$this->age_transaction( UpdateTransaction::STALE_AFTER_SECONDS + 100 );
+			$this->as_another_process( static fn () => ProtectedUpdate::recover( time() ) );
+		};
+		Plugin_Upgrader::$on_complete = static function (): void {
+			throw new \RuntimeException( 'Language pack download timed out.' );
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assertStringStartsWith( 'protected update was taken over by a recovery while it was updating the plugin', $outcome['error'] );
+		self::assertStringEndsWith( '; WordPress had also raised an error once the new version was installed: Language pack download timed out.; check the PHP error log for the code that raised it', $outcome['error'] );
+		self::assertStringNotContainsString( 'see outcome', $outcome['error'], 'Pas de résultat ici : une erreur.' );
+		self::assertSame( [ [ self::FILE, 'recovered_rolled_back' ] ], $this->pending_outcomes() );
+		self::assertSame( 2, $this->response_index, 'Aucune mesure d\'après la mise à jour.' );
+		self::assertSame( [ self::FILE ], $this->activated, 'Réactivée par la reprise seulement.' );
 	}
 
 	/**
@@ -1711,8 +1791,12 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		self::assertTrue( $this->active );
 	}
 
-	/** Même reprise manquée, extension qui se charge : réactivée par le bac à sable, détail inchangé. */
-	public function test_a_recovery_whose_restore_fails_reactivates_a_plugin_that_loads(): void {
+	/**
+	 * Même reprise manquée, extension qui se charge : réactivée par le bac à sable. Le
+	 * détail dit qu'elle a été réactivée, que ses fichiers ne sont peut-être pas ceux du
+	 * point, et quoi faire. Il se réduisait à l'erreur brute.
+	 */
+	public function test_a_recovery_whose_restore_fails_reactivates_a_plugin_that_loads_and_says_so(): void {
 		$point = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
 		( Plugin_Upgrader::$on_upgrade )();
 		$this->dead_transaction( self::FILE, $point['id'] );
@@ -1724,8 +1808,31 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		self::assertTrue( $this->active );
 		$pending = PendingOutcomes::all();
 		self::assertSame( 'recovery_failed', $pending[0]['outcome'] );
-		self::assertSame( 'extraction failed: disk full', $pending[0]['detail'] );
+		self::assertSame( 'extraction failed: disk full; the plugin was reactivated: it loads without error, but its files may not be those of the restore point; check the site, then roll it back again from the platform: its restore point is kept', $pending[0]['detail'] );
 		self::assertSame( CommandExecutor::ACTIVATION_ACTIVE, $pending[0]['reactivation'] );
+		self::assertTrue( $this->store->get( $point['id'] )['hold'], 'Point retenu, comme le dit le détail.' );
+	}
+
+	/**
+	 * Reprise manquée, WordPress refuse d'activer l'extension AVANT de la charger
+	 * (fichier principal introuvable, en-tête illisible) : le détail dit cette cause-là,
+	 * pas une erreur de chargement (« which it did not »).
+	 */
+	public function test_a_recovery_whose_restore_fails_says_when_wordpress_refused_the_plugin(): void {
+		$point = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
+		( Plugin_Upgrader::$on_upgrade )();
+		$this->dead_transaction( self::FILE, $point['id'] );
+		$this->restore_fails( then_activation_throws: false );
+		Functions\when( 'activate_plugin' )->justReturn( new WP_Error( 'no_plugin_header', 'The plugin does not have a valid header.' ) );
+
+		ProtectedUpdate::recover( time() );
+
+		self::assertFalse( $this->active );
+		$pending = PendingOutcomes::all();
+		self::assertSame( 'recovery_failed', $pending[0]['outcome'] );
+		self::assertSame( CommandExecutor::ACTIVATION_INVALID, $pending[0]['reactivation'] );
+		self::assertSame( 'extraction failed: disk full; the plugin was left inactive: after this failed restore WordPress refused to activate it before loading it (main file missing, plugin header unreadable, or requirements not met); reinstall it or roll it back again from the platform', $pending[0]['detail'] );
+		self::assertStringNotContainsString( 'which it did not', $pending[0]['detail'] );
 	}
 
 	/**
