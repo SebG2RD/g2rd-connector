@@ -1185,6 +1185,41 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 	}
 
 	/**
+	 * Même exception : elle saute `$this->skin->footer()`, et le tampon ouvert par
+	 * Automatic_Upgrader_Skin::header() reste ouvert pendant la suite (contrôle de santé).
+	 * En fin de commande, CommandExecutor::run() referme ce niveau ET le sien, et remonte
+	 * leur contenu (`stray_output`) : aucun tampon de la commande ne reste ouvert.
+	 */
+	public function test_an_exception_once_the_files_are_installed_leaves_no_buffer_of_the_command_open(): void {
+		$this->record_shutdown_nets();
+		$this->script_health( ok: 2, then_ok: 2 );
+		$this->loaded_at_boot();
+		Plugin_Upgrader::$on_download = static function (): void {
+			ob_start(); // Comme Automatic_Upgrader_Skin::header().
+			echo 'Notice: written inside the skin buffer.';
+		};
+		Plugin_Upgrader::$on_complete = static function (): void {
+			throw new \RuntimeException( 'Language pack download timed out.' ); // footer() n'est jamais appelé.
+		};
+
+		$level = ob_get_level();
+		try {
+			$outcome     = CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+			$level_after = ob_get_level();
+		} finally {
+			// Ne laisser aucun tampon ouvert à PHPUnit, même quand le test échoue.
+			while ( ob_get_level() > $level ) {
+				ob_end_clean();
+			}
+		}
+
+		self::assertSame( $level, $level_after, 'Tampon de la skin et tampon de la commande refermés.' );
+		self::assertSame( 'done', $outcome['status'] );
+		self::assertSame( ProtectedUpdate::OUTCOME_UPDATED, $outcome['result']['outcome'] );
+		self::assertSame( 'Notice: written inside the skin buffer.', $outcome['stray_output'] ?? null );
+	}
+
+	/**
 	 * Même exception, nouvelle version qui casse le site : le contrôle de santé le voit,
 	 * le rollback automatique remet l'ancienne version, et le résultat porte l'erreur.
 	 * Avant, la nouvelle version restait active sans contrôle : « erreur critique » sur

@@ -369,6 +369,56 @@ final class UpdatePluginLegacyTest extends TestCase {
 	}
 
 	/**
+	 * Une exception levée par `upgrader_process_complete` saute `$this->skin->footer()` :
+	 * le tampon ouvert par Automatic_Upgrader_Skin::header() (`ob_start()`) reste ouvert.
+	 * run() referme TOUS les niveaux ouverts pendant la commande, celui de la skin compris,
+	 * et remonte leur contenu dans l'ordre d'écriture (`stray_output`). Il ne touche pas à
+	 * un tampon ouvert avant la commande.
+	 *
+	 * Avant le correctif, run() ne refermait qu'un niveau : il prenait celui de la skin
+	 * pour le sien et laissait ouvert celui de la commande, vidé en fin de requête devant
+	 * le JSON de la réponse.
+	 */
+	public function test_every_buffer_left_open_by_an_interrupted_upgrade_is_closed_and_reported(): void {
+		Plugin_Upgrader::$on_download = static function (): void {
+			echo "Notice: written before the skin header.\n"; // Dans le tampon de la commande.
+			ob_start(); // Comme Automatic_Upgrader_Skin::header(), au début de WP_Upgrader::run().
+			echo "Notice: written inside the skin buffer.\n";
+		};
+		Plugin_Upgrader::$on_upgrade  = function (): void {
+			$this->plugins['akismet/akismet.php']['Version'] = '2.0';
+			$this->active                                    = false;
+		};
+		Plugin_Upgrader::$on_complete = static function (): void {
+			throw new \RuntimeException( 'Language pack download timed out.' ); // footer() n'est jamais appelé.
+		};
+
+		ob_start(); // Tampon ouvert AVANT la commande (par un tiers) : il doit rester ouvert.
+		echo 'Third-party output before the command.';
+		$level = ob_get_level();
+		try {
+			$outcome     = CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] );
+			$level_after = ob_get_level();
+		} finally {
+			// Ne laisser aucun tampon ouvert à PHPUnit, même quand le test échoue.
+			while ( ob_get_level() > $level ) {
+				ob_end_clean();
+			}
+			$third_party = ob_get_clean();
+		}
+
+		self::assertSame( $level, $level_after, 'Tous les niveaux ouverts pendant la commande sont refermés, aucun de plus.' );
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assertStringStartsWith( 'Language pack download timed out.', $outcome['error'] );
+		self::assertSame(
+			'Notice: written before the skin header. Notice: written inside the skin buffer.',
+			$outcome['stray_output'] ?? null,
+			'Contenu des deux niveaux, dans l\'ordre d\'écriture.'
+		);
+		self::assertSame( 'Third-party output before the command.', $third_party, 'Tampon d\'avant la commande intact.' );
+	}
+
+	/**
 	 * Le marqueur « fichiers installés » ne vaut que pour la copie de CETTE extension,
 	 * réussie : une installation d'une autre extension pendant la copie (mise à jour
 	 * imbriquée), ou une copie qu'un filtre `upgrader_post_install` déclare en échec, ne

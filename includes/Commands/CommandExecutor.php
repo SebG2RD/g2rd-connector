@@ -131,8 +131,8 @@ final class CommandExecutor {
 		// JSON. Limite connue : show_message() appelle wp_ob_end_flush_all(), qu'aucun
 		// ob_start() ne retient — d'où le skin comme correction de fond.
 		$outer_level = ob_get_level();
-		$buffering   = ob_start();
-		$stray       = '';
+		ob_start();
+		$stray = '';
 
 		try {
 			$result = match ( $command ) {
@@ -161,11 +161,28 @@ final class CommandExecutor {
 				'error'  => $e->getMessage(),
 			];
 		} finally {
-			// Ne récupérer QUE notre propre tampon : une commande qui aurait fermé les
-			// tampons en cours de route (wp_ob_end_flush_all) ne doit pas nous faire
-			// voler celui d'un tiers.
-			if ( $buffering && ob_get_level() > $outer_level ) {
-				$stray = (string) ob_get_clean();
+			// Refermer TOUS les niveaux ouverts pendant la commande, le nôtre compris, et
+			// aucun autre. Une exception peut en laisser plusieurs : levée dans
+			// `upgrader_process_complete`, elle saute `$this->skin->footer()`, et le tampon
+			// ouvert par Automatic_Upgrader_Skin::header() reste ouvert au-dessus du nôtre.
+			// N'en refermer qu'un laissait le nôtre ouvert : vidé en fin de requête, son
+			// contenu précédait le JSON de la réponse.
+			//
+			// Jamais en dessous de `$outer_level` : ces niveaux-là existaient avant la
+			// commande (un tiers). Une commande qui aurait fermé les tampons en cours de
+			// route (wp_ob_end_flush_all) ne doit pas nous faire voler l'un d'eux.
+			//
+			// Du plus profond au moins profond, chaque contenu placé DEVANT le précédent :
+			// un niveau encore ouvert a reçu toute l'écriture faite après son ouverture, son
+			// parent ne contient que ce qui précède. `$stray` suit donc l'ordre d'écriture.
+			while ( ob_get_level() > $outer_level ) {
+				$level_output = (string) ob_get_contents();
+				if ( ! ob_end_clean() ) {
+					// Tampon non supprimable (ouvert sans PHP_OUTPUT_HANDLER_REMOVABLE) : le
+					// niveau ne baisserait jamais, la boucle tournerait sans fin.
+					break;
+				}
+				$stray = $level_output . $stray;
 			}
 		}
 

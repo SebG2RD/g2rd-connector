@@ -179,6 +179,13 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   to activate before loading it (main file missing, plugin header unreadable, requirements not
   met) is no longer reported as failing to load ("WordPress refused to activate it before
   loading it…").
+* **Fix: a command closes every output buffer it opened, even after an exception.** An
+  exception raised by `upgrader_process_complete` skips the footer of the silent upgrader skin,
+  whose output buffer stayed open. The command closed only one buffer level: it took the skin's
+  buffer for its own and left its own buffer open, flushed at the end of the request, so text
+  written there by third-party code could come before the JSON response. Every level opened
+  during the command is now closed (never one opened before it), and their content is returned
+  in `stray_output`, in the order it was written.
 
 = 1.13.0-rc.2 =
 

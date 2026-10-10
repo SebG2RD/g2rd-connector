@@ -397,6 +397,13 @@ dont le loopback est impossible donne « non vérifiable », jamais « cassé »
   WordPress a refusé d'activer avant de la charger (fichier principal introuvable, en-tête
   illisible, exigences non remplies) n'est plus présentée comme ne se chargeant pas
   (« WordPress refused to activate it before loading it… »).
+- Une commande referme tous les tampons de sortie qu'elle a ouverts, même après une exception.
+  Une exception levée par `upgrader_process_complete` saute la fin de la skin silencieuse de
+  WordPress, dont le tampon restait ouvert. La commande ne refermait qu'un niveau : elle prenait
+  celui de la skin pour le sien et laissait le sien ouvert, vidé en fin de requête ; un texte
+  écrit là par du code tiers pouvait précéder le JSON de la réponse. Tous les niveaux ouverts
+  pendant la commande sont désormais refermés (jamais un niveau ouvert avant elle), et leur
+  contenu remonte dans `stray_output`, dans l'ordre d'écriture.
 - Après un rollback, la version retirée est bloquée pour les mises à jour automatiques de
   WordPress jusqu'à la version suivante.
 - Le plugin ne se rollback jamais lui-même. La capacité `restore_points` n'est annoncée dans
