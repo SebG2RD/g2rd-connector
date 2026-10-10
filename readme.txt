@@ -116,6 +116,9 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 * **Fix: on a multisite network, an automatic rollback reactivates a network-active plugin
   network-wide.** It was reactivated for the current site only: the network state was read from
   a key that the update result never contains.
+* **Fix: a recovery whose restore fails keeps its restore point.** The point is now held (up
+  to 7 days, like after a failed automatic rollback) instead of keeping its expiry date, so the
+  purge no longer deletes it: it stays available to put the previous version back by hand.
 
 = 1.13.0-rc.2 =
 

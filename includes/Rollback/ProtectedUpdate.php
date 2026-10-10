@@ -597,7 +597,22 @@ final class ProtectedUpdate {
 					);
 					$services->store->hold( $point_id, $now + RestorePointPurgeJob::DEFAULT_HOLD_MAX_SECONDS );
 				} else {
-					( new self( $services ) )->restore( $plugin_file, $point, (string) $point['version'], null, ! empty( $reserved['was_active'] ), ! empty( $reserved['network_active'] ) );
+					try {
+						( new self( $services ) )->restore( $plugin_file, $point, (string) $point['version'], null, ! empty( $reserved['was_active'] ), ! empty( $reserved['network_active'] ) );
+					} catch ( \Throwable $e ) {
+						// Restauration manquée : le point est retenu quand même, comme après un
+						// rollback automatique manqué (run()). Sans cela il garderait sa date
+						// d'expiration et la purge le supprimerait, alors qu'il reste le seul
+						// moyen de remettre l'ancienne version à la main.
+						try {
+							$services->store->hold( $point_id, $now + RestorePointPurgeJob::DEFAULT_HOLD_MAX_SECONDS );
+						} catch ( \Throwable $hold_error ) {
+							// Précaution : l'erreur de la restauration, qui dit ce qu'est devenue
+							// l'extension, doit remonter, pas celle-ci.
+							unset( $hold_error );
+						}
+						throw $e;
+					}
 					$services->store->hold( $point_id, $now + RestorePointPurgeJob::DEFAULT_HOLD_MAX_SECONDS );
 					$outcome['outcome'] = 'recovered_rolled_back';
 				}

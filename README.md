@@ -333,6 +333,10 @@ dont le loopback est impossible donne « non vérifiable », jamais « cassé »
 - En multisite, le rollback automatique réactive une extension active pour tout le réseau…
   pour tout le réseau. Elle n'était réactivée que pour le site courant : l'état réseau était lu
   dans une clé que le résultat de la mise à jour ne contient jamais.
+- Une reprise dont la restauration échoue garde son point de restauration : il est retenu
+  (7 jours au plus, comme après un rollback automatique manqué) au lieu de garder sa date
+  d'expiration, et la purge ne le supprime plus. Il reste disponible pour remettre l'ancienne
+  version à la main.
 - Après un rollback, la version retirée est bloquée pour les mises à jour automatiques de
   WordPress jusqu'à la version suivante.
 - Le plugin ne se rollback jamais lui-même. La capacité `restore_points` n'est annoncée dans

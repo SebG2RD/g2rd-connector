@@ -1495,6 +1495,41 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		self::assertNull( UpdateTransaction::current() );
 	}
 
+	/**
+	 * Reprise dont la restauration échoue : le point est retenu quand même. Sans cela il
+	 * gardait sa date d'expiration (celle d'une mise à jour sans délai de grâce : tout de
+	 * suite) et la purge qui suit le supprimait, alors qu'il reste le seul moyen de
+	 * remettre l'ancienne version à la main. Ici, c'est la purge elle-même qui reprend.
+	 */
+	public function test_a_recovery_whose_restore_fails_keeps_its_restore_point_out_of_the_purge(): void {
+		$point = ( new Snapshotter( $this->store, $this->plugins ) )->create(
+			self::FILE,
+			[
+				'version'    => '1.0',
+				'kind'       => 'wporg',
+				'expires_at' => time() - 900, // Mise à jour sans délai de grâce : expiré dès l'ouverture.
+				'hold'       => false,
+			],
+			time() - 1000
+		);
+		( Plugin_Upgrader::$on_upgrade )();
+		$this->dead_transaction( self::FILE, $point['id'] );
+		$this->restore_fails( then_activation_throws: false );
+		$now = time();
+
+		$purged = RestorePointPurgeJob::purge( $this->store, $now );
+
+		self::assertSame( [ [ self::FILE, 'recovery_failed' ] ], $this->pending_outcomes() );
+		self::assertIsArray( $purged );
+		self::assertSame( 0, $purged['expired'] );
+		$kept = $this->store->get( $point['id'] );
+		self::assertNotNull( $kept, 'Point gardé pour une intervention manuelle.' );
+		self::assertTrue( $kept['hold'] );
+		self::assertNull( $kept['expires_at'] );
+		self::assertSame( $now + RestorePointPurgeJob::DEFAULT_HOLD_MAX_SECONDS, $kept['hold_until'] );
+		self::assertFileExists( (string) $this->store->path_for( $kept ) );
+	}
+
 	/** Même reprise manquée, extension qui se charge : réactivée par le bac à sable, détail inchangé. */
 	public function test_a_recovery_whose_restore_fails_reactivates_a_plugin_that_loads(): void {
 		$point = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
