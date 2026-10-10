@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.13.0-rc.2
+Stable tag: 1.13.0-rc.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -81,7 +81,7 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 
 == Changelog ==
 
-= Unreleased =
+= 1.13.0-rc.3 =
 
 * **Fix: a failed automatic rollback leaves the plugin deactivated.** The request that runs the
   update had loaded the plugin when it started (it was active), so the WordPress activation
