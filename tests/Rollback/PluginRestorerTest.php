@@ -146,6 +146,96 @@ final class PluginRestorerTest extends FilesystemTestCase {
 	}
 
 	/**
+	 * Le rappel de l'appelant (désactivation de l'extension, cf. ProtectedUpdate::restore())
+	 * passe une fois le dossier actuel mis de côté, juste avant l'extraction : pas avant.
+	 */
+	public function test_the_caller_hook_runs_once_the_current_folder_is_set_aside(): void {
+		$file   = $this->make_plugin( 'akismet', '1.0' );
+		$record = $this->snapshotter->create( $file, [ 'version' => '1.0' ], self::NOW );
+		$this->upgrade_plugin( 'akismet', '2.0' );
+		$seen = [];
+
+		( new PluginRestorer( $this->plugins ) )->restore_from_zip(
+			(string) $this->store->path_for( $record ),
+			$file,
+			$record['sha256'],
+			'1.0',
+			'2.0',
+			function () use ( &$seen ): void {
+				$seen[] = [
+					'target' => file_exists( $this->plugins . '/akismet' ),
+					'aside'  => count( glob( $this->plugins . '/akismet.g2rd-old-*' ) ?: [] ),
+				];
+			}
+		);
+
+		self::assertSame( [ [ 'target' => false, 'aside' => 1 ] ], $seen, 'Une fois, dossier mis de côté, rien d\'extrait encore.' );
+		self::assertSame( '1.0', PluginRestorer::version_from_header( (string) file_get_contents( $this->plugins . '/akismet/akismet.php' ) ) );
+	}
+
+	/** Refus d'avant la mise de côté (intégrité, version_drift) : le rappel ne passe pas. */
+	public function test_a_refusal_before_the_folder_is_set_aside_never_runs_the_caller_hook(): void {
+		$file   = $this->make_plugin( 'akismet', '1.0' );
+		$record = $this->snapshotter->create( $file, [ 'version' => '1.0' ], self::NOW );
+		$this->upgrade_plugin( 'akismet', '2.1' );
+		$calls = 0;
+		$hook  = static function () use ( &$calls ): void {
+			++$calls;
+		};
+		$restorer = new PluginRestorer( $this->plugins );
+
+		foreach ( [ [ '2.0', RestoreException::VERSION_DRIFT ], [ '2.1', RestoreException::INTEGRITY ] ] as [ $current, $code ] ) {
+			try {
+				// Second cas : archive annoncée en 1.1, elle contient 1.0.
+				$restorer->restore_from_zip( (string) $this->store->path_for( $record ), $file, $record['sha256'], '2.1' === $current ? '1.1' : '1.0', $current, $hook );
+				self::fail( 'exception attendue' );
+			} catch ( RestoreException $e ) {
+				self::assertSame( $code, $e->error_code() );
+			}
+		}
+		self::assertSame( 0, $calls );
+	}
+
+	/**
+	 * Le rappel lève (code tiers branché sur la désactivation) : le dossier mis de côté
+	 * reprend sa place, rien n'est extrait, et l'erreur dit à quelle étape.
+	 */
+	public function test_a_failing_caller_hook_puts_the_current_plugin_back(): void {
+		$file   = $this->make_plugin( 'akismet', '1.0' );
+		$record = $this->snapshotter->create( $file, [ 'version' => '1.0' ], self::NOW );
+		$this->upgrade_plugin( 'akismet', '2.0' );
+		$tree      = $this->tree( $this->plugins . '/akismet' );
+		$extracted = false;
+		$restorer  = new PluginRestorer(
+			$this->plugins,
+			static function () use ( &$extracted ): void {
+				$extracted = true;
+			}
+		);
+
+		try {
+			$restorer->restore_from_zip(
+				(string) $this->store->path_for( $record ),
+				$file,
+				$record['sha256'],
+				'1.0',
+				'2.0',
+				static function (): void {
+					throw new \RuntimeException( 'option active_plugins verrouillée' );
+				}
+			);
+			self::fail( 'exception attendue' );
+		} catch ( RestoreException $e ) {
+			self::assertSame( RestoreException::FAILED, $e->error_code() );
+			self::assertSame( 'restore stopped before extracting the archive: option active_plugins verrouillée', $e->getMessage() );
+		}
+
+		self::assertFalse( $extracted );
+		self::assertSame( $tree, $this->tree( $this->plugins . '/akismet' ), 'le plugin 2.0 est de retour, intact' );
+		self::assertSame( [], glob( $this->plugins . '/akismet.g2rd-old-*' ) ?: [] );
+	}
+
+	/**
 	 * Zip wordpress.org (pas de hash) dont une entrée sort du dossier : refusé avant toute écriture.
 	 */
 	public function test_zip_entry_outside_the_plugin_directory_is_refused(): void {

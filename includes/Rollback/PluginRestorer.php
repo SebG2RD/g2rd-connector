@@ -9,7 +9,7 @@
  *   2. vérifier que la version installée est bien celle que le manager croit
  *      (sinon `version_drift`, rien n'est touché) ;
  *   3. renommer le dossier actuel pour le mettre de côté (pas le supprimer) ;
- *   4. extraire le zip ;
+ *   4. rappel de l'appelant (désactivation de l'extension), puis extraire le zip ;
  *   5. vérifier la version extraite ;
  *   6. supprimer le dossier mis de côté.
  * Si une étape échoue après le 3, l'extraction partielle est retirée et le dossier
@@ -17,7 +17,10 @@
  *
  * La désactivation/réactivation du plugin, l'invalidation de l'OPcache, le
  * `.maintenance` et le contrôle de santé sont orchestrés par l'appelant
- * (CommandExecutor) : cette classe ne connaît que les fichiers.
+ * (ProtectedUpdate::restore()) : cette classe ne connaît que les fichiers. Elle lui
+ * dit seulement QUAND désactiver (rappel `$before_extract`) : une fois le dossier
+ * mis de côté, pour qu'un refus d'avant (intégrité, version_drift, dossier impossible
+ * à déplacer) ne touche pas à l'activation d'une extension restée intacte.
  *
  * @package G2RD\Connector
  */
@@ -48,10 +51,14 @@ final class PluginRestorer {
 	 *                                              quand la plateforme n'a pas envoyé `source_sha256`).
 	 * @param string      $expected_version         Version que le zip doit contenir.
 	 * @param string|null $expected_current_version Version censée être installée (null = non vérifié).
+	 * @param (callable(): void)|null $before_extract Appelé une fois, le dossier actuel mis de côté (ou
+	 *                                              absent), juste avant l'extraction : jamais après un
+	 *                                              refus d'avant. S'il lève, le dossier reprend sa place
+	 *                                              et rien n'est extrait.
 	 * @return array{version_before:string, version_after:string}
 	 * @throws RestoreException
 	 */
-	public function restore_from_zip( string $zip_path, string $plugin_file, string $expected_sha256, string $expected_version, ?string $expected_current_version ): array {
+	public function restore_from_zip( string $zip_path, string $plugin_file, string $expected_sha256, string $expected_version, ?string $expected_current_version, ?callable $before_extract = null ): array {
 		// ── 1. Intégrité du zip, avant toute écriture ────────────────────────────
 		if ( ! is_file( $zip_path ) ) {
 			throw RestoreException::integrity( 'restore point archive is missing' );
@@ -85,6 +92,16 @@ final class PluginRestorer {
 			throw RestoreException::failed( 'could not set the current plugin aside' );
 		}
 
+		if ( null !== $before_extract ) {
+			try {
+				$before_extract();
+			} catch ( \Throwable $e ) {
+				// Rien n'a été extrait : le dossier mis de côté reprend sa place.
+				$this->put_back( $target, $aside );
+				throw RestoreException::failed( esc_html( 'restore stopped before extracting the archive: ' . $e->getMessage() ) );
+			}
+		}
+
 		$after = null;
 		try {
 			( $this->extractor )( $zip_path, $this->plugins_root );
@@ -95,10 +112,7 @@ final class PluginRestorer {
 			}
 		} catch ( \Throwable $e ) {
 			// Retour arrière : on retire ce qui a été extrait, le dossier mis de côté reprend sa place.
-			$this->delete_path( $target );
-			if ( file_exists( $aside ) ) {
-				rename( $aside, $target );
-			}
+			$this->put_back( $target, $aside );
 			if ( $e instanceof RestoreException ) {
 				throw $e;
 			}
@@ -130,6 +144,17 @@ final class PluginRestorer {
 			return '' === $version ? null : $version;
 		}
 		return null;
+	}
+
+	/**
+	 * Retour arrière d'une restauration manquée : ce qui a pu être extrait est retiré,
+	 * le dossier mis de côté reprend sa place (s'il y en avait un).
+	 */
+	private function put_back( string $target, string $aside ): void {
+		$this->delete_path( $target );
+		if ( file_exists( $aside ) ) {
+			rename( $aside, $target );
+		}
 	}
 
 	private function target_path( string $plugin_file ): string {

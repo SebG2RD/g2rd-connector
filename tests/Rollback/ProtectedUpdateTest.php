@@ -33,6 +33,9 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 	/** Ce que dit l'erreur d'une restauration manquée quand l'extension est restée inactive. */
 	private const LEFT_INACTIVE = '; the plugin was left inactive:';
 
+	/** …quand elle n'a pas pu être essayée : son fichier principal était déjà chargé par le processus. */
+	private const NOT_CHECKED = 'which could not be checked because its code was already loaded earlier in this request';
+
 	private RestorePointStore $store;
 	/** @var list<array{code:int, body:string|callable, error?:string|null}> Réponses loopback, consommées dans l'ordre (home, admin, home, admin…). */
 	private array $responses = [];
@@ -50,6 +53,13 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 	private ?array $plugin_list = null;
 	/** Le fichier principal de l'extension lève une Error au chargement (cf. restore_fails()). */
 	private bool $activation_throws = false;
+	/**
+	 * Fichiers inclus par « ce processus » (get_included_files()) : le fichier principal
+	 * d'une extension active au démarrage de la requête y figure (cf. loaded_at_boot()).
+	 *
+	 * @var list<string>
+	 */
+	private array $loaded = [];
 
 	protected function setUp(): void {
 		parent::setUp();
@@ -64,6 +74,7 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		$this->on_probe          = null;
 		$this->plugin_list       = null;
 		$this->activation_throws = false;
+		$this->loaded            = [];
 
 		// ── WordPress simulé ────────────────────────────────────────────────────
 		Functions\when( 'get_plugins' )->alias( fn (): array => $this->plugins_on_disk() );
@@ -1245,24 +1256,84 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 	}
 
 	/**
-	 * Même échec, mais l'extension se charge sans erreur : elle est réactivée par le bac
-	 * à sable, et l'erreur reste celle de la restauration, sans rien y ajouter.
+	 * Même échec, extension qui se chargerait sans erreur. Mais la requête de la mise à
+	 * jour l'a chargée à son démarrage (elle était active) : le bac à sable
+	 * d'activate_plugin() ne rechargerait rien (include_once) et l'activerait sans avoir
+	 * lu le dossier laissé par la restauration manquée. Décision du 2026-10-10 : un
+	 * rollback automatique en échec laisse l'extension désactivée, filets de shutdown
+	 * compris, et l'erreur remontée à la plateforme dit pourquoi (même code d'erreur).
+	 *
+	 * Remplace « la réactive si elle se charge » : dans cette requête, rien ne peut le
+	 * vérifier.
 	 */
-	public function test_a_failed_automatic_rollback_reactivates_a_plugin_that_loads(): void {
+	public function test_a_failed_automatic_rollback_leaves_the_plugin_inactive_in_the_request_that_loaded_it(): void {
+		$nets            = $this->record_shutdown_nets();
 		$this->responses = [
 			[ 'code' => 200, 'body' => 'ok' ],
 			[ 'code' => 200, 'body' => self::ajax_ok() ],
 			[ 'code' => 500, 'body' => '' ],
 			[ 'code' => 200, 'body' => '<b>Fatal error</b>: Uncaught Error' ],
 		];
+		$this->loaded_at_boot();
 		$this->restore_fails( then_activation_throws: false );
 
-		$r = CommandExecutor::run( 'update_plugin', $this->payload( [] ) )['result'];
+		$outcome = CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+		foreach ( $nets as $net ) { // Fin de la requête.
+			$net();
+		}
 
+		self::assertSame( 'done', $outcome['status'] );
+		$r = $outcome['result'];
 		self::assertSame( ProtectedUpdate::OUTCOME_AUTO_ROLLBACK_FAILED, $r['outcome'] );
-		self::assertSame( 'extraction failed: disk full', $r['error'] );
-		self::assertSame( [ self::FILE, self::FILE ], $this->activated, 'Après la mise à jour, puis après la restauration manquée.' );
-		self::assertTrue( $this->active );
+		self::assertSame( RestoreException::FAILED, $r['error_code'], 'Même code d\'erreur.' );
+		self::assertStringStartsWith( 'extraction failed: disk full' . self::LEFT_INACTIVE, $r['error'] );
+		self::assertStringContainsString( self::NOT_CHECKED, $r['error'] );
+		self::assertStringContainsString( 'roll it back again from the platform or reinstall it', $r['error'] );
+		self::assertSame( [ self::FILE ], $this->activated, 'Réactivée après la mise à jour, jamais après la restauration manquée.' );
+		self::assertFalse( $this->active, 'Extension désactivée : le site reste debout.' );
+		self::assertNotContains( self::FILE, (array) ( $this->options['active_plugins'] ?? [] ) );
+		self::assertTrue( $r['restore_point']['hold'] );
+	}
+
+	/**
+	 * La requête de la mise à jour meurt en plein remplacement des fichiers (erreur
+	 * fatale, délai dépassé) : son filet de shutdown reprend sa transaction et restaure.
+	 * Si cette restauration échoue, l'extension, chargée au démarrage de la requête,
+	 * reste désactivée : ni le bac à sable (rien ne serait rechargé), ni le filet de la
+	 * mise à jour ne la rallument.
+	 */
+	public function test_the_shutdown_net_of_an_update_that_died_leaves_the_plugin_inactive_when_its_restore_fails(): void {
+		$nets = $this->record_shutdown_nets();
+		$this->script_health( ok: 2, then_ok: 2 );
+		$this->loaded_at_boot();
+		$at_death                    = null;
+		$upgrade                     = Plugin_Upgrader::$on_upgrade;
+		Plugin_Upgrader::$on_upgrade = function () use ( $upgrade, $nets, &$at_death ): void {
+			$upgrade(); // Fichiers en cours de remplacement, extension désactivée par le cœur…
+			$this->restore_fails( then_activation_throws: false );
+			// …puis la requête meurt : PHP exécute ses filets de shutdown, dans l'ordre.
+			foreach ( $nets as $net ) {
+				$net();
+			}
+			$at_death = [
+				'active'    => $this->active,
+				'activated' => $this->activated,
+				'pending'   => PendingOutcomes::all(),
+				'options'   => (array) ( $this->options['active_plugins'] ?? [] ),
+			];
+		};
+
+		CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+
+		self::assertIsArray( $at_death );
+		self::assertSame( [ self::FILE ], $this->deactivated, 'Restauration tentée par le filet.' );
+		self::assertFalse( $at_death['active'], 'Extension désactivée : le site reste debout.' );
+		self::assertSame( [], $at_death['activated'], 'Ni bac à sable, ni filet de la mise à jour.' );
+		self::assertNotContains( self::FILE, $at_death['options'] );
+		self::assertCount( 1, $at_death['pending'] );
+		self::assertSame( 'recovery_failed', $at_death['pending'][0]['outcome'] );
+		self::assertStringStartsWith( 'extraction failed: disk full' . self::LEFT_INACTIVE, $at_death['pending'][0]['detail'] );
+		self::assertStringContainsString( self::NOT_CHECKED, $at_death['pending'][0]['detail'] );
 	}
 
 	/**
@@ -1400,6 +1471,56 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		self::assertSame( 2, $calls );
 	}
 
+	/**
+	 * Fichier principal déjà inclus par ce processus (extension active au démarrage de la
+	 * requête) : activate_plugin() ne le rechargerait pas et l'activerait sans l'avoir
+	 * essayé. Refus, sans appel ; `active_plugins` n'est pas touchée.
+	 */
+	public function test_try_activate_refuses_a_plugin_whose_main_file_this_process_already_loaded(): void {
+		$this->active = false;
+		$this->loaded_at_boot();
+		$calls = 0;
+		Functions\when( 'activate_plugin' )->alias(
+			function () use ( &$calls ): ?WP_Error {
+				++$calls;
+				$this->active = true;
+				return null;
+			}
+		);
+
+		self::assertFalse( CommandExecutor::try_activate( self::FILE, false ) );
+		self::assertSame( 0, $calls );
+		self::assertFalse( $this->active );
+
+		$this->active = true; // Déjà active : rien à essayer, elle l'est.
+		self::assertTrue( CommandExecutor::try_activate( self::FILE, false ) );
+		self::assertSame( 0, $calls );
+	}
+
+	/**
+	 * Détection réelle, sans simulation : un fichier inclus par un autre chemin qui mène
+	 * au même endroit est reconnu, comme include_once le reconnaîtrait.
+	 */
+	public function test_main_file_loaded_recognises_a_file_this_process_really_included(): void {
+		$slug = 'g2rd-test-' . bin2hex( random_bytes( 6 ) );
+		$dir  = WP_PLUGIN_DIR . '/' . $slug;
+		mkdir( $dir . '/inc', 0777, true );
+		file_put_contents( $dir . '/' . $slug . '.php', "<?php\n// Extension factice, sans effet.\n" );
+		$file = $slug . '/' . $slug . '.php';
+		try {
+			self::assertFalse( CommandExecutor::main_file_loaded( $file ) );
+
+			include_once $dir . '/inc/../' . $slug . '.php';
+
+			self::assertTrue( CommandExecutor::main_file_loaded( $file ) );
+			self::assertFalse( CommandExecutor::main_file_loaded( 'akismet/akismet.php' ) );
+		} finally {
+			unlink( $dir . '/' . $slug . '.php' );
+			rmdir( $dir . '/inc' );
+			rmdir( $dir );
+		}
+	}
+
 	// ── Trace de reprise : seulement sur sa propre réservation ───────────────
 
 	/**
@@ -1475,6 +1596,16 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 	}
 
 	/**
+	 * L'extension était active au démarrage de la requête : WordPress a inclus son
+	 * fichier principal (wp-settings.php), au chemin qu'utilise activate_plugin(). Un
+	 * include_once ne le rechargerait plus dans ce processus.
+	 */
+	private function loaded_at_boot(): void {
+		$this->loaded = [ WP_PLUGIN_DIR . '/' . self::FILE ];
+		Functions\when( 'get_included_files' )->alias( fn (): array => $this->loaded );
+	}
+
+	/**
 	 * Mise à jour morte à moitié : en-tête 2.0, fichier ajouté, fichier retiré,
 	 * extension désactivée par le cœur.
 	 */
@@ -1512,7 +1643,8 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 	/**
 	 * Exécute `$fn` comme un autre processus PHP : sans la transaction que tient
 	 * celui du test, ni ses rollbacks commencés, ni ses essais d'activation (statiques,
-	 * propres à chaque processus).
+	 * propres à chaque processus), ni les fichiers qu'il a inclus (l'autre processus a
+	 * démarré extension désactivée).
 	 */
 	private function as_another_process( callable $fn ): void {
 		$statics = [
@@ -1525,12 +1657,15 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 			$mine[ $i ] = $property->getValue();
 			$property->setValue( null, $fresh );
 		}
+		$loaded       = $this->loaded;
+		$this->loaded = [];
 		try {
 			$fn();
 		} finally {
 			foreach ( $statics as $i => [ $property ] ) {
 				$property->setValue( null, $mine[ $i ] );
 			}
+			$this->loaded = $loaded;
 		}
 	}
 

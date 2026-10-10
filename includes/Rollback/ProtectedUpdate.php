@@ -81,6 +81,15 @@ final class ProtectedUpdate {
 	private const LEFT_INACTIVE = '; the plugin was left inactive: after this failed restore its files may be incomplete, and it is reactivated only if it loads without error, which it did not; check its files and the PHP error log, then roll it back again from the platform or reinstall it';
 
 	/**
+	 * Même ajout quand l'extension n'a pas pu être essayée : le processus avait déjà
+	 * inclus son fichier principal (requête où elle était active au démarrage : rollback
+	 * automatique, son filet de shutdown, rollback manuel), et le bac à sable ne le
+	 * rechargerait pas (cf. CommandExecutor::try_activate()). Décision du 2026-10-10 :
+	 * elle reste désactivée.
+	 */
+	private const LEFT_INACTIVE_NOT_CHECKED = '; the plugin was left inactive: after this failed restore its files may be incomplete, and it is reactivated only if it loads without error, which could not be checked because its code was already loaded earlier in this request; check its files and the PHP error log, then roll it back again from the platform or reinstall it';
+
+	/**
 	 * Priorité du contrôle d'avant remplacement des fichiers sur `upgrader_pre_install` :
 	 * avant Plugin_Upgrader::deactivate_plugin_before_upgrade() (10), qui laisse passer
 	 * une WP_Error sans désactiver l'extension.
@@ -384,9 +393,17 @@ final class ProtectedUpdate {
 	 * Restaure un plugin depuis un point : désactivation, fichiers, réactivation,
 	 * garde anti-réinstallation, `.maintenance`. Partagé avec le rollback manuel.
 	 *
+	 * Désactivation une fois le dossier actuel mis de côté, pas avant : un refus d'avant
+	 * (intégrité, version_drift, dossier impossible à déplacer) laisse l'extension telle
+	 * qu'elle était, active et intacte.
+	 *
 	 * Réactivation (`$reactivate`) : garantie après une restauration réussie ; après un
 	 * échec, seulement si l'extension se charge sans erreur, sinon elle reste inactive
-	 * et le message de l'exception le dit (cf. LEFT_INACTIVE).
+	 * et le message de l'exception le dit (cf. LEFT_INACTIVE). Jamais, après un échec,
+	 * dans un processus qui avait déjà chargé son fichier principal (requête où elle était
+	 * active au démarrage : rollback automatique, filet de shutdown de la mise à jour,
+	 * rollback manuel) : rien ne peut y vérifier qu'elle se charge, elle reste
+	 * désactivée (décision du 2026-10-10, cf. LEFT_INACTIVE_NOT_CHECKED).
 	 *
 	 * @param array<string, mixed> $point
 	 * @return array{version_before:string, version_after:string}
@@ -410,10 +427,21 @@ final class ProtectedUpdate {
 		// suppositions suffit à faire tomber la restauration entière.
 		self::ensure_filesystem();
 
-		deactivate_plugins( $plugin_file, true );
-
 		try {
-			$restored = $s->restorer->restore_from_zip( $path, $plugin_file, (string) $point['sha256'], $expected_version, $expected_current_version );
+			// Désactivation par le restaurateur, une fois le dossier mis de côté (et avant
+			// l'extraction). Plus tôt, un refus d'avant (version_drift d'un rollback manuel,
+			// par exemple) laisserait éteinte une extension intacte : dans une requête qui
+			// l'a chargée au démarrage, le bac à sable ne peut plus la rallumer.
+			$restored = $s->restorer->restore_from_zip(
+				$path,
+				$plugin_file,
+				(string) $point['sha256'],
+				$expected_version,
+				$expected_current_version,
+				static function () use ( $plugin_file ): void {
+					deactivate_plugins( $plugin_file, true );
+				}
+			);
 		} catch ( \Throwable $e ) {
 			// Restauration ÉCHOUÉE : le dossier n'est peut-être plus un tout cohérent. Le
 			// restaurateur remet le dossier d'avant en place quand il le peut, mais ce
@@ -421,10 +449,12 @@ final class ProtectedUpdate {
 			// pendant la copie des fichiers), et la remise en place peut échouer. Forcer
 			// `active_plugins` ferait alors tomber toutes les pages du site en « erreur
 			// critique ». Réactivation par le bac à sable d'activate_plugin() seulement :
-			// une extension qui ne se charge pas reste inactive, et l'erreur remontée à la
-			// plateforme le dit.
-			if ( $reactivate && ! self::reactivate_if_it_loads( $plugin_file, $network ) ) {
-				throw self::left_inactive( $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message déjà échappé par celui qui l'a levé, suffixe fixe.
+			// une extension qui ne se charge pas, ou qui ne peut pas être essayée ici,
+			// reste inactive, et l'erreur remontée à la plateforme dit pourquoi. Refus
+			// d'avant la mise de côté : l'extension n'a pas été désactivée, rien à faire.
+			$left_inactive = $reactivate ? self::reactivate_if_it_loads( $plugin_file, $network ) : null;
+			if ( null !== $left_inactive ) {
+				throw self::left_inactive( $e, $left_inactive ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message déjà échappé par celui qui l'a levé, suffixe fixe.
 			}
 			throw $e;
 		}
@@ -724,30 +754,37 @@ final class ProtectedUpdate {
 	 * d'une reprise : hors de l'administration (cron, REST), une extension saine qui
 	 * s'en sert au chargement lèverait une erreur et resterait inactive sans raison.
 	 *
-	 * @return bool Vrai si l'extension est active en sortie.
+	 * @return string|null Null si l'extension est active en sortie (encore active : refus
+	 *                     d'avant la désactivation) ; sinon, ce qui est ajouté à l'erreur.
 	 */
-	private static function reactivate_if_it_loads( string $plugin_file, bool $network ): bool {
+	private static function reactivate_if_it_loads( string $plugin_file, bool $network ): ?string {
 		try {
+			// Lu AVANT l'essai : un bac à sable qui lève inclut le fichier à son tour.
+			$loaded = CommandExecutor::main_file_loaded( $plugin_file );
 			self::ensure_filesystem();
-			return CommandExecutor::try_activate( $plugin_file, $network );
+			if ( CommandExecutor::try_activate( $plugin_file, $network ) ) {
+				return null;
+			}
+			return $loaded ? self::LEFT_INACTIVE_NOT_CHECKED : self::LEFT_INACTIVE;
 		} catch ( \Throwable $e ) {
 			// Précaution : l'erreur de la restauration doit remonter, pas celle-ci.
 			unset( $e );
-			return false;
+			return self::LEFT_INACTIVE;
 		}
 	}
 
 	/**
-	 * L'erreur d'une restauration qui a échoué, complétée : l'extension est restée
-	 * inactive. Même classe et même code pour une RestoreException (la plateforme lit
-	 * `error_code`) ; toute autre erreur devient une RuntimeException qui la porte.
+	 * L'erreur d'une restauration qui a échoué, complétée de ce qui a été fait de
+	 * l'extension (`$detail`, texte fixe). Même classe et même code pour une
+	 * RestoreException (la plateforme lit `error_code`) ; toute autre erreur devient une
+	 * RuntimeException qui la porte.
 	 */
-	private static function left_inactive( \Throwable $e ): \Throwable {
+	private static function left_inactive( \Throwable $e, string $detail ): \Throwable {
 		if ( $e instanceof RestoreException ) {
-			return $e->with_detail( self::LEFT_INACTIVE );
+			return $e->with_detail( $detail );
 		}
 		// Message déjà échappé par celui qui l'a levé, suffixe fixe.
-		return new \RuntimeException( $e->getMessage() . self::LEFT_INACTIVE, 0, $e );
+		return new \RuntimeException( $e->getMessage() . $detail, 0, $e );
 	}
 
 	/**

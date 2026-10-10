@@ -30,14 +30,16 @@ final class RestoreCommandsTest extends FilesystemTestCase {
 	private RestorePointStore $store;
 	private Snapshotter $snapshotter;
 	private bool $active = true;
+	private int $deactivations = 0;
 	/** @var array<string, mixed> */
 	private array $point = [];
 
 	protected function setUp(): void {
 		parent::setUp();
-		$this->store       = new RestorePointStore();
-		$this->snapshotter = new Snapshotter( $this->store, $this->plugins );
-		$this->active      = true;
+		$this->store         = new RestorePointStore();
+		$this->snapshotter   = new Snapshotter( $this->store, $this->plugins );
+		$this->active        = true;
+		$this->deactivations = 0;
 
 		Functions\when( 'get_plugins' )->alias( fn (): array => $this->plugins_on_disk() );
 		Functions\when( 'is_plugin_active' )->alias( fn (): bool => $this->active );
@@ -46,7 +48,16 @@ final class RestoreCommandsTest extends FilesystemTestCase {
 		Functions\when( 'is_wp_error' )->alias( static fn ( $v ): bool => $v instanceof WP_Error );
 		Functions\when( 'plugin_basename' )->alias( static fn ( string $f ): string => 'g2rd-connector/g2rd-connector.php' );
 		Functions\when( 'get_filesystem_method' )->justReturn( 'direct' );
-		Functions\when( 'deactivate_plugins' )->alias( function (): void { $this->active = false; } );
+		Functions\when( 'deactivate_plugins' )->alias(
+			function (): void {
+				++$this->deactivations;
+				$this->active = false;
+			}
+		);
+		// Comme sur un vrai site : l'extension est active au démarrage de la requête qui
+		// reçoit la commande, WordPress a inclus son fichier principal. Un include_once ne
+		// le rechargerait plus (cf. CommandExecutor::try_activate()).
+		Functions\when( 'get_included_files' )->justReturn( [ WP_PLUGIN_DIR . '/' . self::FILE ] );
 		Functions\when( 'activate_plugin' )->alias( function (): ?WP_Error { $this->active = true; return null; } );
 		Functions\when( 'wp_parse_url' )->alias( static fn ( string $url, int $component = -1 ) => parse_url( $url, $component ) );
 		Functions\when( 'home_url' )->alias( static fn ( string $p = '' ): string => 'https://site.test' . $p );
@@ -289,6 +300,87 @@ final class RestoreCommandsTest extends FilesystemTestCase {
 
 		self::assertSame( 'version_drift', $r['outcome'] );
 		self::assertSame( '2.0', $this->plugins_on_disk()[ self::FILE ]['Version'] );
+	}
+
+	/**
+	 * Refus d'avant la mise de côté du dossier (version installée qui n'est plus celle
+	 * attendue, archive d'une autre version) : l'extension n'est même pas désactivée.
+	 * Désactivée plus tôt, elle ne pourrait pas être rallumée dans cette requête, qui a
+	 * déjà chargé son fichier principal : une extension intacte resterait éteinte.
+	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider( 'refusals_before_the_folder_is_set_aside' )]
+	public function test_a_refusal_before_the_folder_is_set_aside_leaves_the_plugin_active( array $payload, string $error_code ): void {
+		$r = CommandExecutor::run(
+			'rollback_plugin',
+			$payload + [
+				'file'             => self::FILE,
+				'restore_point_id' => $this->point['id'],
+				'expected_sha256'  => $this->point['sha256'],
+			]
+		)['result'];
+
+		self::assertSame( $error_code, $r['outcome'] );
+		self::assertSame( $error_code, $r['error_code'] );
+		self::assertStringNotContainsString( 'left inactive', $r['error'] );
+		self::assertSame( 0, $this->deactivations, 'Jamais désactivée.' );
+		self::assertTrue( $this->active );
+		self::assertSame( '2.0', $this->plugins_on_disk()[ self::FILE ]['Version'] );
+	}
+
+	/** @return array<string, array{0: array<string, string>, 1: string}> */
+	public static function refusals_before_the_folder_is_set_aside(): array {
+		return [
+			'version_drift'               => [ [ 'expected_version' => '1.0', 'expected_current_version' => '2.1' ], 'version_drift' ],
+			'archive d\'une autre version' => [ [ 'expected_version' => '1.1', 'expected_current_version' => '2.0' ], 'rollback_failed_integrity' ],
+		];
+	}
+
+	/**
+	 * Restauration qui échoue en pleine extraction, extension qui se chargerait sans
+	 * erreur. Mais cette requête l'a chargée à son démarrage : le bac à sable ne la
+	 * rechargerait pas et l'activerait sans l'avoir essayée. Elle reste désactivée, et
+	 * le résultat le dit (même code d'erreur).
+	 */
+	public function test_a_failed_restore_leaves_the_plugin_inactive_in_the_request_that_loaded_it(): void {
+		$s = Services::make();
+		Services::override(
+			new Services(
+				$s->store,
+				$s->snapshotter,
+				new PluginRestorer(
+					$this->plugins,
+					static function (): void {
+						throw new \RuntimeException( 'disk full' );
+					}
+				),
+				$s->health,
+				$s->plugins_root
+			)
+		);
+		$activations = 0;
+		Functions\when( 'activate_plugin' )->alias(
+			function () use ( &$activations ): ?WP_Error {
+				++$activations;
+				$this->active = true;
+				return null;
+			}
+		);
+
+		$r = CommandExecutor::run( 'rollback_plugin', [
+			'file'                     => self::FILE,
+			'restore_point_id'         => $this->point['id'],
+			'expected_sha256'          => $this->point['sha256'],
+			'expected_version'         => '1.0',
+			'expected_current_version' => '2.0',
+		] )['result'];
+
+		self::assertSame( 'rollback_failed', $r['outcome'] );
+		self::assertSame( 'rollback_failed', $r['error_code'] );
+		self::assertStringStartsWith( 'extraction failed: disk full; the plugin was left inactive:', $r['error'] );
+		self::assertStringContainsString( 'which could not be checked because its code was already loaded earlier in this request', $r['error'] );
+		self::assertSame( 0, $activations, 'Aucun essai : il n\'essaierait rien.' );
+		self::assertFalse( $this->active );
+		self::assertNotContains( self::FILE, (array) ( $this->options['active_plugins'] ?? [] ) );
 	}
 
 	/** Point absent et pas d'archive de repli : la plateforme décide (wordpress.org ou échec explicite). */

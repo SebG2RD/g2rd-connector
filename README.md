@@ -301,6 +301,16 @@ dont le loopback est impossible donne « non vérifiable », jamais « cassé »
   jamais par une écriture directe d'`active_plugins` (son dossier peut être à moitié remplacé, ce
   qui mettrait tout le site en « erreur critique »), et si elle ne s'y charge pas elle reste
   inactive et l'erreur remontée à la plateforme le dit (« the plugin was left inactive… »).
+- Un rollback automatique en échec laisse l'extension désactivée. La requête de la mise à jour
+  l'avait chargée à son démarrage (elle était active) : le bac à sable d'activation ne la
+  rechargerait pas, et activerait sans l'essayer ce que la restauration manquée a laissé sur le
+  disque. Après une restauration qui échoue, une extension dont le fichier principal est déjà
+  chargé par la requête n'est plus réactivée (rollback automatique, filet de shutdown de la
+  requête de mise à jour, rollback manuel) : elle reste désactivée, et l'erreur remontée à la
+  plateforme le dit, avec le même code d'erreur (« the plugin was left inactive: … which could
+  not be checked because its code was already loaded earlier in this request… »). Une
+  restauration ne désactive plus l'extension qu'une fois son dossier mis de côté : un refus
+  d'avant (`version_drift`, intégrité) la laisse active et intacte au lieu de la désactiver.
 - Après un rollback, la version retirée est bloquée pour les mises à jour automatiques de
   WordPress jusqu'à la version suivante.
 - Le plugin ne se rollback jamais lui-même. La capacité `restore_points` n'est annoncée dans

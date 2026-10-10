@@ -81,6 +81,19 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 
 == Changelog ==
 
+= Unreleased =
+
+* **Fix: a failed automatic rollback leaves the plugin deactivated.** The request that runs the
+  update had loaded the plugin when it started (it was active), so the WordPress activation
+  sandbox would not load it again: it would activate whatever the failed restore left on disk
+  without testing it. After a failed restore, a plugin whose main file is already loaded by the
+  request is no longer reactivated (automatic rollback, shutdown handler of the update request,
+  manual rollback): it stays deactivated, and the error sent to the platform says so, with the
+  same error code ("the plugin was left inactive: … which could not be checked because its code
+  was already loaded earlier in this request…"). A restore now deactivates the plugin only once
+  its folder has been set aside: a refusal before that (`version_drift`, integrity) leaves the
+  plugin active and untouched instead of deactivated.
+
 = 1.13.0-rc.2 =
 
 Lighter on the server: fewer WordPress boots and fewer calls to the manager, same features.

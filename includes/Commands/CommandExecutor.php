@@ -418,12 +418,14 @@ final class CommandExecutor {
 	 * est introuvable reste inactive. Forcée, elle ferait tomber toutes les pages du site
 	 * en « erreur critique ».
 	 *
-	 * Limite : le bac à sable inclut le fichier principal par `include_once`. Dans un
-	 * processus qui l'a déjà inclus (requête où l'extension était active au démarrage),
-	 * rien n'est rechargé : l'extension est activée sans que ses fichiers sur le disque
-	 * soient chargés. Après un premier essai qui a levé (ou dont le processus est mort
-	 * pendant l'inclusion, filet de shutdown), un second essai dans le même processus est
-	 * donc refusé.
+	 * Le bac à sable inclut le fichier principal par `include_once` : dans un processus
+	 * qui l'a déjà inclus, rien n'est rechargé, et l'extension serait activée sans que ses
+	 * fichiers sur le disque aient été essayés. Refus, donc, quand le fichier principal
+	 * est déjà inclus (cf. main_file_loaded()) : requête où l'extension était active au
+	 * démarrage (rollback automatique de la mise à jour, son filet de shutdown, rollback
+	 * manuel ; décision du 2026-10-10 : l'extension y reste désactivée), ou essai
+	 * précédent qui a levé (ou dont le processus est mort pendant l'inclusion, filet de
+	 * shutdown).
 	 *
 	 * @return bool Vrai si le plugin est actif en sortie.
 	 */
@@ -436,9 +438,10 @@ final class CommandExecutor {
 			return true;
 		}
 
-		if ( isset( self::$sandbox_failed[ $file ] ) ) {
-			// Fichier principal déjà inclus par un essai qui a échoué : activate_plugin()
-			// ne le rechargerait pas, et activerait l'extension sans l'avoir chargée.
+		if ( isset( self::$sandbox_failed[ $file ] ) || self::main_file_loaded( $file ) ) {
+			// Fichier principal déjà inclus (au démarrage de la requête, ou par un essai qui
+			// a échoué) : activate_plugin() ne le rechargerait pas, et activerait
+			// l'extension sans l'avoir chargée.
 			return false;
 		}
 		// Posé avant l'inclusion : un essai qui meurt en route (erreur fatale que rien ne
@@ -470,6 +473,31 @@ final class CommandExecutor {
 		// `unexpected_output` : seule erreur qu'activate_plugin() rend APRÈS avoir écrit
 		// `active_plugins` (l'extension s'est chargée, mais a écrit quelque chose).
 		return 'unexpected_output' === $activated->get_error_code();
+	}
+
+	/**
+	 * Le fichier principal de l'extension est-il déjà inclus dans ce processus ? C'est
+	 * le cas dans toute requête où elle était active au démarrage : WordPress l'inclut
+	 * (wp-settings.php) au chemin qu'utilise activate_plugin(), et un `include_once` ne
+	 * le relirait plus (cf. try_activate()).
+	 *
+	 * Comparaison sur le chemin tel qu'écrit et sur le chemin résolu (lien symbolique) :
+	 * get_included_files() rend les chemins résolus, comme `include_once` les compare.
+	 * Séparateurs normalisés (Windows).
+	 */
+	public static function main_file_loaded( string $file ): bool {
+		$path       = WP_PLUGIN_DIR . '/' . $file;
+		$candidates = [ str_replace( '\\', '/', $path ) ];
+		$real       = realpath( $path );
+		if ( false !== $real ) {
+			$candidates[] = str_replace( '\\', '/', $real );
+		}
+		foreach ( get_included_files() as $included ) {
+			if ( in_array( str_replace( '\\', '/', $included ), $candidates, true ) ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
