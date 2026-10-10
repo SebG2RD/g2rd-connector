@@ -117,7 +117,7 @@ abstract class FilesystemTestCase extends TestCase {
 		return $total;
 	}
 
-	private function rrmdir( string $dir ): void {
+	protected function rrmdir( string $dir ): void {
 		if ( ! is_dir( $dir ) ) {
 			return;
 		}

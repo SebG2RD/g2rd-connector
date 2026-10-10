@@ -19,7 +19,9 @@ final class PendingOutcomes {
 	public const TTL        = 7 * 86400;
 
 	/**
-	 * @param array<string, mixed> $outcome plugin_file, restore_point_id, outcome, detail
+	 * @param array<string, mixed> $outcome plugin_file, restore_point_id, step, outcome, detail,
+	 *                                      reactivation (ce qui a été fait de l'extension après
+	 *                                      un `recovery_failed`, cf. ProtectedUpdate::reactivation()).
 	 */
 	public static function add( array $outcome, int $now ): void {
 		$all   = self::all();
@@ -28,6 +30,29 @@ final class PendingOutcomes {
 			$all = array_slice( $all, -self::MAX );
 		}
 		update_option( self::OPTION_KEY, $all, false );
+	}
+
+	/**
+	 * Complète un résultat déjà consigné (add()) : le plus récent qui est exactement
+	 * `$outcome` consigné à `$now`. Sert quand le résultat doit être écrit AVANT une
+	 * étape qui peut faire mourir le processus (cf. ProtectedUpdate::recover(), essai de
+	 * réactivation), puis précisé une fois l'étape passée.
+	 *
+	 * @param array<string, mixed> $outcome Tel que passé à add().
+	 * @param array<string, mixed> $changes Champs ajoutés ou remplacés.
+	 * @return bool Faux si ce résultat n'est plus là (retiré ou poussé dehors entre-temps).
+	 */
+	public static function complete( array $outcome, int $now, array $changes ): bool {
+		$consigned = array_merge( $outcome, [ 'at' => $now ] );
+		$all       = self::all();
+		for ( $i = count( $all ) - 1; $i >= 0; $i-- ) {
+			if ( $all[ $i ] === $consigned ) {
+				$all[ $i ] = array_merge( $all[ $i ], $changes );
+				update_option( self::OPTION_KEY, $all, false );
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**

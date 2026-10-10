@@ -74,6 +74,29 @@ final class CommandExecutor {
 	private const LEFT_INACTIVE_MID_UPDATE = '; the plugin was left inactive: the update stopped while WordPress was replacing it, and its files may be incomplete; check its files and the PHP error log, then update it again, roll it back or reinstall it';
 
 	/**
+	 * Ajouté à l'erreur d'une mise à jour interrompue par une exception APRÈS la copie des
+	 * fichiers (crochets de `upgrader_process_complete` : traductions, extensions), quand
+	 * l'extension a été réactivée (cf. perform_plugin_upgrade()). Sans caractère que
+	 * esc_html() change.
+	 */
+	private const INSTALLED_THEN_FAILED_REACTIVATED = '; WordPress had already installed the new version when this error occurred (its files are complete), so the plugin was reactivated; check the PHP error log for the code that raised it';
+
+	/** Même cas, extension non réactivée (inactive avant, ou reprise qui a pris la main). */
+	private const INSTALLED_THEN_FAILED = '; WordPress had already installed the new version when this error occurred (its files are complete); check the PHP error log for the code that raised it';
+
+	/** Issue d'un essai d'activation (cf. attempt_activation()) : active en sortie. */
+	public const ACTIVATION_ACTIVE = 'reactivated';
+
+	/** Laissée inactive : son chargement a levé une erreur (fichiers incomplets, classe manquante…). */
+	public const ACTIVATION_LOAD_ERROR = 'left_inactive_load_error';
+
+	/** Laissée inactive sans essai : son fichier principal est déjà inclus par ce processus. */
+	public const ACTIVATION_ALREADY_LOADED = 'left_inactive_already_loaded';
+
+	/** Laissée inactive : WordPress l'a refusée avant tout chargement (fichier introuvable, en-tête illisible). */
+	public const ACTIVATION_INVALID = 'left_inactive_invalid';
+
+	/**
 	 * Extensions dont try_activate() a inclus le fichier principal dans ce processus sans
 	 * pouvoir les activer : un nouvel essai n'inclurait plus rien (cf. try_activate()).
 	 *
@@ -247,7 +270,8 @@ final class CommandExecutor {
 		// réussi, ce filet ne fait rien. On ne l'arme que si le plugin était actif (on ne
 		// réactive jamais un plugin que l'admin avait volontairement laissé éteint).
 		//
-		// Seulement si upgrade() a rendu la main (décision du 2026-10-10). Une requête
+		// Seulement si upgrade() a rendu la main (décision du 2026-10-10), ou si la copie
+		// des fichiers était déjà terminée (`$files_installed`, cf. plus bas). Une requête
 		// morte EN PLEINE COPIE laisse des fichiers peut-être à moitié remplacés :
 		// activate_plugin() ne rechargerait pas le fichier principal, déjà inclus au
 		// démarrage de la requête, puis l'option serait forcée, et toutes les pages du
@@ -256,6 +280,13 @@ final class CommandExecutor {
 		// désactivé, il ne se rétablit pas seul et la plateforme le verra injoignable,
 		// ce que le propriétaire préfère à un site en erreur critique.
 		//
+		// Une fois la copie terminée, en revanche, rien n'est douteux : upgrade() déclenche
+		// encore `upgrader_process_complete` avant de rendre la main (téléchargement des
+		// traductions, crochets d'extensions, dont celui du connecteur, qui exécute
+		// l'ancien code en mémoire alors que les nouveaux fichiers sont sur le disque). Une
+		// erreur fatale ou un délai dépassé à cet endroit ne doit pas laisser désactivée
+		// une extension aux fichiers complets, le connecteur en particulier.
+		//
 		// Mise à jour protégée : le filet demande aussi le droit de réactiver. Une
 		// reprise d'un autre processus qui a pris la transaction (étape de plus de 10
 		// minutes) a désactivé l'extension et extrait l'archive : en cours, l'option
@@ -263,16 +294,35 @@ final class CommandExecutor {
 		// et une extension qu'elle a laissée inactive (restauration manquée) ne doit pas
 		// être forcée active ici (décision du 2026-10-10).
 		$upgrade_returned = false;
+		$files_installed  = false;
 		if ( $was_active ) {
 			register_shutdown_function(
-				static function () use ( $file, $was_network_active, $may_reactivate, &$upgrade_returned ): void {
-					/** @var bool $upgrade_returned Passé à vrai plus bas, par référence, quand upgrade() rend la main. */
-					if ( $upgrade_returned && ( null === $may_reactivate || $may_reactivate() ) ) {
+				static function () use ( $file, $was_network_active, $may_reactivate, &$upgrade_returned, &$files_installed ): void {
+					/**
+					 * Passés à vrai plus bas, par référence : quand upgrade() rend la main, et
+					 * quand la copie des fichiers de l'extension est terminée.
+					 *
+					 * @var bool $upgrade_returned
+					 * @var bool $files_installed
+					 */
+					if ( ( $upgrade_returned || $files_installed ) && ( null === $may_reactivate || $may_reactivate() ) ) {
 						self::force_reactivate( $file, $was_network_active );
 					}
 				}
 			);
 		}
+
+		// Marqueur « fichiers installés » : WP_Upgrader::install_package() applique
+		// `upgrader_post_install` une fois la copie terminée, avant
+		// `upgrader_process_complete`. En dernier (PHP_INT_MAX), pour lire la réponse
+		// définitive : une WP_Error d'un autre filtre (copie déclarée en échec) ne compte
+		// pas, ni une installation d'une autre extension (mise à jour imbriquée).
+		$mark_installed = static function ( $response, $hook_extra = [] ) use ( $file, &$files_installed ) {
+			if ( ! is_wp_error( $response ) && is_array( $hook_extra ) && ( $hook_extra['plugin'] ?? null ) === $file ) {
+				$files_installed = true;
+			}
+			return $response;
+		};
 
 		// Force le refresh du transient update_plugins avant l'upgrade pour
 		// garantir que Plugin_Upgrader voit la dernière release dispo.
@@ -286,17 +336,37 @@ final class CommandExecutor {
 
 		// Automatic_Upgrader_Skin = skin sans output, adapté à un contexte REST/cron.
 		$upgrader = new Plugin_Upgrader( new Automatic_Upgrader_Skin() );
+		add_filter( 'upgrader_post_install', $mark_installed, PHP_INT_MAX, 2 );
 		try {
 			$result = $upgrader->upgrade( $file );
 		} catch ( \Throwable $e ) {
-			// upgrade() n'a pas rendu la main : du code branché sur la mise à jour a levé,
-			// peut-être en pleine copie. Comme pour une requête morte, le filet ne réactive
-			// pas une extension que le cœur a déjà désactivée : elle reste désactivée, et
-			// l'erreur remontée à la plateforme le dit.
+			if ( $files_installed ) {
+				// Levée APRÈS la copie (`upgrader_process_complete`) : fichiers complets, comme
+				// si upgrade() avait rendu la main. L'extension est réactivée tout de suite
+				// (le filet le refera si la suite meurt), et l'erreur dit que la nouvelle
+				// version était déjà installée.
+				$reactivated = false;
+				try {
+					$reactivated = $was_active
+						&& ( null === $may_reactivate || $may_reactivate() )
+						&& self::force_reactivate( $file, $was_network_active );
+				} catch ( \Throwable $reactivation_error ) {
+					// Précaution : l'erreur d'origine doit remonter, pas celle-ci ; le filet
+					// de shutdown réessaiera.
+					unset( $reactivation_error );
+				}
+				throw new \RuntimeException( esc_html( $e->getMessage() . ( $reactivated ? self::INSTALLED_THEN_FAILED_REACTIVATED : self::INSTALLED_THEN_FAILED ) ), 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message échappé ; `$e` est l'exception chaînée, pas une sortie.
+			}
+			// upgrade() n'a pas rendu la main, la copie n'était pas terminée : du code
+			// branché sur la mise à jour a levé, peut-être en pleine copie. Comme pour une
+			// requête morte, le filet ne réactive pas une extension que le cœur a déjà
+			// désactivée : elle reste désactivée, et l'erreur remontée à la plateforme le dit.
 			if ( $was_active && ! is_plugin_active( $file ) ) {
 				throw new \RuntimeException( esc_html( $e->getMessage() . self::LEFT_INACTIVE_MID_UPDATE ), 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message échappé ; `$e` est l'exception chaînée, pas une sortie.
 			}
 			throw $e;
+		} finally {
+			remove_filter( 'upgrader_post_install', $mark_installed, PHP_INT_MAX );
 		}
 		$upgrade_returned = true;
 
@@ -456,19 +526,40 @@ final class CommandExecutor {
 	 * @return bool Vrai si le plugin est actif en sortie.
 	 */
 	public static function try_activate( string $file, bool $network_wide ): bool {
+		return self::ACTIVATION_ACTIVE === self::attempt_activation( $file, $network_wide );
+	}
+
+	/**
+	 * try_activate(), qui dit en plus pourquoi l'extension reste inactive : la plateforme
+	 * reçoit la cause exacte (cf. ProtectedUpdate::recover(), champ `reactivation`).
+	 *
+	 * @return string ACTIVATION_ACTIVE (active en sortie, déjà active comprise),
+	 *                ACTIVATION_ALREADY_LOADED (pas essayée : fichier principal inclus au
+	 *                démarrage de la requête), ACTIVATION_LOAD_ERROR (son chargement a levé
+	 *                une erreur, à cet essai ou à un essai précédent de ce processus) ou
+	 *                ACTIVATION_INVALID (refusée par WordPress avant tout chargement :
+	 *                fichier introuvable, en-tête illisible…).
+	 */
+	public static function attempt_activation( string $file, bool $network_wide ): string {
 		if ( ! function_exists( 'is_plugin_active' ) ) {
 			require_once ABSPATH . 'wp-admin/includes/plugin.php';
 		}
 
 		if ( is_plugin_active( $file ) ) {
-			return true;
+			return self::ACTIVATION_ACTIVE;
 		}
 
-		if ( isset( self::$sandbox_failed[ $file ] ) || self::main_file_loaded( $file ) ) {
-			// Fichier principal déjà inclus (au démarrage de la requête, ou par un essai qui
-			// a échoué) : activate_plugin() ne le rechargerait pas, et activerait
-			// l'extension sans l'avoir chargée.
-			return false;
+		// Fichier principal déjà inclus : activate_plugin() ne le rechargerait pas, et
+		// activerait l'extension sans l'avoir chargée.
+		if ( isset( self::$sandbox_failed[ $file ] ) ) {
+			// Par un essai précédent de ce processus, qui a levé (ou dont le processus est
+			// mort pendant l'inclusion, filet de shutdown) : son chargement a échoué.
+			return self::ACTIVATION_LOAD_ERROR;
+		}
+		if ( self::main_file_loaded( $file ) ) {
+			// Au démarrage de la requête (extension active) : rien ne peut vérifier ici
+			// qu'elle se charge.
+			return self::ACTIVATION_ALREADY_LOADED;
 		}
 		// Posé avant l'inclusion : un essai qui meurt en route (erreur fatale que rien ne
 		// rattrape) le laisse posé pour le filet de shutdown de ce processus.
@@ -487,18 +578,18 @@ final class CommandExecutor {
 				}
 			}
 			unset( $e );
-			return false;
+			return self::ACTIVATION_LOAD_ERROR;
 		}
 		// Rendu sans erreur levée : chargée, ou refusée AVANT l'inclusion (WP_Error de
 		// validation : fichier introuvable, en-tête absent…). Un nouvel essai serait un
 		// vrai chargement.
 		unset( self::$sandbox_failed[ $file ] );
 		if ( ! is_wp_error( $activated ) ) {
-			return true;
+			return self::ACTIVATION_ACTIVE;
 		}
 		// `unexpected_output` : seule erreur qu'activate_plugin() rend APRÈS avoir écrit
 		// `active_plugins` (l'extension s'est chargée, mais a écrit quelque chose).
-		return 'unexpected_output' === $activated->get_error_code();
+		return 'unexpected_output' === $activated->get_error_code() ? self::ACTIVATION_ACTIVE : self::ACTIVATION_INVALID;
 	}
 
 	/**

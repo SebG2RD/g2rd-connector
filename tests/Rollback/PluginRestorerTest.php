@@ -236,6 +236,67 @@ final class PluginRestorerTest extends FilesystemTestCase {
 	}
 
 	/**
+	 * Échec une fois le dossier mis de côté (extraction, rappel de l'appelant) : l'erreur
+	 * dit si le dossier d'avant a été remis en place tel quel. L'appelant s'en sert pour
+	 * rétablir, après un rollback manuel, l'état d'avant la commande (cf.
+	 * ProtectedUpdate::restore()). Dossier mis de côté perdu : remise en place impossible.
+	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider( 'failures_after_the_folder_is_set_aside' )]
+	public function test_a_failure_after_the_folder_is_set_aside_says_whether_it_was_put_back( string $step, bool $aside_lost, bool $put_back ): void {
+		$file   = $this->make_plugin( 'akismet', '1.0' );
+		$record = $this->snapshotter->create( $file, [ 'version' => '1.0' ], self::NOW );
+		$this->upgrade_plugin( 'akismet', '2.0' );
+		$tree   = $this->tree( $this->plugins . '/akismet' );
+		$fail   = function () use ( $aside_lost ): void {
+			if ( $aside_lost ) {
+				foreach ( glob( $this->plugins . '/akismet.g2rd-old-*' ) ?: [] as $aside ) {
+					$this->rrmdir( $aside );
+				}
+			}
+			throw new \RuntimeException( 'disk full' );
+		};
+		$restorer = new PluginRestorer( $this->plugins, 'extraction' === $step ? $fail : null );
+
+		try {
+			$restorer->restore_from_zip( (string) $this->store->path_for( $record ), $file, $record['sha256'], '1.0', '2.0', 'rappel' === $step ? $fail : null );
+			self::fail( 'exception attendue' );
+		} catch ( RestoreException $e ) {
+			self::assertSame( RestoreException::FAILED, $e->error_code() );
+			self::assertSame( $put_back, $e->previous_folder_restored() );
+		}
+
+		if ( $put_back ) {
+			self::assertSame( $tree, $this->tree( $this->plugins . '/akismet' ), 'Dossier d\'avant remis en place, intact.' );
+		} else {
+			self::assertDirectoryDoesNotExist( $this->plugins . '/akismet' );
+		}
+	}
+
+	/** @return array<string, array{0: string, 1: bool, 2: bool}> */
+	public static function failures_after_the_folder_is_set_aside(): array {
+		return [
+			'extraction en échec, dossier remis en place'  => [ 'extraction', false, true ],
+			'rappel en échec, dossier remis en place'      => [ 'rappel', false, true ],
+			'extraction en échec, dossier mis de côté perdu' => [ 'extraction', true, false ],
+		];
+	}
+
+	/** Refus d'avant la mise de côté : rien n'a été déplacé, rien n'est « remis en place ». */
+	public function test_a_refusal_before_the_folder_is_set_aside_puts_nothing_back(): void {
+		$file   = $this->make_plugin( 'akismet', '1.0' );
+		$record = $this->snapshotter->create( $file, [ 'version' => '1.0' ], self::NOW );
+		$this->upgrade_plugin( 'akismet', '2.1' );
+
+		try {
+			( new PluginRestorer( $this->plugins ) )->restore_from_zip( (string) $this->store->path_for( $record ), $file, $record['sha256'], '1.0', '2.0' );
+			self::fail( 'exception attendue' );
+		} catch ( RestoreException $e ) {
+			self::assertSame( RestoreException::VERSION_DRIFT, $e->error_code() );
+			self::assertFalse( $e->previous_folder_restored() );
+		}
+	}
+
+	/**
 	 * Zip wordpress.org (pas de hash) dont une entrée sort du dossier : refusé avant toute écriture.
 	 */
 	public function test_zip_entry_outside_the_plugin_directory_is_refused(): void {

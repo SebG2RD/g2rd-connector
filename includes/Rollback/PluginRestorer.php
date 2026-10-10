@@ -13,7 +13,8 @@
  *   5. vérifier la version extraite ;
  *   6. supprimer le dossier mis de côté.
  * Si une étape échoue après le 3, l'extraction partielle est retirée et le dossier
- * mis de côté reprend sa place.
+ * mis de côté reprend sa place ; l'exception dit s'il l'a reprise tel quel
+ * (RestoreException::previous_folder_restored()).
  *
  * La désactivation/réactivation du plugin, l'invalidation de l'OPcache, le
  * `.maintenance` et le contrôle de santé sont orchestrés par l'appelant
@@ -97,8 +98,8 @@ final class PluginRestorer {
 				$before_extract();
 			} catch ( \Throwable $e ) {
 				// Rien n'a été extrait : le dossier mis de côté reprend sa place.
-				$this->put_back( $target, $aside );
-				throw RestoreException::failed( esc_html( 'restore stopped before extracting the archive: ' . $e->getMessage() ) );
+				$restored = $this->put_back( $target, $aside );
+				throw RestoreException::failed( esc_html( 'restore stopped before extracting the archive: ' . $e->getMessage() ) )->after_put_back( $restored );
 			}
 		}
 
@@ -112,11 +113,11 @@ final class PluginRestorer {
 			}
 		} catch ( \Throwable $e ) {
 			// Retour arrière : on retire ce qui a été extrait, le dossier mis de côté reprend sa place.
-			$this->put_back( $target, $aside );
+			$restored = $this->put_back( $target, $aside );
 			if ( $e instanceof RestoreException ) {
-				throw $e;
+				throw $e->after_put_back( $restored ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message déjà échappé par celui qui l'a levé ; `$restored` est un booléen, pas une sortie.
 			}
-			throw RestoreException::failed( esc_html( 'extraction failed: ' . $e->getMessage() ) );
+			throw RestoreException::failed( esc_html( 'extraction failed: ' . $e->getMessage() ) )->after_put_back( $restored );
 		}
 
 		if ( file_exists( $aside ) ) {
@@ -149,12 +150,18 @@ final class PluginRestorer {
 	/**
 	 * Retour arrière d'une restauration manquée : ce qui a pu être extrait est retiré,
 	 * le dossier mis de côté reprend sa place (s'il y en avait un).
+	 *
+	 * @return bool Vrai si le dossier mis de côté a repris sa place, tel quel : les
+	 *              fichiers sont exactement ceux d'avant la restauration. Faux s'il n'y
+	 *              en avait pas (extension absente du disque), s'il a disparu, ou si le
+	 *              renommage a échoué (extraction partielle impossible à retirer).
 	 */
-	private function put_back( string $target, string $aside ): void {
+	private function put_back( string $target, string $aside ): bool {
 		$this->delete_path( $target );
-		if ( file_exists( $aside ) ) {
-			rename( $aside, $target );
+		if ( ! file_exists( $aside ) ) {
+			return false;
 		}
+		return rename( $aside, $target );
 	}
 
 	private function target_path( string $plugin_file ): string {

@@ -118,6 +118,12 @@ if ( ! class_exists( 'Plugin_Upgrader' ) ) {
 		/** @var callable|null Remplacement des fichiers : après le filtre, s'il n'a pas rendu de WP_Error. */
 		public static $on_upgrade = null;
 		/**
+		 * @var callable|null Crochets de `upgrader_process_complete` (traductions, extensions) :
+		 *                    après la copie et le filtre `upgrader_post_install`, encore dans
+		 *                    upgrade(), comme WP_Upgrader::run().
+		 */
+		public static $on_complete = null;
+		/**
 		 * @var mixed Retour de upgrade() quand le filtre rend une WP_Error. Null : la
 		 *            WP_Error elle-même. WordPress ne garde le résultat d'install_package()
 		 *            qu'après une installation réussie : selon la version, upgrade() peut
@@ -135,28 +141,36 @@ if ( ! class_exists( 'Plugin_Upgrader' ) ) {
 			if ( null !== self::$on_download ) {
 				( self::$on_download )( $file );
 			}
-			$pre_install = apply_filters(
-				'upgrader_pre_install',
-				true,
-				[
-					'plugin' => $file,
-					'type'   => 'plugin',
-					'action' => 'update',
-				]
-			);
+			$hook_extra  = [
+				'plugin' => $file,
+				'type'   => 'plugin',
+				'action' => 'update',
+			];
+			$pre_install = apply_filters( 'upgrader_pre_install', true, $hook_extra );
 			if ( $pre_install instanceof WP_Error ) {
 				return self::$result_on_pre_install_error ?? $pre_install;
 			}
 			if ( null !== self::$on_upgrade ) {
 				( self::$on_upgrade )( $file );
 			}
-			return self::$next_result;
+			if ( self::$next_result instanceof WP_Error ) {
+				// Copie en échec : install_package() rend l'erreur sans passer par `upgrader_post_install`.
+				return self::$next_result;
+			}
+			// Copie terminée : WP_Upgrader::install_package() applique ce filtre, puis
+			// run() déclenche `upgrader_process_complete`, même si le filtre a rendu une erreur.
+			$post_install = apply_filters( 'upgrader_post_install', true, $hook_extra, [] );
+			if ( null !== self::$on_complete ) {
+				( self::$on_complete )( $file );
+			}
+			return $post_install instanceof WP_Error ? $post_install : self::$next_result;
 		}
 
 		public static function reset(): void {
 			self::$next_result                 = true;
 			self::$on_download                 = null;
 			self::$on_upgrade                  = null;
+			self::$on_complete                 = null;
 			self::$result_on_pre_install_error = null;
 			self::$upgraded                    = [];
 		}

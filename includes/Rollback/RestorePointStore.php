@@ -150,6 +150,23 @@ final class RestorePointStore {
 	}
 
 	/**
+	 * hold(), sans jamais lever : après une restauration (manquée ou réussie), l'erreur
+	 * qui doit remonter est celle de la restauration, pas celle de la rétention (cf.
+	 * ProtectedUpdate::recover(), RestoreCommands::rollback_plugin()).
+	 *
+	 * @return bool Faux si la rétention a levé (point peut-être pas retenu).
+	 */
+	public function hold_quietly( string $id, int $hold_until ): bool {
+		try {
+			$this->hold( $id, $hold_until );
+			return true;
+		} catch ( \Throwable $e ) {
+			unset( $e );
+			return false;
+		}
+	}
+
+	/**
 	 * Supprime un point : son zip, puis son entrée d'index. Ne touche qu'à un
 	 * fichier présent dans l'index ET situé dans le dossier de stockage.
 	 */

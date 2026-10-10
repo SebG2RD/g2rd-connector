@@ -108,8 +108,21 @@ final class RestoreCommands {
 					// L'index du site et la plateforme ne racontent pas la même histoire : on ne touche à rien.
 					throw RestoreException::integrity( 'restore point hash differs from the platform record' );
 				}
-				$restored = ( new ProtectedUpdate( $s ) )->restore( $file, $point, $expected_version, $expected_current, $was_active, $network );
-				$s->store->hold( $point['id'], time() + (int) ( $payload['hold_max_seconds'] ?? RestorePointPurgeJob::DEFAULT_HOLD_MAX_SECONDS ) );
+				$hold_until = time() + (int) ( $payload['hold_max_seconds'] ?? RestorePointPurgeJob::DEFAULT_HOLD_MAX_SECONDS );
+				try {
+					// Rollback manuel : le dossier en place au démarrage de la commande est celui
+					// qui tournait, il peut être rétabli tel quel (cf. ProtectedUpdate::restore_archive()).
+					$restored = ( new ProtectedUpdate( $s ) )->restore( $file, $point, $expected_version, $expected_current, $was_active, $network, true );
+				} catch ( \Throwable $e ) {
+					// Rollback manqué : le point est retenu quand même, comme après un rollback
+					// automatique ou une reprise manqués. Sinon il garderait sa date
+					// d'expiration et la purge le supprimerait, alors qu'il reste le seul moyen
+					// de réessayer. En silence : l'erreur de la restauration, qui dit ce qu'est
+					// devenue l'extension, doit remonter, pas celle de la rétention.
+					$s->store->hold_quietly( (string) $point['id'], $hold_until );
+					throw $e;
+				}
+				$s->store->hold( $point['id'], $hold_until );
 				$via = 'restore_point';
 			} elseif ( '' !== $source ) {
 				$attempt     = 'download';
@@ -221,6 +234,12 @@ final class RestoreCommands {
 	 * la version lue dans l'archive et le confinement des entrées sont vérifiés.
 	 * L'empreinte calculée est toujours renvoyée, pour la trace et le résultat.
 	 *
+	 * Même restauration que depuis un point local (ProtectedUpdate::restore_archive()) :
+	 * extension désactivée une fois son dossier mis de côté, jamais pendant un refus
+	 * d'avant ; après un échec, état d'avant la commande rétabli si le dossier d'avant a
+	 * été remis en place tel quel, sinon réactivation seulement si elle se charge, et
+	 * l'erreur dit ce qu'est devenue l'extension.
+	 *
 	 * @param string $source_sha Empreinte attendue, normalisée (64 hex) ou chaîne vide.
 	 * @return array{version_before:string, version_after:string, sha256:string}
 	 * @throws RestoreException
@@ -245,23 +264,15 @@ final class RestoreCommands {
 			if ( '' !== $source_sha && ! hash_equals( $source_sha, $actual ) ) {
 				throw RestoreException::integrity( esc_html( 'downloaded archive hash does not match source_sha256 (got ' . $actual . ')' ) );
 			}
-			// Le restaurateur recompare l'empreinte (vide = non vérifiée) avant d'écrire.
-			$this->services->restorer->restore_from_zip( (string) $tmp, $file, $source_sha, $expected_version, $expected_current );
+			// Le restaurateur recompare l'empreinte (vide = non vérifiée) avant d'écrire. Même
+			// suite que pour un point local : désactivation pendant l'extraction,
+			// réactivation, garde, .maintenance, OPcache ; échec traité de la même façon
+			// (rollback manuel : le dossier d'avant la commande est sain par définition).
+			( new ProtectedUpdate( $this->services ) )->restore_archive( (string) $tmp, $file, $source_sha, $expected_version, $expected_current, $was_active, $network, true );
 		} finally {
 			if ( is_string( $tmp ) && file_exists( $tmp ) ) {
 				unlink( $tmp );
 			}
-		}
-
-		// Même suite que pour un point local : réactivation, garde, .maintenance, OPcache.
-		if ( ! function_exists( 'deactivate_plugins' ) ) {
-			require_once ABSPATH . 'wp-admin/includes/plugin.php';
-		}
-		if ( $was_active ) {
-			\G2RD\Connector\Commands\CommandExecutor::force_reactivate( $file, $network );
-		}
-		if ( null !== $expected_current && '' !== $expected_current ) {
-			AutoUpdateGuard::block( $file, $expected_current );
 		}
 
 		$plugins = get_plugins();

@@ -283,8 +283,11 @@ final class UpdateTransaction {
 	 *
 	 * Une mise à jour protégée prise par une reprise ne réactive jamais son extension :
 	 * la reprise l'a désactivée, extrait l'archive, et décide seule de la réactiver (cf.
-	 * ProtectedUpdate::run()). Ce contrôle couvre la fenêtre où une reprise a réservé la
-	 * transaction juste avant que la mise à jour la ferme (réservation non atomique).
+	 * ProtectedUpdate::run()). Après une fermeture faite par la mise à jour, ce contrôle
+	 * couvre la réservation d'une reprise qui avait lu la transaction encore ouverte et
+	 * l'écrit après la suppression (réservation non atomique). Il ne voit pas une
+	 * réservation écrite entre la relecture de close() et sa suppression : effacée par
+	 * celle-ci (cf. ProtectedUpdate::may_reactivate(), limite connue).
 	 */
 	public static function recovering_elsewhere( string $identity, int $now ): bool {
 		$stored = self::fresh();

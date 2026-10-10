@@ -125,11 +125,12 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		Functions\when( 'wp_update_themes' )->justReturn( null );
 		Functions\when( 'get_site_transient' )->justReturn( false );
 		Functions\when( 'delete_site_transient' )->justReturn( true );
-		// Seul `upgrader_pre_install` agit vraiment (Plugin_Upgrader simulé l'applique
-		// avant de remplacer les fichiers) ; les autres filtres restent sans effet.
+		// Seuls `upgrader_pre_install` et `upgrader_post_install` agissent vraiment
+		// (Plugin_Upgrader simulé les applique avant et après le remplacement des
+		// fichiers) ; les autres filtres restent sans effet.
 		Functions\when( 'add_filter' )->alias(
 			function ( string $hook, $callback, int $priority = 10 ): bool {
-				if ( 'upgrader_pre_install' === $hook ) {
+				if ( in_array( $hook, [ 'upgrader_pre_install', 'upgrader_post_install' ], true ) ) {
 					$this->filters[ $hook ][ $priority ][] = $callback;
 				}
 				return true;
@@ -1144,6 +1145,78 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 	}
 
 	/**
+	 * Une exception levée par `upgrader_process_complete`, une fois la nouvelle version
+	 * copiée : fichiers complets, transaction encore la sienne. L'extension est réactivée
+	 * (droit de réactiver accordé), l'erreur le dit, le point est retenu pour un rollback
+	 * depuis la plateforme.
+	 */
+	public function test_an_exception_once_the_files_are_installed_reactivates_the_plugin_and_keeps_the_point(): void {
+		$nets = $this->record_shutdown_nets();
+		$this->script_health( ok: 2, then_ok: 2 );
+		$this->loaded_at_boot();
+		Plugin_Upgrader::$on_complete = static function (): void {
+			throw new \RuntimeException( 'Language pack download timed out.' );
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+		foreach ( $nets as $net ) { // Fin de la requête.
+			$net();
+		}
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assertStringStartsWith( 'Language pack download timed out.; WordPress had already installed the new version when this error occurred (its files are complete), so the plugin was reactivated', $outcome['error'] );
+		self::assertSame( [ self::FILE ], $this->activated );
+		self::assertTrue( $this->active );
+		self::assertSame( '2.0', $this->plugins_on_disk()[ self::FILE ]['Version'] );
+		$points = array_values( $this->store->all() );
+		self::assertCount( 1, $points );
+		self::assertTrue( $points[0]['hold'], 'Point retenu pour un rollback depuis la plateforme.' );
+		self::assertNull( UpdateTransaction::current() );
+		self::assertSame( [], PendingOutcomes::all() );
+	}
+
+	/**
+	 * Réservation non atomique (cf. UpdateTransaction::reserve()) : une reprise d'un autre
+	 * processus avait lu la transaction encore ouverte, et sa réservation arrive juste
+	 * APRÈS que la mise à jour l'a fermée. La transaction réapparaît, réservée par cette
+	 * reprise, qui a désactivé l'extension et restaure. Le filet de la mise à jour ne la
+	 * réactive pas pendant ce temps (cf. ProtectedUpdate::may_reactivate()).
+	 */
+	public function test_the_shutdown_net_leaves_alone_a_recovery_whose_reservation_landed_after_the_update_closed(): void {
+		$nets = $this->record_shutdown_nets();
+		$this->script_health( ok: 2, then_ok: 2 );
+		$open           = null;
+		$this->on_probe = static function () use ( &$open ): void {
+			$open ??= UpdateTransaction::current();
+		};
+
+		$r = CommandExecutor::run( 'update_plugin', $this->payload( [] ) )['result'];
+		self::assertSame( ProtectedUpdate::OUTCOME_UPDATED, $r['outcome'] );
+		self::assertNull( UpdateTransaction::current(), 'Fermée par la mise à jour.' );
+		self::assertIsArray( $open );
+
+		// La réservation de la reprise arrive après la fermeture ; elle désactive l'extension.
+		$this->options[ UpdateTransaction::OPTION_KEY ] = array_merge(
+			$open,
+			[
+				'step'              => UpdateTransaction::STEP_RECOVERING,
+				'recovering_from'   => $open['step'],
+				'recovery_token'    => 'jeton-de-la-reprise',
+				'recovery_attempts' => 1,
+				'updated_at'        => time(),
+			]
+		);
+		$this->active = false;
+		$activated    = $this->activated;
+		foreach ( $nets as $net ) { // Fin de la requête de mise à jour.
+			$net();
+		}
+
+		self::assertSame( $activated, $this->activated, 'La reprise en cours décide seule.' );
+		self::assertFalse( $this->active );
+	}
+
+	/**
 	 * Le cœur échoue (WP_Error) sans qu'aucune reprise ait pris la transaction : la
 	 * requête l'a fermée elle-même, son filet rétablit l'extension désactivée par le
 	 * cœur, comme avant (WordPress a remis les fichiers d'origine).
@@ -1257,7 +1330,10 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		self::assertSame( 'recovery_failed', $pending[0]['outcome'] );
 		self::assertSame( UpdateTransaction::STEP_UPGRADING, $pending[0]['step'] );
 		self::assertStringContainsString( 'gave up after ' . UpdateTransaction::MAX_RECOVERY_ATTEMPTS . ' recovery attempts', $pending[0]['detail'] );
-		self::assertStringContainsString( 'is reactivated only if it loads without error (otherwise it stays inactive)', $pending[0]['detail'] );
+		// Résultat complété après l'essai : ce qui s'est réellement passé.
+		self::assertSame( CommandExecutor::ACTIVATION_ACTIVE, $pending[0]['reactivation'] );
+		self::assertStringContainsString( 'the plugin was not restored and was reactivated: it loads without error', $pending[0]['detail'] );
+		self::assertStringNotContainsString( 'otherwise it stays inactive', $pending[0]['detail'] );
 		self::assertStringContainsString( 'roll it back from the platform', $pending[0]['detail'] );
 		self::assertTrue( $this->store->get( $point['id'] )['hold'], 'Point gardé pour un rollback manuel.' );
 		self::assertNull( UpdateTransaction::current() );
@@ -1275,7 +1351,7 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 	 * critique ». Le résultat, déjà consigné, ne l'est qu'une fois.
 	 */
 	#[DataProvider( 'activation_failures' )]
-	public function test_a_recovery_that_gives_up_never_forces_a_plugin_that_does_not_load( string $failure ): void {
+	public function test_a_recovery_that_gives_up_never_forces_a_plugin_that_does_not_load( string $failure, string $reactivation, string $cause ): void {
 		$point = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
 		( Plugin_Upgrader::$on_upgrade )();
 		$this->dead_transaction( self::FILE, $point['id'] );
@@ -1311,7 +1387,11 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		$pending = PendingOutcomes::all();
 		self::assertCount( 1, $pending );
 		self::assertSame( 'recovery_failed', $pending[0]['outcome'] );
-		self::assertStringContainsString( 'otherwise it stays inactive', $pending[0]['detail'] );
+		// Résultat complété après l'essai : la cause exacte, et ce qu'il faut faire.
+		self::assertSame( $reactivation, $pending[0]['reactivation'] );
+		self::assertStringContainsString( 'the plugin was not restored and was left inactive: ' . $cause, $pending[0]['detail'] );
+		self::assertStringNotContainsString( 'otherwise it stays inactive', $pending[0]['detail'] );
+		self::assertStringContainsString( 'check its files and the PHP error log, then roll it back from the platform: its restore point is kept', $pending[0]['detail'] );
 		self::assertNull( UpdateTransaction::current() );
 
 		ProtectedUpdate::recover( time() + 3600 ); // Le contrôle reprogrammé : plus rien à faire.
@@ -1320,12 +1400,85 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		self::assertSame( [ 'hello/hello.php' ], $this->options['active_plugins'] );
 	}
 
-	/** @return array<string, array{0: string}> */
+	/**
+	 * Valeurs de CommandExecutor::ACTIVATION_*, écrites en clair : un fournisseur de
+	 * données s'exécute avant Brain Monkey, et y charger CommandExecutor le compilerait
+	 * sans Patchwork (get_included_files() et register_shutdown_function() n'y seraient
+	 * plus simulables).
+	 *
+	 * @return array<string, array{0: string, 1: string, 2: string}>
+	 */
 	public static function activation_failures(): array {
 		return [
-			'le fichier principal lève une Error' => [ 'error' ],
-			'activate_plugin() rend une WP_Error' => [ 'wp_error' ],
+			'le fichier principal lève une Error' => [ 'error', 'left_inactive_load_error', 'it raised an error while loading' ],
+			'activate_plugin() rend une WP_Error' => [ 'wp_error', 'left_inactive_invalid', 'WordPress refused to activate it' ],
 		];
+	}
+
+	/**
+	 * Abandon dans un processus qui a déjà chargé le fichier principal (filet de shutdown
+	 * d'une requête où l'extension était active, par exemple) : rien ne peut y vérifier
+	 * qu'elle se charge, elle reste inactive, et le résultat dit pourquoi.
+	 */
+	public function test_a_recovery_that_gives_up_where_the_plugin_is_already_loaded_says_it_could_not_check(): void {
+		$point = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
+		( Plugin_Upgrader::$on_upgrade )();
+		$this->dead_transaction( self::FILE, $point['id'] );
+		for ( $i = 0; $i < UpdateTransaction::MAX_RECOVERY_ATTEMPTS; $i++ ) {
+			$this->as_another_process( static fn () => UpdateTransaction::reserve( (array) UpdateTransaction::current(), time() ) );
+			$this->age_transaction( UpdateTransaction::STALE_AFTER_SECONDS + 100 );
+		}
+		$this->loaded_at_boot();
+
+		ProtectedUpdate::recover( time() );
+
+		self::assertSame( [], $this->activated, 'Aucun essai : il n\'essaierait rien.' );
+		self::assertFalse( $this->active );
+		$pending = PendingOutcomes::all();
+		self::assertCount( 1, $pending );
+		self::assertSame( CommandExecutor::ACTIVATION_ALREADY_LOADED, $pending[0]['reactivation'] );
+		self::assertStringContainsString( 'the plugin was not restored and was left inactive: whether it loads without error could not be checked, because its code was already loaded earlier in this request', $pending[0]['detail'] );
+	}
+
+	/** Abandon, extension inactive avant la mise à jour : jamais essayée, et le résultat le dit. */
+	public function test_a_recovery_that_gives_up_leaves_a_plugin_inactive_before_the_update_as_it_was(): void {
+		$point = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
+		( Plugin_Upgrader::$on_upgrade )();
+		$this->dead_transaction( self::FILE, $point['id'] );
+		$this->options[ UpdateTransaction::OPTION_KEY ]['was_active'] = false;
+		for ( $i = 0; $i < UpdateTransaction::MAX_RECOVERY_ATTEMPTS; $i++ ) {
+			$this->as_another_process( static fn () => UpdateTransaction::reserve( (array) UpdateTransaction::current(), time() ) );
+			$this->age_transaction( UpdateTransaction::STALE_AFTER_SECONDS + 100 );
+		}
+
+		ProtectedUpdate::recover( time() );
+
+		self::assertSame( [], $this->activated );
+		$pending = PendingOutcomes::all();
+		self::assertSame( ProtectedUpdate::REACTIVATION_AS_BEFORE, $pending[0]['reactivation'] );
+		self::assertStringContainsString( 'the plugin was not restored and is left inactive, as it was before the update', $pending[0]['detail'] );
+	}
+
+	/**
+	 * Reprise dont la restauration échoue, extension inactive avant la mise à jour : elle
+	 * n'est pas essayée, et le résultat dit qu'elle reste inactive comme avant (rien ne
+	 * le disait).
+	 */
+	public function test_a_recovery_whose_restore_fails_says_a_plugin_inactive_before_the_update_stays_so(): void {
+		$point = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
+		( Plugin_Upgrader::$on_upgrade )();
+		$this->dead_transaction( self::FILE, $point['id'] );
+		$this->options[ UpdateTransaction::OPTION_KEY ]['was_active'] = false;
+		$this->restore_fails( then_activation_throws: false );
+
+		ProtectedUpdate::recover( time() );
+
+		self::assertSame( [], $this->activated );
+		self::assertFalse( $this->active );
+		$pending = PendingOutcomes::all();
+		self::assertSame( 'recovery_failed', $pending[0]['outcome'] );
+		self::assertSame( ProtectedUpdate::REACTIVATION_AS_BEFORE, $pending[0]['reactivation'] );
+		self::assertSame( 'extraction failed: disk full; the plugin was inactive before the update and stays inactive; check its files, then roll it back from the platform: its restore point is kept', $pending[0]['detail'] );
 	}
 
 	/** Jusqu'à MAX_RECOVERY_ATTEMPTS reprises commencées, la restauration est tentée (délai dépassé passager, par exemple). */
@@ -1466,6 +1619,7 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		self::assertSame( 'recovery_failed', $at_death['pending'][0]['outcome'] );
 		self::assertStringStartsWith( 'extraction failed: disk full' . self::LEFT_INACTIVE, $at_death['pending'][0]['detail'] );
 		self::assertStringContainsString( self::NOT_CHECKED, $at_death['pending'][0]['detail'] );
+		self::assertSame( CommandExecutor::ACTIVATION_ALREADY_LOADED, $at_death['pending'][0]['reactivation'] );
 	}
 
 	/**
@@ -1492,6 +1646,7 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		self::assertSame( 'recovery_failed', $pending[0]['outcome'] );
 		self::assertStringStartsWith( 'extraction failed: disk full', $pending[0]['detail'] );
 		self::assertStringContainsString( self::LEFT_INACTIVE, $pending[0]['detail'] );
+		self::assertSame( CommandExecutor::ACTIVATION_LOAD_ERROR, $pending[0]['reactivation'] );
 		self::assertNull( UpdateTransaction::current() );
 	}
 
@@ -1530,6 +1685,32 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		self::assertFileExists( (string) $this->store->path_for( $kept ) );
 	}
 
+	/**
+	 * Restauration RÉUSSIE par la reprise, rétention du point qui lève (index des points
+	 * impossible à écrire) : l'ancienne version est bien en place, le résultat le dit.
+	 * Avant, l'erreur de la rétention faisait consigner `recovery_failed`.
+	 */
+	public function test_a_successful_recovery_is_reported_even_when_its_point_cannot_be_held(): void {
+		$point = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
+		( Plugin_Upgrader::$on_upgrade )();
+		$this->dead_transaction( self::FILE, $point['id'] );
+		Functions\when( 'update_option' )->alias(
+			function ( string $key, $value ): bool {
+				if ( RestorePointStore::OPTION_KEY === $key ) {
+					throw new \RuntimeException( 'base indisponible' );
+				}
+				$this->options[ $key ] = $value;
+				return true;
+			}
+		);
+
+		ProtectedUpdate::recover( time() );
+
+		self::assertSame( [ [ self::FILE, 'recovered_rolled_back' ] ], $this->pending_outcomes() );
+		self::assertSame( '1.0', $this->plugins_on_disk()[ self::FILE ]['Version'] );
+		self::assertTrue( $this->active );
+	}
+
 	/** Même reprise manquée, extension qui se charge : réactivée par le bac à sable, détail inchangé. */
 	public function test_a_recovery_whose_restore_fails_reactivates_a_plugin_that_loads(): void {
 		$point = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
@@ -1544,6 +1725,7 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		$pending = PendingOutcomes::all();
 		self::assertSame( 'recovery_failed', $pending[0]['outcome'] );
 		self::assertSame( 'extraction failed: disk full', $pending[0]['detail'] );
+		self::assertSame( CommandExecutor::ACTIVATION_ACTIVE, $pending[0]['reactivation'] );
 	}
 
 	/**
@@ -1612,6 +1794,9 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		self::assertCount( 1, $pending );
 		self::assertSame( 'recovery_failed', $pending[0]['outcome'] );
 		self::assertStringContainsString( self::LEFT_INACTIVE, $pending[0]['detail'] );
+		// Cause exacte : son chargement a échoué à l'essai précédent (pas « code déjà chargé au démarrage »).
+		self::assertSame( CommandExecutor::ACTIVATION_LOAD_ERROR, $pending[0]['reactivation'] );
+		self::assertStringNotContainsString( self::NOT_CHECKED, $pending[0]['detail'] );
 	}
 
 	/**
@@ -1688,6 +1873,89 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		}
 	}
 
+	/**
+	 * Données simulées : get_included_files() rend des chemins Windows (antislashs), ou
+	 * ne contient pas l'extension ; dossier présent ou absent (remise en place manquée :
+	 * realpath() faux). Le chemin tel qu'écrit suffit à reconnaître un fichier inclus au
+	 * démarrage ; un dossier absent ne fait ni erreur, ni faux positif.
+	 */
+	#[DataProvider( 'included_files_cases' )]
+	public function test_main_file_loaded_with_simulated_included_files( bool $folder_exists, string $included, bool $expected ): void {
+		$slug = 'g2rd-test-' . bin2hex( random_bytes( 6 ) );
+		$file = $slug . '/' . $slug . '.php';
+		$dir  = WP_PLUGIN_DIR . '/' . $slug;
+		if ( $folder_exists ) {
+			mkdir( $dir, 0777, true );
+			file_put_contents( $dir . '/' . $slug . '.php', "<?php\n" );
+		}
+		$path = match ( $included ) {
+			'antislashs' => str_replace( '/', '\\', WP_PLUGIN_DIR . '/' . $file ),
+			'résolu'     => (string) realpath( $dir . '/' . $slug . '.php' ),
+			'écrit'      => WP_PLUGIN_DIR . '/' . $file,
+			default      => WP_PLUGIN_DIR . '/akismet/akismet.php',
+		};
+		Functions\when( 'get_included_files' )->justReturn( [ __FILE__, $path ] );
+		try {
+			self::assertSame( $expected, CommandExecutor::main_file_loaded( $file ) );
+		} finally {
+			if ( $folder_exists ) {
+				unlink( $dir . '/' . $slug . '.php' );
+				rmdir( $dir );
+			}
+		}
+	}
+
+	/** @return array<string, array{0: bool, 1: string, 2: bool}> */
+	public static function included_files_cases(): array {
+		return [
+			'chemin Windows (antislashs), dossier présent' => [ true, 'antislashs', true ],
+			'chemin Windows (antislashs), dossier absent'  => [ false, 'antislashs', true ],
+			'chemin résolu par realpath()'                 => [ true, 'résolu', true ],
+			'dossier absent, inclus au chemin écrit'       => [ false, 'écrit', true ],
+			'dossier absent, jamais inclus'                => [ false, 'autre', false ],
+			'dossier présent, jamais inclus'               => [ true, 'autre', false ],
+		];
+	}
+
+	/**
+	 * Vrai lien symbolique (dossier d'extension qui pointe ailleurs, possible chez
+	 * certains hébergeurs) : PHP enregistre le chemin résolu dans get_included_files(),
+	 * comme include_once le compare. Sous Windows sans le droit de créer des liens
+	 * symboliques, une jonction (même résolution par realpath()) en tient lieu ; ignoré
+	 * si le système refuse les deux.
+	 */
+	public function test_main_file_loaded_recognises_a_plugin_folder_that_is_a_symbolic_link(): void {
+		$slug   = 'g2rd-test-' . bin2hex( random_bytes( 6 ) );
+		$target = $this->root . '/ailleurs/' . $slug;
+		$link   = WP_PLUGIN_DIR . '/' . $slug;
+		mkdir( $target, 0777, true );
+		file_put_contents( $target . '/' . $slug . '.php', "<?php\n// Extension factice, sans effet.\n" );
+		if ( ! is_dir( WP_PLUGIN_DIR ) ) {
+			mkdir( WP_PLUGIN_DIR, 0777, true );
+		}
+		if ( ! @symlink( $target, $link ) && ! self::windows_junction( $target, $link ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- refus attendu sous Windows sans droit.
+			self::markTestSkipped( 'Le système refuse de créer un lien symbolique ou une jonction.' );
+		}
+		$file = $slug . '/' . $slug . '.php';
+		try {
+			self::assertNotSame(
+				str_replace( '\\', '/', $link . '/' . $slug . '.php' ),
+				str_replace( '\\', '/', (string) realpath( $link . '/' . $slug . '.php' ) ),
+				'Le chemin résolu mène ailleurs que WP_PLUGIN_DIR.'
+			);
+			self::assertFalse( CommandExecutor::main_file_loaded( $file ) );
+
+			include_once $link . '/' . $slug . '.php';
+
+			self::assertTrue( CommandExecutor::main_file_loaded( $file ) );
+		} finally {
+			// Le lien d'abord (sans suivre la cible) : rmdir() sous Windows, unlink() ailleurs.
+			if ( ! ( '\\' === DIRECTORY_SEPARATOR ? @rmdir( $link ) : @unlink( $link ) ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+				@unlink( $link ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+			}
+		}
+	}
+
 	// ── Trace de reprise : seulement sur sa propre réservation ───────────────
 
 	/**
@@ -1725,6 +1993,20 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 	}
 
 	// ── Outils ────────────────────────────────────────────────────────────────
+
+	/**
+	 * Jonction Windows (`mklink /J`, sans droit particulier) de `$link` vers `$target` :
+	 * realpath() et get_included_files() la résolvent comme un lien symbolique. Faux
+	 * hors de Windows, ou si elle n'a pas pu être créée.
+	 */
+	private static function windows_junction( string $target, string $link ): bool {
+		if ( '\\' !== DIRECTORY_SEPARATOR || ! function_exists( 'exec' ) ) {
+			return false;
+		}
+		$to_windows = static fn ( string $path ): string => '"' . str_replace( '/', '\\', $path ) . '"';
+		exec( 'cmd /c mklink /J ' . $to_windows( $link ) . ' ' . $to_windows( $target ) . ' 2>&1', $output, $code );
+		return 0 === $code && is_dir( $link );
+	}
 
 	/**
 	 * Rappels passés à register_shutdown_function() pendant le test.

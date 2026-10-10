@@ -311,6 +311,27 @@ dont le loopback est impossible donne « non vérifiable », jamais « cassé »
   not be checked because its code was already loaded earlier in this request… »). Une
   restauration ne désactive plus l'extension qu'une fois son dossier mis de côté : un refus
   d'avant (`version_drift`, intégrité) la laisse active et intacte au lieu de la désactiver.
+  Exception pour le rollback manuel (ci-dessous) : quand le dossier d'avant la commande a été
+  remis en place tel quel, l'extension est réactivée comme avant.
+- Un rollback manuel (`rollback_plugin`, point local ou archive téléchargée) qui échoue une fois
+  le dossier de l'extension mis de côté (disque plein pendant l'extraction, par exemple) rétablit
+  l'état d'avant la commande : le restaurateur a remis en place, tel quel, le dossier qui
+  tournait au démarrage, et l'extension, active avant, est réactivée. Elle restait désactivée :
+  une boutique WooCommerce dont le rollback manquait restait éteinte alors qu'elle fonctionnait
+  avant. L'erreur le dit, avec le même code (« the plugin was put back as it was before this
+  rollback… retry the rollback from the platform »). Si ce dossier n'a pas pu être remis en
+  place, rien ne change : l'extension n'est réactivée que si elle se charge, sinon elle reste
+  désactivée et l'erreur le dit. Le rollback automatique et les reprises ne sont pas concernés :
+  le dossier qu'ils remettent en place est la nouvelle version mesurée cassée, ou des fichiers à
+  moitié copiés.
+- Le rollback manuel depuis une archive téléchargée suit désormais exactement le chemin du point
+  local : l'extension est désactivée pendant l'extraction (elle restait active pendant que ses
+  fichiers étaient remplacés), un refus d'avant la mise de côté ne la touche pas, et un échec est
+  traité comme ci-dessus (état d'avant rétabli, ou réactivation seulement si elle se charge, et
+  l'erreur dit ce qu'est devenue l'extension).
+- Un rollback manuel depuis un point local qui échoue garde son point : il est retenu
+  (`hold_max_seconds`, 7 jours par défaut) au lieu de garder sa date d'expiration, et la purge ne
+  le supprime plus ; il reste disponible pour réessayer.
 - Une mise à jour protégée ne réactive jamais son extension après une reprise faite par un
   autre processus. Quand une étape dure plus de 10 minutes, la reprise du cron prend la
   transaction, restaure l'extension et décide seule de la réactiver. Si sa restauration a
@@ -330,13 +351,34 @@ dont le loopback est impossible donne « non vérifiable », jamais « cassé »
   désactivée, et l'erreur le dit (« the plugin was left inactive: the update stopped while
   WordPress was replacing it… »). Une mise à jour qui rend une erreur (WordPress a remis les
   fichiers d'origine) ne change pas : l'extension est réactivée.
+- Une fois la copie des fichiers terminée (filtre `upgrader_post_install` de WordPress, sans
+  erreur, pour cette extension), la mise à jour compte comme ayant rendu la main. WordPress
+  exécute encore `upgrader_process_complete` avant de rendre la main (téléchargement des
+  traductions, crochets d'extensions, dont celui du connecteur) : une erreur fatale ou un délai
+  dépassé à cet endroit laissait l'extension désactivée, le connecteur compris (site injoignable
+  par la plateforme), alors que ses fichiers étaient complets. Le filet de shutdown la réactive
+  désormais. Une exception levée à cet endroit la réactive tout de suite, et l'erreur dit que la
+  nouvelle version était déjà installée (« WordPress had already installed the new version when
+  this error occurred (its files are complete), so the plugin was reactivated… »), au lieu de
+  « left inactive… files may be incomplete », faux dans ce cas. Mise à jour protégée : même
+  règle, sous réserve du droit de réactiver (aucune reprise n'a pris la transaction).
 - En multisite, le rollback automatique réactive une extension active pour tout le réseau…
   pour tout le réseau. Elle n'était réactivée que pour le site courant : l'état réseau était lu
   dans une clé que le résultat de la mise à jour ne contient jamais.
 - Une reprise dont la restauration échoue garde son point de restauration : il est retenu
   (7 jours au plus, comme après un rollback automatique manqué) au lieu de garder sa date
   d'expiration, et la purge ne le supprime plus. Il reste disponible pour remettre l'ancienne
-  version à la main.
+  version à la main. Une reprise dont la restauration réussit n'est plus consignée
+  `recovery_failed` quand la rétention du point échoue ensuite.
+- Tout résultat `recovery_failed` dit ce qu'est devenue l'extension : nouveau champ
+  `reactivation` (`reactivated`, `left_inactive_load_error` : son chargement a levé une erreur,
+  `left_inactive_already_loaded` : son code était déjà chargé dans la requête, impossible de
+  vérifier, `left_inactive_invalid` : WordPress a refusé de l'activer, `left_inactive_as_before` :
+  inactive avant la mise à jour). À l'abandon d'une reprise (3 reprises inachevées), le détail,
+  consigné avant l'essai de réactivation (il disait seulement « reactivated only if it loads
+  without error »), est complété après l'essai avec la cause exacte et l'action à mener. Une
+  reprise manquée sur une extension inactive avant la mise à jour le dit aussi (« the plugin was
+  inactive before the update and stays inactive… »).
 - Après un rollback, la version retirée est bloquée pour les mises à jour automatiques de
   WordPress jusqu'à la version suivante.
 - Le plugin ne se rollback jamais lui-même. La capacité `restore_points` n'est annoncée dans

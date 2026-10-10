@@ -92,7 +92,26 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   same error code ("the plugin was left inactive: … which could not be checked because its code
   was already loaded earlier in this request…"). A restore now deactivates the plugin only once
   its folder has been set aside: a refusal before that (`version_drift`, integrity) leaves the
-  plugin active and untouched instead of deactivated.
+  plugin active and untouched instead of deactivated. Exception for a manual rollback (below):
+  when the folder it started with was put back unchanged, the plugin is reactivated as before.
+* **Fix: a failed manual rollback puts the plugin back as it was before the command.** When a
+  manual rollback (`rollback_plugin`, local restore point or downloaded archive) fails once the
+  plugin folder has been set aside (disk full while extracting, for instance), the folder that
+  was running when the command started is put back unchanged, and the plugin, active before, is
+  now reactivated. It used to stay deactivated: a WooCommerce shop whose rollback failed stayed
+  down although it worked before. The error says so, with the same error code ("the plugin was
+  put back as it was before this rollback… retry the rollback from the platform"). If that folder
+  could not be put back, nothing changes: the plugin is reactivated only if it loads, otherwise
+  it stays deactivated and the error says so. Automatic rollbacks and recoveries are not
+  affected: the folder they put back is the new version found broken, or half-copied files.
+* **Fix: a manual rollback from a downloaded archive follows the same path as one from a local
+  restore point.** The plugin is now deactivated while its files are extracted (it stayed active
+  while they were replaced), a refusal before its folder is set aside leaves it untouched, and a
+  failure is handled as above (state before the command restored, or reactivation only if it
+  loads, and the error says what became of the plugin).
+* **Fix: a failed manual rollback from a local restore point keeps that point.** The point is now
+  held (`hold_max_seconds`, 7 days by default) instead of keeping its expiry date, so the purge no
+  longer deletes it: it stays available to try again.
 * **Fix: a protected update never reactivates its plugin after a recovery run by another
   process.** When a step lasts more than 10 minutes, a recovery started by the cron takes the
   transaction over, restores the plugin and alone decides whether it is reactivated. If that
@@ -113,12 +132,34 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   so ("the plugin was left inactive: the update stopped while WordPress was replacing it…"). An
   upgrade that returns an error (WordPress put the previous files back) is unchanged: the
   plugin is reactivated.
+* **Fix: once WordPress has finished copying the new files, a plugin update counts as returned.**
+  WordPress still runs `upgrader_process_complete` before the upgrade returns (translation
+  downloads, plugin hooks, the connector's own included). A fatal error or a time limit hit there
+  used to leave the plugin deactivated, the connector included (site unreachable by the
+  platform), although its files were complete. Copy completion is now detected
+  (`upgrader_post_install`, without error, for this plugin) and the shutdown handler reactivates
+  the plugin. An exception thrown there reactivates it at once, and the error says the new
+  version was already installed ("WordPress had already installed the new version when this
+  error occurred (its files are complete), so the plugin was reactivated…") instead of the
+  wrong "left inactive… files may be incomplete". Protected updates follow the same rule, as
+  long as no recovery took their transaction over.
 * **Fix: on a multisite network, an automatic rollback reactivates a network-active plugin
   network-wide.** It was reactivated for the current site only: the network state was read from
   a key that the update result never contains.
 * **Fix: a recovery whose restore fails keeps its restore point.** The point is now held (up
   to 7 days, like after a failed automatic rollback) instead of keeping its expiry date, so the
-  purge no longer deletes it: it stays available to put the previous version back by hand.
+  purge no longer deletes it: it stays available to put the previous version back by hand. A
+  recovery whose restore succeeds is no longer reported `recovery_failed` when holding the point
+  fails afterwards.
+* **Fix: every `recovery_failed` result says what became of the plugin.** New `reactivation`
+  field: `reactivated`, `left_inactive_load_error` (it raised an error while loading),
+  `left_inactive_already_loaded` (its code was already loaded in the request, so loading could
+  not be checked), `left_inactive_invalid` (WordPress refused to activate it) or
+  `left_inactive_as_before` (inactive before the update). When a recovery gives up (3 unfinished
+  recoveries), the detail, written before the reactivation attempt (it only said "reactivated
+  only if it loads without error"), is completed after it with the exact cause and what to do. A
+  failed recovery of a plugin that was inactive before the update now says so too ("the plugin
+  was inactive before the update and stays inactive…").
 
 = 1.13.0-rc.2 =
 

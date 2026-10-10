@@ -7,6 +7,7 @@ namespace G2RD\Connector\Tests\Rollback;
 use Brain\Monkey\Actions;
 use Brain\Monkey\Functions;
 use G2RD\Connector\Commands\CommandExecutor;
+use G2RD\Connector\Cron\RestorePointPurgeJob;
 use G2RD\Connector\Rest\Auth;
 use G2RD\Connector\Rollback\AutoUpdateGuard;
 use G2RD\Connector\Rollback\HealthChecker;
@@ -31,15 +32,18 @@ final class RestoreCommandsTest extends FilesystemTestCase {
 	private Snapshotter $snapshotter;
 	private bool $active = true;
 	private int $deactivations = 0;
+	/** @var list<bool> État d'activation de l'extension à chaque extraction (cf. restore_fails()). */
+	private array $active_at_extraction = [];
 	/** @var array<string, mixed> */
 	private array $point = [];
 
 	protected function setUp(): void {
 		parent::setUp();
-		$this->store         = new RestorePointStore();
-		$this->snapshotter   = new Snapshotter( $this->store, $this->plugins );
-		$this->active        = true;
-		$this->deactivations = 0;
+		$this->store                = new RestorePointStore();
+		$this->snapshotter          = new Snapshotter( $this->store, $this->plugins );
+		$this->active               = true;
+		$this->deactivations        = 0;
+		$this->active_at_extraction = [];
 
 		Functions\when( 'get_plugins' )->alias( fn (): array => $this->plugins_on_disk() );
 		Functions\when( 'is_plugin_active' )->alias( fn (): bool => $this->active );
@@ -180,31 +184,16 @@ final class RestoreCommandsTest extends FilesystemTestCase {
 	}
 
 	/**
-	 * La voie de secours ne vaut QUE pour une restauration réussie. Restauration qui
-	 * échoue en pleine extraction (disque plein) : le dossier peut être à moitié
-	 * remplacé. L'extension n'est réactivée que si elle se charge sans erreur ; ici
-	 * elle lève une Error, elle reste inactive (jamais d'écriture forcée
+	 * La voie de secours ne vaut QUE pour une restauration réussie, ou pour le dossier
+	 * qui tournait avant la commande. Restauration qui échoue en pleine extraction
+	 * (disque plein), dossier d'avant impossible à remettre en place : ce qui reste sur
+	 * le disque est douteux. L'extension n'est réactivée que si elle se charge sans
+	 * erreur ; ici elle ne peut pas l'être, elle reste inactive (jamais d'écriture forcée
 	 * d'`active_plugins`, qui mettrait tout le site en « erreur critique »), et le
 	 * résultat le dit.
 	 */
 	public function test_a_failed_restore_never_forces_a_plugin_that_does_not_load(): void {
-		$s = Services::make();
-		Services::override(
-			new Services(
-				$s->store,
-				$s->snapshotter,
-				new PluginRestorer(
-					$this->plugins,
-					static function ( string $zip, string $destination ): void {
-						mkdir( $destination . '/akismet', 0777, true );
-						file_put_contents( $destination . '/akismet/akismet.php', "<?php\n/**\n * Plugin Name: akismet\n" );
-						throw new \RuntimeException( 'disk full' );
-					}
-				),
-				$s->health,
-				$s->plugins_root
-			)
-		);
+		$this->restore_fails( partial: true, aside_lost: true );
 		$level = ob_get_level();
 		Functions\when( 'activate_plugin' )->alias(
 			static function (): void {
@@ -228,7 +217,133 @@ final class RestoreCommandsTest extends FilesystemTestCase {
 		self::assertFalse( $this->active, 'L\'extension reste inactive : le site reste debout.' );
 		self::assertNotContains( self::FILE, (array) ( $this->options['active_plugins'] ?? [] ), 'active_plugins jamais écrite de force.' );
 		self::assertSame( $level, ob_get_level() );
-		self::assertSame( '2.0', $this->plugins_on_disk()[ self::FILE ]['Version'], 'Dossier d\'origine remis en place par le restaurateur.' );
+		self::assertArrayNotHasKey( self::FILE, $this->plugins_on_disk(), 'Dossier d\'origine perdu : seule l\'extraction partielle a été retirée.' );
+	}
+
+	/**
+	 * Rollback manuel (point local ou archive téléchargée) qui échoue en pleine
+	 * extraction (disque plein) : le restaurateur remet en place, tel quel, le dossier
+	 * qui tournait au démarrage de la commande. Revenir à l'état d'avant la commande
+	 * n'est jamais pire que cet état : l'extension, active avant, est réactivée (une
+	 * boutique ne reste pas éteinte parce que le rollback a manqué), et l'erreur le dit.
+	 * Pendant l'extraction, l'extension est désactivée, sur les deux chemins.
+	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider( 'manual_rollback_sources' )]
+	public function test_a_failed_manual_rollback_puts_the_plugin_back_as_it_was_before( string $via ): void {
+		$tree = $this->tree( $this->plugins . '/akismet' );
+		$this->restore_fails( partial: true, aside_lost: false );
+
+		$outcome = CommandExecutor::run( 'rollback_plugin', $this->rollback_payload( $via ) );
+
+		self::assertSame( 'done', $outcome['status'] );
+		$r = $outcome['result'];
+		self::assertSame( 'rollback_failed', $r['outcome'] );
+		self::assertSame( 'rollback_failed', $r['error_code'] );
+		self::assertSame( $via, $r['via'] );
+		self::assertStringStartsWith( 'extraction failed: disk full; the plugin was put back as it was before this rollback', $r['error'] );
+		self::assertStringNotContainsString( 'left inactive', $r['error'] );
+		self::assertSame( [ false ], $this->active_at_extraction, 'Désactivée pendant l\'extraction.' );
+		self::assertSame( 1, $this->deactivations );
+		self::assertTrue( $this->active, 'Réactivée : son dossier d\'avant la commande est de retour, intact.' );
+		self::assertSame( $tree, $this->tree( $this->plugins . '/akismet' ) );
+	}
+
+	/**
+	 * Même échec, mais le dossier d'avant n'a pas pu être remis en place : ce qui reste
+	 * sur le disque n'a jamais tourné. La requête a chargé l'extension à son démarrage :
+	 * le bac à sable ne la rechargerait pas et l'activerait sans l'avoir essayée. Elle
+	 * reste désactivée, et le résultat le dit (même code d'erreur). Vaut aussi pour
+	 * l'archive téléchargée, qui suit le même chemin.
+	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider( 'manual_rollback_sources' )]
+	public function test_a_failed_restore_leaves_the_plugin_inactive_in_the_request_that_loaded_it( string $via ): void {
+		$this->restore_fails( partial: false, aside_lost: true );
+		$activations = 0;
+		Functions\when( 'activate_plugin' )->alias(
+			function () use ( &$activations ): ?WP_Error {
+				++$activations;
+				$this->active = true;
+				return null;
+			}
+		);
+
+		$r = CommandExecutor::run( 'rollback_plugin', $this->rollback_payload( $via ) )['result'];
+
+		self::assertSame( 'rollback_failed', $r['outcome'] );
+		self::assertSame( 'rollback_failed', $r['error_code'] );
+		self::assertStringStartsWith( 'extraction failed: disk full; the plugin was left inactive:', $r['error'] );
+		self::assertStringContainsString( 'which could not be checked because its code was already loaded earlier in this request', $r['error'] );
+		self::assertSame( [ false ], $this->active_at_extraction );
+		self::assertSame( 0, $activations, 'Aucun essai : il n\'essaierait rien.' );
+		self::assertFalse( $this->active );
+		self::assertNotContains( self::FILE, (array) ( $this->options['active_plugins'] ?? [] ) );
+	}
+
+	/** @return array<string, array{0: string}> */
+	public static function manual_rollback_sources(): array {
+		return [
+			'point de restauration local' => [ 'restore_point' ],
+			'archive téléchargée'         => [ 'download' ],
+		];
+	}
+
+	/**
+	 * Rollback manuel depuis un point local qui échoue : le point est retenu (plafond
+	 * envoyé par la plateforme). Sinon il garderait sa date d'expiration et la purge le
+	 * supprimerait, alors qu'il reste le seul moyen de réessayer.
+	 */
+	public function test_a_failed_manual_rollback_keeps_its_restore_point_out_of_the_purge(): void {
+		$this->store->update( $this->point['id'], [ 'expires_at' => time() - 60 ] ); // Échu.
+		$this->restore_fails( partial: false, aside_lost: false );
+		$now = time();
+
+		$r      = CommandExecutor::run( 'rollback_plugin', $this->rollback_payload( 'restore_point' ) + [ 'hold_max_seconds' => 3600 ] )['result'];
+		$purged = RestorePointPurgeJob::purge( $this->store, $now );
+
+		self::assertSame( 'rollback_failed', $r['outcome'] );
+		self::assertIsArray( $purged );
+		self::assertSame( 0, $purged['expired'] );
+		$kept = $this->store->get( $this->point['id'] );
+		self::assertNotNull( $kept, 'Point gardé pour réessayer.' );
+		self::assertTrue( $kept['hold'] );
+		self::assertNull( $kept['expires_at'] );
+		self::assertGreaterThanOrEqual( $now + 3600, $kept['hold_until'] );
+		self::assertLessThanOrEqual( time() + 3600, $kept['hold_until'] );
+		self::assertFileExists( (string) $this->store->path_for( $kept ) );
+	}
+
+	/** Une rétention qui lève à son tour n'efface pas l'erreur de la restauration, qui dit ce qu'est devenue l'extension. */
+	public function test_a_failing_hold_never_hides_the_error_of_a_failed_manual_rollback(): void {
+		$this->restore_fails( partial: false, aside_lost: false );
+		Functions\when( 'update_option' )->alias(
+			function ( string $key, $value ): bool {
+				if ( RestorePointStore::OPTION_KEY === $key ) {
+					throw new \RuntimeException( 'base indisponible' );
+				}
+				$this->options[ $key ] = $value;
+				return true;
+			}
+		);
+
+		$r = CommandExecutor::run( 'rollback_plugin', $this->rollback_payload( 'restore_point' ) )['result'];
+
+		self::assertSame( 'rollback_failed', $r['outcome'] );
+		self::assertStringStartsWith( 'extraction failed: disk full; the plugin was put back as it was before this rollback', $r['error'] );
+	}
+
+	/**
+	 * Refus d'avant la mise de côté du dossier, archive téléchargée (version installée
+	 * qui n'est plus celle attendue) : l'extension n'est même pas désactivée.
+	 */
+	public function test_a_refused_download_rollback_never_deactivates_the_plugin(): void {
+		$r = CommandExecutor::run( 'rollback_plugin', [ 'expected_current_version' => '2.1' ] + $this->rollback_payload( 'download' ) )['result'];
+
+		self::assertSame( 'version_drift', $r['outcome'] );
+		self::assertStringNotContainsString( 'left inactive', $r['error'] );
+		self::assertStringNotContainsString( 'put back', $r['error'] );
+		self::assertSame( 0, $this->deactivations, 'Jamais désactivée.' );
+		self::assertTrue( $this->active );
+		self::assertSame( '2.0', $this->plugins_on_disk()[ self::FILE ]['Version'] );
 	}
 
 	/**
@@ -333,54 +448,6 @@ final class RestoreCommandsTest extends FilesystemTestCase {
 			'version_drift'               => [ [ 'expected_version' => '1.0', 'expected_current_version' => '2.1' ], 'version_drift' ],
 			'archive d\'une autre version' => [ [ 'expected_version' => '1.1', 'expected_current_version' => '2.0' ], 'rollback_failed_integrity' ],
 		];
-	}
-
-	/**
-	 * Restauration qui échoue en pleine extraction, extension qui se chargerait sans
-	 * erreur. Mais cette requête l'a chargée à son démarrage : le bac à sable ne la
-	 * rechargerait pas et l'activerait sans l'avoir essayée. Elle reste désactivée, et
-	 * le résultat le dit (même code d'erreur).
-	 */
-	public function test_a_failed_restore_leaves_the_plugin_inactive_in_the_request_that_loaded_it(): void {
-		$s = Services::make();
-		Services::override(
-			new Services(
-				$s->store,
-				$s->snapshotter,
-				new PluginRestorer(
-					$this->plugins,
-					static function (): void {
-						throw new \RuntimeException( 'disk full' );
-					}
-				),
-				$s->health,
-				$s->plugins_root
-			)
-		);
-		$activations = 0;
-		Functions\when( 'activate_plugin' )->alias(
-			function () use ( &$activations ): ?WP_Error {
-				++$activations;
-				$this->active = true;
-				return null;
-			}
-		);
-
-		$r = CommandExecutor::run( 'rollback_plugin', [
-			'file'                     => self::FILE,
-			'restore_point_id'         => $this->point['id'],
-			'expected_sha256'          => $this->point['sha256'],
-			'expected_version'         => '1.0',
-			'expected_current_version' => '2.0',
-		] )['result'];
-
-		self::assertSame( 'rollback_failed', $r['outcome'] );
-		self::assertSame( 'rollback_failed', $r['error_code'] );
-		self::assertStringStartsWith( 'extraction failed: disk full; the plugin was left inactive:', $r['error'] );
-		self::assertStringContainsString( 'which could not be checked because its code was already loaded earlier in this request', $r['error'] );
-		self::assertSame( 0, $activations, 'Aucun essai : il n\'essaierait rien.' );
-		self::assertFalse( $this->active );
-		self::assertNotContains( self::FILE, (array) ( $this->options['active_plugins'] ?? [] ) );
 	}
 
 	/** Point absent et pas d'archive de repli : la plateforme décide (wordpress.org ou échec explicite). */
@@ -683,6 +750,76 @@ final class RestoreCommandsTest extends FilesystemTestCase {
 		$request->set_header( 'X-G2RD-Nonce', $nonce );
 		$request->set_header( 'X-G2RD-Signature', 'v1=' . RequestSignature::sign( self::TOKEN, 'POST', '/g2rd/v1/command', $ts, $nonce, $request->get_body() ) );
 		return $request;
+	}
+
+	/**
+	 * La prochaine restauration échoue en pleine extraction (« disk full ») ; l'état
+	 * d'activation de l'extension au moment de l'extraction est relevé. `$partial` :
+	 * fichier principal écrit à moitié avant l'erreur. `$aside_lost` : le dossier mis de
+	 * côté disparaît (remise en place impossible).
+	 */
+	private function restore_fails( bool $partial, bool $aside_lost ): void {
+		$s = Services::make();
+		Services::override(
+			new Services(
+				$s->store,
+				$s->snapshotter,
+				new PluginRestorer(
+					$this->plugins,
+					function ( string $zip, string $destination ) use ( $partial, $aside_lost ): void {
+						$this->active_at_extraction[] = $this->active;
+						if ( $aside_lost ) {
+							foreach ( glob( $destination . '/akismet.g2rd-old-*' ) ?: [] as $aside ) {
+								$this->rrmdir( $aside );
+							}
+						}
+						if ( $partial ) {
+							mkdir( $destination . '/akismet', 0777, true );
+							file_put_contents( $destination . '/akismet/akismet.php', "<?php\n/**\n * Plugin Name: akismet\n" );
+						}
+						throw new \RuntimeException( 'disk full' );
+					}
+				),
+				$s->health,
+				$s->plugins_root
+			)
+		);
+	}
+
+	/**
+	 * Rollback manuel vers 1.0, extension installée en 2.0 : depuis le point local, ou
+	 * depuis l'archive téléchargée (copie de celle du point).
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function rollback_payload( string $via ): array {
+		$payload = [
+			'file'                     => self::FILE,
+			'expected_version'         => '1.0',
+			'expected_current_version' => '2.0',
+		];
+		if ( 'download' === $via ) {
+			$this->serve_point_archive_as_download();
+			return $payload + [ 'source_url' => 'https://downloads.wordpress.org/plugin/akismet.1.0.zip' ];
+		}
+		return $payload + [
+			'restore_point_id' => $this->point['id'],
+			'expected_sha256'  => $this->point['sha256'],
+		];
+	}
+
+	/**
+	 * @return array<string, string> Chemin relatif => sha256 du contenu (dossiers inclus).
+	 */
+	private function tree( string $dir ): array {
+		$out   = [];
+		$items = new \RecursiveIteratorIterator( new \RecursiveDirectoryIterator( $dir, \FilesystemIterator::SKIP_DOTS ), \RecursiveIteratorIterator::SELF_FIRST );
+		foreach ( $items as $item ) {
+			$rel         = str_replace( '\\', '/', substr( (string) $item, strlen( $dir ) + 1 ) );
+			$out[ $rel ] = $item->isDir() ? 'dir' : hash_file( 'sha256', (string) $item );
+		}
+		ksort( $out );
+		return $out;
 	}
 
 	/**
