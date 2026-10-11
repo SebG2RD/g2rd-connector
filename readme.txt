@@ -81,6 +81,18 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 
 == Changelog ==
 
+= Unreleased =
+
+* **Performance: the connector's scheduled tasks no longer all run at the same minute.** The
+  update discovery and the restore point purge were scheduled at a fixed delay after the first
+  page load following a connector update, and WordPress keeps that phase from one run to the
+  next: on a shared server, every site updated together ran them at the same minute (purge at
+  :33, discovery at 02:05 and 14:05 UTC). Their first run is now drawn at random within their
+  12-hour interval, and the tasks already scheduled are moved once to a random time within their
+  interval (option `g2rd_connector_cron_phase`, removed on uninstall). A move WordPress refuses
+  leaves the task where it was, never twice. The hourly heartbeat is unchanged: it is scheduled
+  at enrollment, whose time already differs from one site to another.
+
 = 1.13.0-rc.3 =
 
 * **Fix: a failed automatic rollback leaves the plugin deactivated.** The request that runs the

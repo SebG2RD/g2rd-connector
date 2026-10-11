@@ -33,6 +33,9 @@ final class UpdatesDiscoveryJob {
 
 	public const HOOK = 'g2rd_connector_refresh_updates';
 
+	/** Intervalle de `twicedaily` (WordPress), en secondes : fenêtre du premier passage. */
+	public const INTERVAL_SECONDS = 12 * 3600;
+
 	public function register(): void {
 		add_action( self::HOOK, [ $this, 'run' ] );
 	}
@@ -51,10 +54,17 @@ final class UpdatesDiscoveryJob {
 	 * rejouent pas le hook d'activation lors d'une simple mise à jour du plugin,
 	 * or ce sont précisément celles qui ont besoin du correctif. L'appel est un
 	 * no-op dès que l'événement existe.
+	 *
+	 * Premier passage tiré au hasard dans les 12 h (cf. Phase) : avec un décalage fixe,
+	 * tous les sites mis à jour en même temps partaient à la même minute, deux fois par
+	 * jour. Un site neuf n'attend pas pour autant : sans capture, le premier snapshot
+	 * réveille la découverte (request_if_stale()).
+	 *
+	 * @param (\Closure(int, int): int)|null $random Tirage, injectable pour les tests.
 	 */
-	public static function schedule(): void {
+	public static function schedule( ?\Closure $random = null ): void {
 		if ( ! wp_next_scheduled( self::HOOK ) ) {
-			wp_schedule_event( time() + 120, 'twicedaily', self::HOOK );
+			wp_schedule_event( Phase::first_run( time(), self::INTERVAL_SECONDS, $random ), 'twicedaily', self::HOOK );
 		}
 	}
 

@@ -464,6 +464,21 @@ identifiant de connexion, e-mail, date de création) et la capacité `direct_log
 de test du ticket (`tests/fixtures/direct-login-ticket-vectors.json`) sont une copie exacte de
 ceux du manager.
 
+## Charge sur le serveur
+
+Les sites clients partagent souvent un même serveur mutualisé : ce que le connecteur fait sur
+chacun s'additionne.
+
+- **Tâches planifiées réparties au hasard** : la découverte des mises à jour et la purge des
+  points de restauration partent à une heure tirée au hasard dans leur intervalle de 12 h
+  (`Cron\Phase`), au lieu d'un décalage fixe après le premier démarrage suivant la mise à jour du
+  connecteur — WordPress gardant ensuite cette phase, tous les sites mis à jour ensemble les
+  lançaient à la même minute (purge à :33, découverte à 02:05 et 14:05 UTC, mesuré le
+  11/10/2026). Les tâches déjà planifiées sont re-phasées une seule fois (option autochargée
+  `g2rd_connector_cron_phase`, retirée à la désinstallation) ; un retrait refusé par WordPress
+  laisse la tâche à sa date, jamais en double. Le heartbeat horaire n'est pas touché : planifié à
+  l'enrôlement, sa phase suit déjà l'heure d'enrôlement de chaque site.
+
 ## Développement
 
 ```bash

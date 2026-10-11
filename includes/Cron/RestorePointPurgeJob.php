@@ -81,6 +81,9 @@ final class RestorePointPurgeJob {
 	/** Rythme de la purge (planification WordPress). */
 	public const RECURRENCE = 'twicedaily';
 
+	/** Intervalle de RECURRENCE, en secondes : fenêtre du premier passage (cf. schedule()). */
+	public const INTERVAL_SECONDS = 12 * 3600;
+
 	/** Rythme d'avant la 1.13, migré au démarrage et à l'activation (cf. migrate_legacy_schedule()). */
 	private const LEGACY_RECURRENCE = 'hourly';
 
@@ -193,10 +196,15 @@ final class RestorePointPurgeJob {
 	 *
 	 * Coût à chaque démarrage : une lecture du tableau des tâches planifiées, déjà
 	 * chargé en mémoire par WordPress (option `cron`, autochargée).
+	 *
+	 * Premier passage tiré au hasard dans les 12 h (cf. Phase) : avec `time() + 300`,
+	 * les sites mis à jour en même temps purgeaient tous à la même minute.
+	 *
+	 * @param (\Closure(int, int): int)|null $random Tirage, injectable pour les tests.
 	 */
-	public static function schedule(): void {
+	public static function schedule( ?\Closure $random = null ): void {
 		if ( ! wp_next_scheduled( self::HOOK ) ) {
-			wp_schedule_event( time() + 300, self::RECURRENCE, self::HOOK );
+			wp_schedule_event( Phase::first_run( time(), self::INTERVAL_SECONDS, $random ), self::RECURRENCE, self::HOOK );
 			return;
 		}
 		self::migrate_legacy_schedule();

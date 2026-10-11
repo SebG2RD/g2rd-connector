@@ -11,6 +11,7 @@ namespace G2RD\Connector;
 
 use G2RD\Connector\Admin\Page;
 use G2RD\Connector\Cron\HeartbeatJob;
+use G2RD\Connector\Cron\Phase;
 use G2RD\Connector\Cron\RestorePointPurgeJob;
 use G2RD\Connector\Cron\UpdatesDiscoveryJob;
 use G2RD\Connector\DirectLogin\Endpoint;
@@ -132,6 +133,11 @@ final class Plugin {
 		// protégée (hook à lui, programmé par ProtectedUpdate : reprise seule).
 		( new RestorePointPurgeJob() )->register();
 		RestorePointPurgeJob::schedule();
+
+		// Découverte et purge partaient à la même minute sur tous les sites mis à jour
+		// ensemble (cf. Cron\Phase) : les tâches déjà planifiées sont re-phasées au
+		// hasard, une seule fois. Ensuite : lecture d'une option autochargée.
+		Phase::maybe_rephase( [ UpdatesDiscoveryJob::HOOK, RestorePointPurgeJob::HOOK ] );
 
 		// Connexion directe depuis G2RD WP Manager (1.13) : point d'entrée admin-ajax
 		// `g2rd_login` (avec et sans session, comme la sonde de santé), et purge des

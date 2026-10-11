@@ -17,9 +17,11 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
 // Suppression de l'option principale (URL manager, token site, toggles), et du
 // compteur des connexions échouées de la minute (cf. Events\LoginFailedThrottle :
 // il expire seul en 120 s, mais sans cache objet sa ligne resterait jusqu'au
-// ménage quotidien de WordPress).
+// ménage quotidien de WordPress). Puis le marqueur de la répartition des tâches
+// WP-Cron (cf. Cron\Phase), propre à chaque blog comme les tâches elles-mêmes.
 delete_option( 'g2rd_connector_settings' );
 delete_transient( 'g2rd_connector_login_failed_window' );
+delete_option( 'g2rd_connector_cron_phase' );
 
 // Si multisite, suppression sur chaque blog.
 if ( is_multisite() ) {
@@ -28,6 +30,7 @@ if ( is_multisite() ) {
         switch_to_blog( (int) $blog_id );
         delete_option( 'g2rd_connector_settings' );
         delete_transient( 'g2rd_connector_login_failed_window' );
+        delete_option( 'g2rd_connector_cron_phase' );
         restore_current_blog();
     }
 }

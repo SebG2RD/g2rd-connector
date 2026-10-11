@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace G2RD\Connector\Tests;
 
 use Brain\Monkey\Functions;
+use G2RD\Connector\Cron\Phase;
 use G2RD\Connector\Cron\RestorePointPurgeJob;
 use G2RD\Connector\Events\LoginFailedThrottle;
 use G2RD\Connector\Rollback\UpdateTransaction;
@@ -103,6 +104,23 @@ final class UninstallTest extends TestCase {
 		$this->uninstall();
 
 		self::assertArrayNotHasKey( UpdateTransaction::RECOVERY_TRACE_KEY, $this->options );
+	}
+
+	/** Marqueur de la répartition des tâches WP-Cron (cf. Cron\Phase), sur chaque blog en multisite. */
+	public function test_le_marqueur_de_repartition_des_taches_est_retire(): void {
+		$deleted = [];
+		Functions\when( 'delete_option' )->alias(
+			function ( string $key ) use ( &$deleted ): bool {
+				$deleted[] = $this->blog . ':' . $key;
+				unset( $this->options[ $key ] );
+				return true;
+			}
+		);
+
+		$this->uninstall();
+
+		self::assertContains( '1:' . Phase::OPTION, $deleted );
+		self::assertContains( '2:' . Phase::OPTION, $deleted );
 	}
 
 	private function uninstall(): void {
