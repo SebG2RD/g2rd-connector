@@ -6,6 +6,12 @@
  * Renvoie : WP core (version + update?), liste plugins (installed/latest/active),
  * liste thèmes, version PHP, info serveur.
  *
+ * Léger depuis la 1.14 (serveur mutualisé partagé par tout le parc) : invalidation
+ * ciblée des caches relus au lieu de wp_cache_flush(), appels à wordpress.org
+ * seulement pour un transient de mise à jour périmé (plus de 3 h) ou absent, santé
+ * de la base calculée au plus une fois par jour, OPcache invalidé pour le seul
+ * connecteur. Les données renvoyées restent celles que WordPress tient pour vraies.
+ *
  * @package G2RD\Connector
  */
 
@@ -43,129 +49,20 @@ final class SnapshotController {
 		require_once ABSPATH . 'wp-admin/includes/update.php';
 		require_once ABSPATH . 'wp-admin/includes/translation-install.php';
 
-		// Force un rafraîchissement TOTAL des caches WP avant lecture du snapshot.
-		//
-		// Deux niveaux de cache sont en jeu :
-		//
-		// 1. Cache d'objet `wp_get_themes()` / `get_plugins()` — lié au filesystem.
-		//    Nettoyé par wp_clean_themes_cache / wp_clean_plugins_cache.
-		//
-		// 2. Transients `update_themes`, `update_plugins`, `update_core` — lectures
-		//    des updates dispo. Crucial : wp_update_themes() / wp_update_plugins()
-		//    / wp_version_check() utilisent un "minimum_period" (12h) qui les fait
-		//    SKIP silencieusement si le transient a été touché récemment.
-		//
-		//    Conséquence : si un GitHub Updater tiers (ex : g2rd-theme via
-		//    class-github-updater.php) a injecté son entrée puis qu'une nouvelle
-		//    release est publiée, le transient reste figé jusqu'au prochain cron
-		//    WP. Le manager reçoit alors un snapshot incorrect ("tout est à jour"
-		//    alors qu'une release plus récente existe, ou inversement).
-		//
-		//    On supprime explicitement les transients pour forcer WordPress à
-		//    re-dispatcher les hooks `pre_set_site_transient_update_*`, ce qui
-		//    permet aux updaters custom de ré-évaluer leur état contre l'API
-		//    distante (wp.org / GitHub). Coût : ~1-3s par sync, acceptable.
-		//
-		//    MAIS tous les updaters tiers ne s'enregistrent pas dans le contexte
-		//    REST (mesuré sur g2rd.fr : `SEOPRESS_Updater::check_update` est actif
-		//    en wp-admin et en WP-CLI, absent ici). Détruire le transient perdait
-		//    donc définitivement leurs entrées. C'est pourquoi les transients
-		//    plugins/thèmes passent désormais par PremiumUpdatesBridge, qui
-		//    détruit + reconstruit PUIS rejoue ce que ce contexte ne sait pas
-		//    produire. Cf. la documentation de cette classe.
-		// Invalide OPcache sur tous les fichiers `.php` racine des plugins
-		// et thèmes installés AVANT wp_clean_plugins_cache(), pour garantir
-		// que `get_plugins()` re-lise les headers `Version:` depuis le disque
-		// et non depuis le bytecode mis en cache par OPcache.
-		//
-		// Constat : sur certains hébergeurs (Hostinger Cloud Pro, LiteSpeed,
-		// PHP-FPM avec `opcache.validate_timestamps=0`), après une MAJ de
-		// plugin via UPDATE NOW du WP-admin, le fichier sur disque est bien
-		// remplacé, MAIS dans le contexte REST API qui sert /snapshot,
-		// OPcache retourne encore le bytecode de l'ancienne version. Du coup
-		// `get_plugins()['monplugin/monplugin.php']['Version']` renvoie
-		// l'ancien header (ex: "1.5.1" alors que le site WP-admin affiche
-		// déjà "1.6.1"). Le manager persiste donc des versions périmées et
-		// continue à proposer une MAJ déjà faite.
-		//
-		// `opcache_invalidate($file, true)` force le rechargement du fichier
-		// au prochain accès. Le second argument `true` invalide même si le
-		// timestamp du fichier ne semble pas avoir changé (defensive).
+		$now = time();
+
+		// OPcache : seulement les fichiers du connecteur (cf. opcache_files()).
 		if ( function_exists( 'opcache_invalidate' ) ) {
-			$plugins_dir = WP_PLUGIN_DIR;
-			if ( is_dir( $plugins_dir ) ) {
-				foreach ( (array) glob( $plugins_dir . '/*/*.php' ) as $php_file ) {
-					opcache_invalidate( (string) $php_file, true );
-				}
-				// Single-file plugins dans wp-content/plugins/foo.php.
-				foreach ( (array) glob( $plugins_dir . '/*.php' ) as $php_file ) {
-					opcache_invalidate( (string) $php_file, true );
-				}
-			}
-			$themes_dir = get_theme_root();
-			if ( is_dir( $themes_dir ) ) {
-				foreach ( (array) glob( $themes_dir . '/*/style.css' ) as $style_file ) {
-					opcache_invalidate( (string) $style_file, true );
-				}
-				foreach ( (array) glob( $themes_dir . '/*/functions.php' ) as $fn_file ) {
-					opcache_invalidate( (string) $fn_file, true );
-				}
-			}
-
-			// Invalide AUSSI les propres classes du connecteur. Le glob
-			// WP_PLUGIN_DIR/*/*.php ci-dessus ne couvre que le fichier racine d'un
-			// plugin, pas ses classes imbriquees (includes/Rest, includes/Commands…).
-			// Sous opcache.validate_timestamps=0, une version compilee perimee de
-			// SnapshotController pourrait sinon continuer a tourner apres une MAJ du
-			// connecteur lui-meme (et reservir une lecture de version perimee).
-			if ( defined( 'G2RD_CONNECTOR_DIR' ) && is_dir( G2RD_CONNECTOR_DIR . 'includes' ) ) {
-				$connector_src = new \RecursiveIteratorIterator(
-					new \RecursiveDirectoryIterator( G2RD_CONNECTOR_DIR . 'includes', \FilesystemIterator::SKIP_DOTS )
-				);
-				foreach ( $connector_src as $entry ) {
-					if ( $entry instanceof \SplFileInfo && 'php' === $entry->getExtension() ) {
-						opcache_invalidate( $entry->getPathname(), true );
-					}
-				}
-			}
-			if ( defined( 'G2RD_CONNECTOR_FILE' ) ) {
-				opcache_invalidate( (string) G2RD_CONNECTOR_FILE, true );
+			foreach ( self::opcache_files() as $file ) {
+				opcache_invalidate( $file, true );
 			}
 		}
 
-		// Purge agressive de l'object cache WP (Redis / Memcached / LiteSpeed
-		// Object Cache / etc.) AVANT wp_clean_plugins_cache. Sur les
-		// hebergeurs avec object cache persistent (typiquement Hostinger Cloud
-		// Pro avec LiteSpeed Cache + Hostinger AI Assistant qui wrappent
-		// wp_cache_*), les valeurs cachees survivent entre requetes REST. Du
-		// coup `get_plugins()` peut renvoyer un cache stale contenant l'ancien
-		// header `Version:` d'un plugin meme apres MAJ.
-		if ( function_exists( 'wp_cache_flush' ) ) {
-			wp_cache_flush();
-		}
+		// Ce que l'inventaire relit, et seulement cela (plus de wp_cache_flush()).
+		self::forget_stale_caches();
 
-		// `false` IMPÉRATIF : ces deux fonctions du cœur suppriment les transients
-		// de mise à jour quand on ne leur passe rien
-		// (`wp_clean_plugins_cache( $clear_update_cache = true )`). Elles étaient
-		// appelées sans argument JUSTE AVANT le pont, dont la première action est
-		// de mémoriser le transient « avant destruction » : il lisait donc un
-		// transient déjà effacé, et la mémorisation n'a jamais rien mémorisé en
-		// contexte REST. Ici on ne veut que le nettoyage du cache d'objets ; la
-		// destruction et la reconstruction sont le travail du pont, ligne suivante.
-		if ( function_exists( 'wp_clean_themes_cache' ) ) {
-			wp_clean_themes_cache( false );
-		}
-		if ( function_exists( 'wp_clean_plugins_cache' ) ) {
-			wp_clean_plugins_cache( false );
-		}
-		// Le coeur vient toujours de wp.org : rafraichissement direct.
-		delete_site_transient( 'update_core' );
-		if ( function_exists( 'wp_version_check' ) ) {
-			wp_version_check( [], true );
-		}
-		// Plugins et themes : detruit + reconstruit, puis rejoue les entrees des
-		// updaters tiers absents de ce contexte (cf. PremiumUpdatesBridge).
-		PremiumUpdatesBridge::refresh_update_transients();
+		// Transients de mise à jour : rafraîchis seulement s'ils sont périmés.
+		self::refresh_update_checks( $now );
 
 		// Les updaters tiers ne s'enregistrent pas ici : seul le contexte WP-Cron
 		// sait les faire parler. Si sa dernière capture est périmée (plus de 13 h :
@@ -182,7 +79,8 @@ final class SnapshotController {
 				'themes'            => $this->themes(),
 				'translations'      => $this->translations(),
 				'server'            => $this->server_info(),
-				'db_health'         => $this->db_health(),
+				// Calculé au plus une fois par jour ; `collected_at` dit de quand.
+				'db_health'         => DbHealth::get( $now ),
 				'updates_discovery' => $this->updates_discovery( $discovery_stale ),
 				// Rollback des plugins : ce que le site sait faire, les points qu'il
 				// détient, et ce qui s'est passé hors d'une réponse à la plateforme.
@@ -192,6 +90,131 @@ final class SnapshotController {
 			],
 			200
 		);
+	}
+
+	/**
+	 * Fichiers dont l'OPcache est invalidé à chaque inventaire : ceux du connecteur, et
+	 * eux seuls.
+	 *
+	 * Les versions des extensions et des thèmes n'en dépendent pas : elles sont lues
+	 * par get_file_data() (file_get_contents() des 8 premiers Ko, wp-includes/functions.php),
+	 * que l'OPcache ne sert jamais — il ne met en cache que le code compilé des
+	 * fichiers inclus. Un `style.css` n'est d'ailleurs jamais compilé. Invalider les
+	 * fichiers principaux de toutes les extensions et le functions.php de tous les
+	 * thèmes (comme jusqu'à la 1.13) n'apportait rien à l'exactitude, et forçait leur
+	 * recompilation à la requête suivante. Une mise à jour faite par WordPress invalide
+	 * d'ailleurs elle-même chaque fichier copié (copy_dir() et move_dir(),
+	 * wp-admin/includes/file.php).
+	 *
+	 * Reste le connecteur : sa version (`connector_version`) est une constante du
+	 * fichier principal, donc du code compilé. Mis à jour hors de WordPress (WP-CLI,
+	 * panneau de l'hébergeur, FTP) sur un serveur à `opcache.validate_timestamps=0`, il
+	 * continuerait d'annoncer l'ancienne version. Tous ses fichiers ensemble : n'en
+	 * invalider qu'un mêlerait du code neuf et ancien.
+	 *
+	 * Publique pour les tests.
+	 *
+	 * @return list<string>
+	 */
+	public static function opcache_files(): array {
+		$files = [];
+		if ( defined( 'G2RD_CONNECTOR_FILE' ) ) {
+			$files[] = (string) G2RD_CONNECTOR_FILE;
+		}
+		if ( defined( 'G2RD_CONNECTOR_DIR' ) && is_dir( G2RD_CONNECTOR_DIR . 'includes' ) ) {
+			$sources = new \RecursiveIteratorIterator(
+				new \RecursiveDirectoryIterator( G2RD_CONNECTOR_DIR . 'includes', \FilesystemIterator::SKIP_DOTS )
+			);
+			foreach ( $sources as $entry ) {
+				if ( $entry instanceof \SplFileInfo && 'php' === $entry->getExtension() ) {
+					$files[] = $entry->getPathname();
+				}
+			}
+		}
+		return $files;
+	}
+
+	/**
+	 * Invalidation CIBLÉE de ce que l'inventaire relit, à la place de wp_cache_flush(),
+	 * qui vidait TOUT le cache objet du site (chaque page suivante reconstruisait tout,
+	 * sur un serveur partagé). Clés lues dans le cœur (WordPress 6.9.4) :
+	 *
+	 *  - `plugins` / `plugins` : cache de get_plugins() (wp_cache_get( 'plugins',
+	 *    'plugins' ), wp-admin/includes/plugin.php), le seul que vide
+	 *    wp_clean_plugins_cache( false ). Appelé directement : le cœur ne charge pas ce
+	 *    fichier à ce stade d'une requête REST, et wp_clean_plugins_cache(), protégée
+	 *    par function_exists(), n'était appelée que si une autre extension l'avait déjà
+	 *    chargé. Groupe non persistant pour WordPress (wp_start_object_cache(),
+	 *    wp-includes/load.php), mais pas pour tous les caches objet externes.
+	 *  - cache des thèmes : wp_clean_themes_cache( false ) (wp-includes/theme.php,
+	 *    toujours chargé) relance search_theme_directories( true ) et vide le cache de
+	 *    chaque WP_Theme (groupe `themes`). `false` IMPÉRATIF : sans argument, elle
+	 *    détruit `update_themes`, avant que le pont ait pu en mémoriser les entrées
+	 *    tierces (et le jugerait absent, donc à rafraîchir).
+	 *  - `alloptions` / `options` : options autochargées, dont `active_plugins`
+	 *    (is_active des extensions) et `stylesheet` (thème actif, get_stylesheet()).
+	 *    get_option() les lit dans ce tableau (wp_load_alloptions(), wp-includes/option.php),
+	 *    rechargé en une requête à la lecture suivante. Seule entrée persistante du lot :
+	 *    c'est elle qui peut diverger de la base (écritures concurrentes).
+	 *
+	 * Rien d'autre n'est relu depuis un cache : les versions installées viennent du
+	 * disque (PremiumUpdatesBridge::installed_*_version()), les options du connecteur
+	 * sont écrites par lui-même (update_option() tient le cache à jour), et les
+	 * transients de mise à jour font référence là où ils sont rangés (base, ou cache
+	 * objet persistant, groupe `site-transient`) : refresh_update_checks() les
+	 * renouvelle s'ils sont périmés.
+	 */
+	private static function forget_stale_caches(): void {
+		wp_cache_delete( 'plugins', 'plugins' );
+		wp_cache_delete( 'alloptions', 'options' );
+		if ( function_exists( 'wp_clean_themes_cache' ) ) {
+			wp_clean_themes_cache( false );
+		}
+	}
+
+	/**
+	 * Transients de mise à jour : rafraîchis seulement s'ils sont périmés ou absents
+	 * (PremiumUpdatesBridge::UPDATE_CHECK_MAX_AGE, 3 h). Sinon leurs données sont
+	 * vraies et suffisent : ni appel à wordpress.org, ni destruction.
+	 *
+	 * Le rafraîchissement forcé reste celui que la plateforme demande déjà : la commande
+	 * check_updates (« Vérifier les MAJ »), toujours forcée, suivie d'une
+	 * synchronisation qui lit alors des transients frais. Pas de paramètre de plus pour
+	 * l'inventaire.
+	 */
+	private static function refresh_update_checks( int $now ): void {
+		$core = get_site_transient( 'update_core' );
+		if ( function_exists( 'wp_version_check' ) && ! self::core_check_is_current( $core, $now ) ) {
+			// Le cœur vient toujours de wordpress.org. Pas de destruction préalable :
+			// forcée, la vérification passe outre la fenêtre d'une minute de
+			// wp_version_check(), et un échec réseau laisse la dernière réponse connue au
+			// lieu d'un transient vide (« aucune mise à jour », faux).
+			wp_version_check( [], true );
+		}
+		// Extensions et thèmes : chacun rafraîchi s'il est périmé, puis rejeu des
+		// entrées des updaters tiers absents de ce contexte (cf. PremiumUpdatesBridge).
+		PremiumUpdatesBridge::refresh_stale_update_transients( $now );
+	}
+
+	/**
+	 * Vérification du cœur fraîche, faite pour la version installée et porteuse d'une
+	 * réponse de wordpress.org (wp-includes/update.php) :
+	 *  - après une mise à jour du cœur, wp_version_check() tient lui-même le transient
+	 *    pour invalide (`version_checked` différent de la version courante) ;
+	 *  - wordpress.org rend toujours au moins une offre (« latest » quand le site est à
+	 *    jour) : une liste vide est une vérification restée sans réponse.
+	 *
+	 * @param mixed $core Transient `update_core`.
+	 */
+	private static function core_check_is_current( $core, int $now ): bool {
+		if ( ! PremiumUpdatesBridge::checked_recently( $core, $now ) || ! is_object( $core ) ) {
+			return false;
+		}
+		/** @var \stdClass $core */
+		return isset( $core->version_checked, $core->updates )
+			&& (string) get_bloginfo( 'version' ) === (string) $core->version_checked
+			&& is_array( $core->updates )
+			&& [] !== $core->updates;
 	}
 
 	/**
@@ -491,82 +514,5 @@ final class SnapshotController {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- lecture triviale de la version MySQL pour le snapshot, sans cache pertinent.
 		$version = $wpdb->get_var( 'SELECT VERSION()' );
 		return is_string( $version ) ? $version : '';
-	}
-
-	/**
-	 * Métriques de santé / maintenance de la base (compteurs façon ManageWP).
-	 *
-	 * Lecture seule et bornée : aucun OPTIMIZE ni suppression ici. Le nettoyage
-	 * passe par les commandes delete_spam_comments / delete_post_revisions /
-	 * empty_trashed_posts / delete_expired_transients / optimize_database.
-	 * `autoloaded_options_mb` est purement informatif (pas d'action associée).
-	 *
-	 * @return array<string, mixed>
-	 */
-	private function db_health(): array {
-		global $wpdb;
-
-		// wp_count_comments() renvoie un objet ; cast en tableau pour un accès sûr.
-		$counts        = (array) wp_count_comments();
-		$spam_comments = isset( $counts['spam'] ) ? (int) $counts['spam'] : 0;
-
-		$post_revisions     = 0;
-		$trashed_posts      = 0;
-		$expired_transients = 0;
-		$autoload_bytes     = 0;
-		$overhead_bytes     = 0;
-
-		if ( $wpdb ) {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL -- comptage de maintenance (lecture seule), sans cache pertinent.
-			$post_revisions = (int) $wpdb->get_var(
-				"SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = 'revision'"
-			);
-
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL -- comptage de maintenance (lecture seule), sans cache pertinent.
-			$trashed_posts = (int) $wpdb->get_var(
-				"SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_status = 'trash'"
-			);
-
-			// Transients expirés : mêmes critères que la purge (cf CommandExecutor::purge_expired_transients).
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- comptage transients expires (requete preparee), sans cache pertinent.
-			$expired_transients = (int) $wpdb->get_var(
-				$wpdb->prepare(
-					"SELECT COUNT(*) FROM {$wpdb->options}
-					 WHERE option_name LIKE %s AND option_value < %d",
-					'_transient_timeout_%',
-					time()
-				)
-			);
-
-			// Taille des options autoloadées (indicateur de perf, informatif). WP 6.6+
-			// a introduit de nouvelles valeurs d'autoload ('on'/'auto'/'auto-on') en
-			// plus de 'yes' — on couvre l'ensemble des valeurs réellement autoloadées.
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL -- somme des tailles autoload (lecture seule), sans cache pertinent.
-			$autoload_bytes = (int) $wpdb->get_var(
-				"SELECT SUM(LENGTH(option_value)) FROM {$wpdb->options}
-				 WHERE autoload IN ( 'yes', 'on', 'auto', 'auto-on' )"
-			);
-
-			// Overhead = espace fragmenté récupérable (SUM Data_free) sur les tables
-			// du préfixe courant. ARRAY_A pour un accès par clé (évite l'accès dynamique
-			// à une propriété d'objet côté PHPStan).
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL -- SHOW TABLE STATUS de maintenance (lecture seule), prefixe sur.
-			$status = (array) $wpdb->get_results( "SHOW TABLE STATUS LIKE '{$wpdb->prefix}%'", ARRAY_A );
-			foreach ( $status as $row ) {
-				if ( is_array( $row ) && isset( $row['Data_free'] ) ) {
-					$overhead_bytes += (int) $row['Data_free'];
-				}
-			}
-		}
-
-		return [
-			'spam_comments'         => $spam_comments,
-			'post_revisions'        => $post_revisions,
-			'trashed_posts'         => $trashed_posts,
-			'expired_transients'    => $expired_transients,
-			'autoloaded_options_mb' => round( $autoload_bytes / 1048576, 2 ),
-			'db_overhead_mb'        => round( $overhead_bytes / 1048576, 2 ),
-			'collected_at'          => gmdate( 'c' ),
-		];
 	}
 }

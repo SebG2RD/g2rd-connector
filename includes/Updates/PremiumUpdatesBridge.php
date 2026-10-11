@@ -87,6 +87,26 @@ final class PremiumUpdatesBridge {
 	public const STALE_AFTER_SECONDS = 13 * 3600;
 
 	/**
+	 * Âge maximal (en secondes) d'un transient de mise à jour (`update_core`,
+	 * `update_plugins`, `update_themes`) que l'inventaire tient pour frais : 3 h.
+	 *
+	 * En deçà, ses données sont vraies — WordPress les a reçues de wordpress.org (et des
+	 * updaters tiers) il y a moins de 3 h — et suffisent : ni appel à wordpress.org, ni
+	 * destruction. Au-delà, ou s'il manque, l'inventaire le rafraîchit comme avant.
+	 *
+	 * Ce qui les renouvelle entre deux synchronisations de la plateforme (environ toutes
+	 * les 7 h) : les tâches planifiées de WordPress (wp_version_check, wp_update_plugins,
+	 * wp_update_themes, deux fois par jour chacune), la découverte du connecteur (deux
+	 * fois par jour), les écrans d'administration. Une mise à jour (cœur, extension,
+	 * thème) détruit elle-même le transient concerné : la synchronisation qui la suit
+	 * le recharge. Une version publiée entre-temps apparaît au plus 3 h plus tard
+	 * qu'avant ; « Vérifier les MAJ » (commande check_updates) force toujours.
+	 *
+	 * Écrit en secondes littérales : `HOUR_IN_SECONDS` n'est défini qu'à l'exécution.
+	 */
+	public const UPDATE_CHECK_MAX_AGE = 3 * 3600;
+
+	/**
 	 * Écrans d'administration où le transient de MAJ est frais ET les updaters
 	 * tiers actifs. `plugins` et `update-core` forcent un `wp_update_*()` via
 	 * `load-plugins.php` / `load-update-core.php` ; `dashboard` repasse par
@@ -194,11 +214,11 @@ final class PremiumUpdatesBridge {
 			//
 			// OPTION et non transient : avec un cache objet persistant (LiteSpeed,
 			// Redis…), WordPress range les transients DANS ce cache et non en base.
-			// Or le snapshot appelle `wp_cache_flush()` — délibérément, contre les
-			// versions de plugins périmées — ce qui effaçait notre propre capture à
-			// chaque synchronisation. Mesuré sur le parc : capture perdue sur les
-			// deux sites à cache objet externe, conservée sur les quatre autres.
-			// L'expiration est donc gérée par nous (cf. `cached_payload()`).
+			// Or un `wp_cache_flush()` (celui du snapshot jusqu'à la 1.13, celui de la
+			// commande clear_cache aujourd'hui) effaçait notre propre capture. Mesuré
+			// sur le parc : capture perdue sur les deux sites à cache objet externe,
+			// conservée sur les quatre autres. L'expiration est donc gérée par nous
+			// (cf. `cached_payload()`).
 			update_site_option(
 				self::CACHE_KEY,
 				[
@@ -291,28 +311,102 @@ final class PremiumUpdatesBridge {
 	 * dans la requête courante voit la vue complétée — y compris celles faites
 	 * par `Plugin_Upgrader` / `Theme_Upgrader`.
 	 *
+	 * Rafraîchissement FORCÉ : commandes (check_updates, clear_cache, mises à jour).
+	 * L'inventaire passe par refresh_stale_update_transients().
+	 *
 	 * Best-effort : en cas d'échec, le comportement dégradé est exactement le
 	 * comportement historique.
 	 */
 	public static function refresh_update_transients(): void {
+		self::refresh( null );
+	}
+
+	/**
+	 * Pendant de refresh_update_transients() pour l'inventaire : ne rafraîchit que les
+	 * transients périmés ou absents (cf. UPDATE_CHECK_MAX_AGE), chacun pour soi. Le
+	 * rejeu des entrées tierces est installé dans tous les cas : sans lui, une mise à
+	 * jour que seule la capture connaît (updater absent du contexte REST) disparaîtrait
+	 * de l'inventaire dès qu'il n'y a rien à rafraîchir.
+	 */
+	public static function refresh_stale_update_transients( int $now ): void {
+		self::refresh( $now );
+	}
+
+	/**
+	 * Transient de mise à jour vérifié il y a moins de UPDATE_CHECK_MAX_AGE, d'après sa
+	 * date `last_checked` (posée par wp_version_check() / wp_update_*() à chaque
+	 * vérification). Absent, sans date, ou daté du futur (horloge revenue en arrière) :
+	 * périmé.
+	 *
+	 * @param mixed $transient Transient brut (objet, ou false si absent).
+	 */
+	public static function checked_recently( $transient, int $now ): bool {
+		if ( ! is_object( $transient ) ) {
+			return false;
+		}
+		/** @var stdClass $transient */
+		if ( ! isset( $transient->last_checked ) || ! is_numeric( $transient->last_checked ) ) {
+			return false;
+		}
+		$age = $now - (int) $transient->last_checked;
+
+		return $age >= 0 && $age < self::UPDATE_CHECK_MAX_AGE;
+	}
+
+	/**
+	 * `update_plugins` / `update_themes` frais : vérifié récemment ET porteur d'une
+	 * réponse de wordpress.org. wp_update_plugins() / wp_update_themes() écrivent
+	 * `last_checked` AVANT d'appeler wordpress.org, et `checked` seulement après une
+	 * réponse 200 (wp-includes/update.php) : sans `checked`, la vérification est restée
+	 * sans réponse (réseau coupé), et la synchronisation suivante réessaie, comme avant.
+	 *
+	 * @param mixed $transient Transient brut (objet, ou false si absent).
+	 */
+	private static function is_fresh( $transient, int $now ): bool {
+		if ( ! self::checked_recently( $transient, $now ) ) {
+			return false;
+		}
+		/** @var stdClass $transient */
+		return isset( $transient->checked ) && is_array( $transient->checked ) && [] !== $transient->checked;
+	}
+
+	/**
+	 * @param int|null $now Null : rafraîchissement forcé des deux transients. Sinon,
+	 *                      seulement ceux qui ne sont pas frais à cette heure.
+	 */
+	private static function refresh( ?int $now ): void {
 		try {
 			if ( ! function_exists( 'wp_update_plugins' ) ) {
 				require_once ABSPATH . 'wp-admin/includes/update.php';
 			}
 
+			$current_plugins = get_site_transient( 'update_plugins' );
+			$current_themes  = get_site_transient( 'update_themes' );
+			$plugins         = null === $now || ! self::is_fresh( $current_plugins, $now );
+			$themes          = null === $now || ! self::is_fresh( $current_themes, $now );
+
 			// Mémorisation AVANT destruction : si une visite de wp-admin a eu lieu
 			// depuis la dernière synchronisation, l'entrée tierce est encore en base
-			// et on la récupère sans dépendre du cache.
-			$preserved_plugins = self::response_of( get_site_transient( 'update_plugins' ) );
-			$preserved_themes  = self::response_of( get_site_transient( 'update_themes' ) );
+			// et on la récupère sans dépendre du cache. Un transient gardé n'a rien à
+			// mémoriser : ses entrées restent lisibles telles quelles.
+			$preserved_plugins = $plugins ? self::response_of( $current_plugins ) : [];
+			$preserved_themes  = $themes ? self::response_of( $current_themes ) : [];
 
 			// La destruction est nécessaire : sans elle, `wp_update_plugins()` sort
 			// en avance (fenêtre de 12 h) et les updaters GitHub ne sont pas
 			// ré-évalués. Le rejeu ci-dessous compense ce qu'elle fait perdre.
-			delete_site_transient( 'update_plugins' );
-			delete_site_transient( 'update_themes' );
-			wp_update_plugins();
-			wp_update_themes();
+			if ( $plugins ) {
+				delete_site_transient( 'update_plugins' );
+			}
+			if ( $themes ) {
+				delete_site_transient( 'update_themes' );
+			}
+			if ( $plugins ) {
+				wp_update_plugins();
+			}
+			if ( $themes ) {
+				wp_update_themes();
+			}
 
 			self::$replay_plugins = self::plugin_extras( $preserved_plugins );
 			self::$replay_themes  = self::theme_extras( $preserved_themes );
@@ -592,8 +686,8 @@ final class PremiumUpdatesBridge {
 	 * Capture persistée, ou `[]` si absente ou expirée.
 	 *
 	 * L'expiration est vérifiée ici plutôt que déléguée à l'API des transients :
-	 * la capture vit dans une option pour survivre au `wp_cache_flush()` du
-	 * snapshot sur les sites à cache objet persistant (cf. `capture_now()`).
+	 * la capture vit dans une option pour survivre à un `wp_cache_flush()` (commande
+	 * clear_cache) sur les sites à cache objet persistant (cf. `capture_now()`).
 	 *
 	 * @return array<string, mixed>
 	 */

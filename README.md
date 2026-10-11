@@ -478,6 +478,28 @@ chacun s'additionne.
   `g2rd_connector_cron_phase`, retirée à la désinstallation) ; un retrait refusé par WordPress
   laisse la tâche à sa date, jamais en double. Le heartbeat horaire n'est pas touché : planifié à
   l'enrôlement, sa phase suit déjà l'heure d'enrôlement de chaque site.
+- **Inventaire allégé, mêmes données** (`GET /snapshot`). Chaque synchronisation vidait tout le
+  cache objet du site (`wp_cache_flush()`), forçait trois appels à wordpress.org (cœur,
+  extensions, thèmes, transients détruits d'abord) et relançait cinq requêtes de santé de la
+  base, dont un `SHOW TABLE STATUS`. Désormais :
+  - seul ce que l'inventaire relit est invalidé : liste des extensions (`plugins`/`plugins`),
+    cache des thèmes (`wp_clean_themes_cache( false )`), options autochargées (`alloptions`,
+    dont `active_plugins` et le thème actif) ;
+  - un transient de mise à jour n'est rafraîchi que s'il a plus de 3 h
+    (`PremiumUpdatesBridge::UPDATE_CHECK_MAX_AGE`), manque, a été vérifié pour une autre
+    version de WordPress, ou est resté sans réponse de wordpress.org ; sinon, aucun appel. La
+    commande `check_updates` (« Vérifier les MAJ ») force toujours. Les mises à jour des
+    updaters tiers absents du contexte REST restent annoncées (rejeu de la capture). Une
+    vérification du cœur en échec garde la dernière réponse connue au lieu d'un transient vide ;
+  - `db_health` est calculé au plus une fois par jour (`Rest\DbHealth`, option non autochargée
+    `g2rd_connector_db_health`, oubliée après chaque commande de nettoyage de la base, retirée à
+    la désinstallation) ; `collected_at` donne la date de ce calcul. Un calcul dont une requête a
+    échoué n'est pas gardé ;
+  - l'OPcache n'est invalidé que pour les fichiers du connecteur : les versions des extensions
+    et des thèmes sont lues dans les fichiers eux-mêmes (`get_file_data()`), que l'OPcache ne
+    sert jamais.
+
+  Les champs JSON sont inchangés.
 
 ## Développement
 

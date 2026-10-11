@@ -36,8 +36,11 @@ if ( is_multisite() ) {
 }
 
 // Capture des MAJ tierces (option, pas transient : elle doit survivre au
-// wp_cache_flush() du snapshot sur les sites à cache objet persistant).
+// wp_cache_flush() de la commande clear_cache sur les sites à cache objet persistant).
 delete_site_option( 'g2rd_updates_snapshot' );
+
+// Santé de la base gardée 24 h par l'inventaire (cf. Rest\DbHealth).
+delete_option( 'g2rd_connector_db_health' );
 
 // Registre des nonces de signature + compteur d'échecs (cf. Security\SignatureState).
 delete_option( 'g2rd_connector_signature_state' );

@@ -40,11 +40,15 @@ if ( ! defined( 'HOUR_IN_SECONDS' ) ) {
 if ( ! defined( 'DAY_IN_SECONDS' ) ) {
 	define( 'DAY_IN_SECONDS', 24 * HOUR_IN_SECONDS );
 }
+// Format de résultat de $wpdb (wp-includes/wp-db.php), même valeur.
+if ( ! defined( 'ARRAY_A' ) ) {
+	define( 'ARRAY_A', 'ARRAY_A' );
+}
 
 require_once __DIR__ . '/stubs/wp-classes.php';
 
-// CommandExecutor fait des require_once de fichiers de wp-admin : on les fournit vides.
-foreach ( [ 'plugin', 'class-wp-upgrader', 'file', 'misc', 'update', 'class-pclzip' ] as $g2rd_stub ) {
+// CommandExecutor et le snapshot font des require_once de fichiers de wp-admin : on les fournit vides.
+foreach ( [ 'plugin', 'class-wp-upgrader', 'file', 'misc', 'update', 'class-pclzip', 'translation-install' ] as $g2rd_stub ) {
 	$g2rd_path = ABSPATH . 'wp-admin/includes/' . $g2rd_stub . '.php';
 	if ( ! is_dir( dirname( $g2rd_path ) ) ) {
 		mkdir( dirname( $g2rd_path ), 0777, true );

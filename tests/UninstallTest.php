@@ -8,6 +8,7 @@ use Brain\Monkey\Functions;
 use G2RD\Connector\Cron\Phase;
 use G2RD\Connector\Cron\RestorePointPurgeJob;
 use G2RD\Connector\Events\LoginFailedThrottle;
+use G2RD\Connector\Rest\DbHealth;
 use G2RD\Connector\Rollback\UpdateTransaction;
 use G2RD\Connector\Tests\DirectLogin\FakeWpdb;
 
@@ -121,6 +122,18 @@ final class UninstallTest extends TestCase {
 
 		self::assertContains( '1:' . Phase::OPTION, $deleted );
 		self::assertContains( '2:' . Phase::OPTION, $deleted );
+	}
+
+	/** Santé de la base gardée 24 h par l'inventaire (cf. Rest\DbHealth). */
+	public function test_la_sante_de_la_base_gardee_par_l_inventaire_est_retiree(): void {
+		$this->options[ DbHealth::OPTION ] = [
+			'at'     => 1,
+			'health' => [],
+		];
+
+		$this->uninstall();
+
+		self::assertArrayNotHasKey( DbHealth::OPTION, $this->options );
 	}
 
 	private function uninstall(): void {

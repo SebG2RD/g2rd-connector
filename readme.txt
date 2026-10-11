@@ -92,6 +92,24 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   interval (option `g2rd_connector_cron_phase`, removed on uninstall). A move WordPress refuses
   leaves the task where it was, never twice. The hourly heartbeat is unchanged: it is scheduled
   at enrollment, whose time already differs from one site to another.
+* **Performance: lighter inventory, same data.** Each `/snapshot` call used to empty the whole
+  object cache of the site (`wp_cache_flush()`), force three calls to WordPress.org (core,
+  plugin and theme update checks, after deleting the cached answers) and run five database
+  queries, including a `SHOW TABLE STATUS`. Now:
+  * only what the inventory reads is invalidated: the plugin list, the theme cache and the
+    autoloaded options (active plugins, active theme);
+  * an update check is refreshed only when its cached answer is more than 3 hours old, missing,
+    made for another WordPress version, or left without an answer from WordPress.org; otherwise
+    no call is made. The platform's "Check updates" command (`check_updates`) still forces it.
+    Updates announced by third-party updaters that do not run in REST requests are still
+    reported. A failed core check now keeps the last known answer instead of an empty one;
+  * `db_health` is computed at most once a day (option `g2rd_connector_db_health`, not
+    autoloaded, forgotten after each database cleanup command, removed on uninstall); its
+    `collected_at` field gives the date of that computation. A computation with a failed query
+    is not kept;
+  * OPcache is invalidated for the connector's own files only: plugin and theme versions are
+    read from the files themselves, which OPcache never serves.
+  The JSON fields are unchanged.
 
 = 1.13.0-rc.3 =
 

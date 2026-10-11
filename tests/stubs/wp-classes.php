@@ -98,6 +98,48 @@ if ( ! class_exists( 'WP_User' ) ) {
 	}
 }
 
+if ( ! class_exists( 'WP_REST_Response' ) ) {
+	/** Doublure : les données et le statut de la réponse, rien d'autre. */
+	class WP_REST_Response {
+		/** @param mixed $data */
+		public function __construct( private $data = null, private int $status = 200 ) {}
+
+		/** @return mixed */
+		public function get_data() {
+			return $this->data;
+		}
+
+		public function get_status(): int {
+			return $this->status;
+		}
+	}
+}
+
+if ( ! class_exists( 'WP_Theme' ) ) {
+	/** Doublure : en-têtes du style.css et dossier, fixés par le test. */
+	class WP_Theme {
+		/** @param array<string, string> $headers */
+		public function __construct( private string $stylesheet, private array $headers = [], private bool $exists = true, private string $dir = '' ) {}
+
+		/** @return string|false */
+		public function get( string $header ) {
+			return $this->headers[ $header ] ?? false;
+		}
+
+		public function get_stylesheet(): string {
+			return $this->stylesheet;
+		}
+
+		public function exists(): bool {
+			return $this->exists;
+		}
+
+		public function get_stylesheet_directory(): string {
+			return $this->dir;
+		}
+	}
+}
+
 if ( ! class_exists( 'Automatic_Upgrader_Skin' ) ) {
 	class Automatic_Upgrader_Skin {}
 }

@@ -14,6 +14,7 @@ use Brain\Monkey\Functions;
 use G2RD\Connector\Commands\CommandExecutor;
 use G2RD\Connector\Rollback\ProtectedUpdate;
 use G2RD\Connector\Rollback\UpdateTransaction;
+use G2RD\Connector\Updates\PremiumUpdatesBridge;
 use PHPUnit\Framework\TestCase as PHPUnitTestCase;
 
 abstract class TestCase extends PHPUnitTestCase {
@@ -65,6 +66,10 @@ abstract class TestCase extends PHPUnitTestCase {
 		( new \ReflectionProperty( ProtectedUpdate::class, 'rollback_started' ) )->setValue( null, [] );
 		( new \ReflectionProperty( ProtectedUpdate::class, 'closed_here' ) )->setValue( null, [] );
 		( new \ReflectionProperty( CommandExecutor::class, 'sandbox_failed' ) )->setValue( null, [] );
+		// Rejeu des mises à jour tierces : état de requête, comme les précédents.
+		( new \ReflectionProperty( PremiumUpdatesBridge::class, 'replay_plugins' ) )->setValue( null, [] );
+		( new \ReflectionProperty( PremiumUpdatesBridge::class, 'replay_themes' ) )->setValue( null, [] );
+		( new \ReflectionProperty( PremiumUpdatesBridge::class, 'filters_installed' ) )->setValue( null, false );
 	}
 
 	protected function tearDown(): void {

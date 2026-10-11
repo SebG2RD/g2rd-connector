@@ -21,6 +21,7 @@ namespace G2RD\Connector\Commands;
 
 use Automatic_Upgrader_Skin;
 use Core_Upgrader;
+use G2RD\Connector\Rest\DbHealth;
 use G2RD\Connector\Rollback\ProtectedUpdate;
 use G2RD\Connector\Rollback\RestoreCommands;
 use G2RD\Connector\Rollback\Services;
@@ -184,6 +185,14 @@ final class CommandExecutor {
 				}
 				$stray = $level_output . $stray;
 			}
+		}
+
+		// Un nettoyage change les compteurs de santé de la base que l'inventaire garde
+		// 24 h (cf. Rest\DbHealth) : la plateforme attend la valeur réelle de la
+		// synchronisation suivante. Oublié même si la commande a échoué en route (une
+		// partie a pu être supprimée).
+		if ( in_array( $command, DbHealth::CLEANUP_COMMANDS, true ) ) {
+			DbHealth::forget();
 		}
 
 		if ( '' !== trim( $stray ) ) {
