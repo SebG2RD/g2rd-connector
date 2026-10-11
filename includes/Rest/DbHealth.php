@@ -10,6 +10,12 @@
  * identiques ; `collected_at` est la date du calcul, ce qui dit à la plateforme de
  * quand datent les valeurs.
  *
+ * Ordre de livraison : la plateforme d'abord. G2RD WP Manager 1.59.0 ignore
+ * `collected_at` et date les compteurs de l'heure de la synchronisation
+ * (SiteHealthMetrics::applyDbHealth()) : diffusé avant qu'elle ne lise ce champ, ce
+ * cache lui ferait afficher « mesuré il y a 2 minutes » pour des valeurs vieilles de
+ * près de 24 h (cf. README, « Charge sur le serveur »).
+ *
  * Lecture seule et bornée : aucun OPTIMIZE ni suppression ici. Le nettoyage passe par
  * les commandes delete_spam_comments / delete_post_revisions / empty_trashed_posts /
  * delete_expired_transients / optimize_database. `autoloaded_options_mb` est purement

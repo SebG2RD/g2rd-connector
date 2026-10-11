@@ -8,7 +8,8 @@
  *
  * Léger depuis la 1.14 (serveur mutualisé partagé par tout le parc) : invalidation
  * ciblée des caches relus au lieu de wp_cache_flush(), appels à wordpress.org
- * seulement pour un transient de mise à jour périmé (plus de 3 h) ou absent, santé
+ * seulement pour un transient de mise à jour absent, ou sans réponse de wordpress.org
+ * depuis plus de 3 h, ou ne couvrant pas ce qui est installé, santé
  * de la base calculée au plus une fois par jour, OPcache invalidé pour le seul
  * connecteur. Les données renvoyées restent celles que WordPress tient pour vraies.
  *
@@ -173,9 +174,11 @@ final class SnapshotController {
 	}
 
 	/**
-	 * Transients de mise à jour : rafraîchis seulement s'ils sont périmés ou absents
-	 * (PremiumUpdatesBridge::UPDATE_CHECK_MAX_AGE, 3 h). Sinon leurs données sont
-	 * vraies et suffisent : ni appel à wordpress.org, ni destruction.
+	 * Transients de mise à jour : rafraîchis seulement s'ils ne sont pas frais — absents,
+	 * vérifiés ou répondus par wordpress.org il y a plus de 3 h
+	 * (PremiumUpdatesBridge::UPDATE_CHECK_MAX_AGE), ou ne couvrant pas ce qui est
+	 * installé. Sinon leurs données sont vraies et suffisent : ni appel à wordpress.org,
+	 * ni destruction.
 	 *
 	 * Le rafraîchissement forcé reste celui que la plateforme demande déjà : la commande
 	 * check_updates (« Vérifier les MAJ »), toujours forcée, suivie d'une
@@ -199,6 +202,10 @@ final class SnapshotController {
 	/**
 	 * Vérification du cœur fraîche, faite pour la version installée et porteuse d'une
 	 * réponse de wordpress.org (wp-includes/update.php) :
+	 *  - vérifiée (`last_checked`) ET répondue par wordpress.org il y a moins de 3 h
+	 *    (PremiumUpdatesBridge::answered_recently(), cf. Updates\WporgAnswers) :
+	 *    wp_version_check() écrit `last_checked = time()` dans le transient existant
+	 *    AVANT l'appel réseau, et s'arrête sur un échec en gardant les anciennes offres ;
 	 *  - après une mise à jour du cœur, wp_version_check() tient lui-même le transient
 	 *    pour invalide (`version_checked` différent de la version courante) ;
 	 *  - wordpress.org rend toujours au moins une offre (« latest » quand le site est à
@@ -207,7 +214,8 @@ final class SnapshotController {
 	 * @param mixed $core Transient `update_core`.
 	 */
 	private static function core_check_is_current( $core, int $now ): bool {
-		if ( ! PremiumUpdatesBridge::checked_recently( $core, $now ) || ! is_object( $core ) ) {
+		if ( ! PremiumUpdatesBridge::checked_recently( $core, $now ) || ! is_object( $core )
+			|| ! PremiumUpdatesBridge::answered_recently( 'core', $now ) ) {
 			return false;
 		}
 		/** @var \stdClass $core */

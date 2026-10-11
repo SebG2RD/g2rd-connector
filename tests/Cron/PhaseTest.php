@@ -12,6 +12,7 @@ use G2RD\Connector\Cron\UpdatesDiscoveryJob;
 use G2RD\Connector\Plugin;
 use G2RD\Connector\Settings;
 use G2RD\Connector\Tests\TestCase;
+use G2RD\Connector\Updates\WporgAnswers;
 
 /**
  * Phases des tâches WP-Cron récurrentes du connecteur, tirées au hasard.
@@ -315,6 +316,34 @@ final class PhaseTest extends TestCase {
 			self::assertSame( 1, $this->events_of( $hook ), $hook );
 		}
 		self::assertSame( Phase::VERSION, $this->options[ Phase::OPTION ] ?? null );
+	}
+
+	/**
+	 * Même démarrage d'un site enrôlé (ce banc d'essai simule le planificateur qu'il
+	 * touche) : l'écoute des réponses de wordpress.org est branchée, sans quoi
+	 * l'inventaire rafraîchirait à chaque synchronisation (cf. Updates\WporgAnswers).
+	 */
+	public function test_le_demarrage_d_un_site_enrole_note_les_reponses_de_wordpress_org(): void {
+		Functions\when( 'is_admin' )->justReturn( false );
+		Functions\when( 'wp_load_alloptions' )->justReturn( [ Settings::OPTION_KEY => 'autochargée' ] );
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => Settings::encrypt_token( 'jeton-du-site', 'v1' ),
+		];
+
+		Plugin::instance()->boot();
+
+		self::assertNotFalse( has_action( 'http_api_debug', [ WporgAnswers::class, 'record' ] ) );
+	}
+
+	/** Site pas encore enrôlé : rien n'est écrit, donc rien n'est écouté (guideline 7). */
+	public function test_un_site_non_enrole_n_ecoute_pas_les_reponses_de_wordpress_org(): void {
+		Functions\when( 'is_admin' )->justReturn( false );
+		Functions\when( 'wp_load_alloptions' )->justReturn( [] );
+
+		Plugin::instance()->boot();
+
+		self::assertFalse( has_action( 'http_api_debug', [ WporgAnswers::class, 'record' ] ) );
 	}
 
 	private function schedule( int $timestamp, string $recurrence, string $hook ): void {

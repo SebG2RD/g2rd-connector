@@ -8,6 +8,7 @@ use Brain\Monkey\Functions;
 use G2RD\Connector\Rest\SnapshotController;
 use G2RD\Connector\Tests\TestCase;
 use G2RD\Connector\Updates\PremiumUpdatesBridge;
+use G2RD\Connector\Updates\WporgAnswers;
 
 /**
  * Banc d'essai de l'inventaire (GET /snapshot) : un WordPress simulé autour de
@@ -41,6 +42,9 @@ abstract class SnapshotTestCase extends TestCase {
 	/** Capture des mises à jour tierces (option `g2rd_updates_snapshot`), false si absente. */
 	protected mixed $capture = false;
 
+	/** @var array<string, mixed> Autres options de réseau (get_site_option / update_site_option), par nom. */
+	protected array $site_options = [];
+
 	/** @var array<string, string> En-tête `Version:` sur le disque, par fichier d'extension. */
 	protected array $plugin_versions = [
 		'akismet/akismet.php'              => '5.3',
@@ -65,6 +69,7 @@ abstract class SnapshotTestCase extends TestCase {
 		parent::setUp();
 		$this->transients   = [];
 		$this->calls        = [];
+		$this->site_options = [];
 		$this->wpdb         = new SnapshotWpdb();
 		$this->wporg_themes = [
 			'response'  => [],
@@ -115,9 +120,14 @@ abstract class SnapshotTestCase extends TestCase {
 		return count( $this->calls[ $function ] ?? [] );
 	}
 
-	/** Les trois transients de mise à jour, vérifiés il y a `$age` secondes. */
+	/**
+	 * Les trois transients de mise à jour, vérifiés il y a `$age` secondes, et la
+	 * réponse de wordpress.org reçue à ce moment-là pour chacun (cf. WporgAnswers).
+	 */
 	protected function update_transients_checked( int $age ): void {
 		$at = time() - $age;
+
+		$this->answered( $age );
 
 		$this->transients['update_core']    = (object) [
 			'last_checked'    => $at,
@@ -135,6 +145,45 @@ abstract class SnapshotTestCase extends TestCase {
 			'last_checked' => $at,
 			'checked'      => self::THEME_VERSIONS,
 		] + $this->wporg_themes );
+	}
+
+	/** Dernière réponse de wordpress.org reçue il y a `$age` secondes, pour les trois vérifications. */
+	protected function answered( int $age ): void {
+		$at = time() - $age;
+
+		$this->site_options[ WporgAnswers::OPTION ] = [
+			'core'    => $at,
+			'plugins' => $at,
+			'themes'  => $at,
+		];
+	}
+
+	/**
+	 * Ce que WordPress passe à `http_api_debug` (WP_Http::request()) après une réponse
+	 * 200 de wordpress.org à l'une des trois vérifications : la réponse est notée.
+	 */
+	protected static function wporg_answered( string $check ): void {
+		$requests = [
+			'core'    => [ 'https://api.wordpress.org/core/version-check/1.7/?version=' . self::WP_VERSION, '{"offers":[{"response":"latest"}],"translations":[]}' ],
+			'plugins' => [ 'https://api.wordpress.org/plugins/update-check/1.1/', '{"plugins":[],"translations":[],"no_update":[]}' ],
+			'themes'  => [ 'https://api.wordpress.org/themes/update-check/1.1/', '{"themes":[],"translations":[],"no_update":[]}' ],
+		];
+		[ $url, $body ] = $requests[ $check ];
+
+		WporgAnswers::record(
+			[
+				'headers'  => [],
+				'body'     => $body,
+				'response' => [
+					'code'    => 200,
+					'message' => 'OK',
+				],
+			],
+			'response',
+			'WpOrg\Requests\Requests',
+			[],
+			$url
+		);
 	}
 
 	/** Offre « à jour » que wordpress.org rend toujours (api.wordpress.org/core/version-check/1.7/). */
@@ -215,7 +264,21 @@ abstract class SnapshotTestCase extends TestCase {
 			]
 		);
 		Functions\when( 'get_filesystem_method' )->justReturn( 'ftpext' );
-		Functions\when( 'get_site_option' )->alias( fn () => $this->capture );
+		Functions\when( 'get_site_option' )->alias(
+			fn ( string $name, $fallback = false ) => 'g2rd_updates_snapshot' === $name
+				? $this->capture
+				: ( array_key_exists( $name, $this->site_options ) ? $this->site_options[ $name ] : $fallback )
+		);
+		Functions\when( 'update_site_option' )->alias(
+			function ( string $name, $value ): bool {
+				if ( 'g2rd_updates_snapshot' === $name ) {
+					$this->capture = $value;
+				} else {
+					$this->site_options[ $name ] = $value;
+				}
+				return true;
+			}
+		);
 		Functions\when( 'wp_next_scheduled' )->justReturn( false );
 		Functions\when( 'wp_schedule_single_event' )->justReturn( true );
 		Functions\when( 'wp_parse_url' )->alias( static fn ( string $url, int $component = -1 ) => parse_url( $url, $component ) );
@@ -300,11 +363,13 @@ abstract class SnapshotTestCase extends TestCase {
 			}
 		);
 
-		// Les trois appels à wordpress.org : notés, et le transient qu'ils écrivent.
+		// Les trois appels à wordpress.org, qui répond : notés, la réponse passée à
+		// `http_api_debug` (cf. WporgAnswers), et le transient qu'ils écrivent.
 		Functions\when( 'wp_version_check' )->alias(
 			function ( ...$args ): void {
 				$this->calls['wp_version_check'][] = $args;
-				$this->transients['update_core']   = (object) [
+				self::wporg_answered( 'core' );
+				$this->transients['update_core'] = (object) [
 					'last_checked'    => time(),
 					'version_checked' => self::WP_VERSION,
 					'updates'         => [ self::latest_core_offer() ],
@@ -315,6 +380,7 @@ abstract class SnapshotTestCase extends TestCase {
 		Functions\when( 'wp_update_plugins' )->alias(
 			function ( ...$args ): void {
 				$this->calls['wp_update_plugins'][] = $args;
+				self::wporg_answered( 'plugins' );
 				$this->transients['update_plugins'] = (object) [
 					'last_checked' => time(),
 					'response'     => [],
@@ -326,7 +392,8 @@ abstract class SnapshotTestCase extends TestCase {
 		Functions\when( 'wp_update_themes' )->alias(
 			function ( ...$args ): void {
 				$this->calls['wp_update_themes'][] = $args;
-				$this->transients['update_themes']  = (object) ( [
+				self::wporg_answered( 'themes' );
+				$this->transients['update_themes'] = (object) ( [
 					'last_checked' => time(),
 					'checked'      => self::THEME_VERSIONS,
 				] + $this->wporg_themes );

@@ -18,10 +18,13 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
 // compteur des connexions échouées de la minute (cf. Events\LoginFailedThrottle :
 // il expire seul en 120 s, mais sans cache objet sa ligne resterait jusqu'au
 // ménage quotidien de WordPress). Puis le marqueur de la répartition des tâches
-// WP-Cron (cf. Cron\Phase), propre à chaque blog comme les tâches elles-mêmes.
+// WP-Cron (cf. Cron\Phase), propre à chaque blog comme les tâches elles-mêmes, et la
+// santé de la base gardée 24 h par l'inventaire (cf. Rest\DbHealth), propre à chaque
+// blog comme son inventaire.
 delete_option( 'g2rd_connector_settings' );
 delete_transient( 'g2rd_connector_login_failed_window' );
 delete_option( 'g2rd_connector_cron_phase' );
+delete_option( 'g2rd_connector_db_health' );
 
 // Si multisite, suppression sur chaque blog.
 if ( is_multisite() ) {
@@ -31,6 +34,7 @@ if ( is_multisite() ) {
         delete_option( 'g2rd_connector_settings' );
         delete_transient( 'g2rd_connector_login_failed_window' );
         delete_option( 'g2rd_connector_cron_phase' );
+        delete_option( 'g2rd_connector_db_health' );
         restore_current_blog();
     }
 }
@@ -39,8 +43,9 @@ if ( is_multisite() ) {
 // wp_cache_flush() de la commande clear_cache sur les sites à cache objet persistant).
 delete_site_option( 'g2rd_updates_snapshot' );
 
-// Santé de la base gardée 24 h par l'inventaire (cf. Rest\DbHealth).
-delete_option( 'g2rd_connector_db_health' );
+// Heure des dernières réponses de wordpress.org aux vérifications des mises à jour
+// (cf. Updates\WporgAnswers) : option de réseau, comme les transients de mise à jour.
+delete_site_option( 'g2rd_connector_wporg_answers' );
 
 // Registre des nonces de signature + compteur d'échecs (cf. Security\SignatureState).
 delete_option( 'g2rd_connector_signature_state' );

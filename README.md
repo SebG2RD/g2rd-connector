@@ -494,16 +494,31 @@ chacun s'additionne.
   - seul ce que l'inventaire relit est invalidé : liste des extensions (`plugins`/`plugins`),
     cache des thèmes (`wp_clean_themes_cache( false )`), options autochargées (`alloptions`,
     dont `active_plugins` et le thème actif) ;
-  - un transient de mise à jour n'est rafraîchi que s'il a plus de 3 h
-    (`PremiumUpdatesBridge::UPDATE_CHECK_MAX_AGE`), manque, a été vérifié pour une autre
-    version de WordPress, ou est resté sans réponse de wordpress.org ; sinon, aucun appel. La
-    commande `check_updates` (« Vérifier les MAJ ») force toujours. Les mises à jour des
-    updaters tiers absents du contexte REST restent annoncées (rejeu de la capture). Une
-    vérification du cœur en échec garde la dernière réponse connue au lieu d'un transient vide ;
+  - un transient de mise à jour n'est gardé, sans appel, que s'il a été vérifié ET que
+    wordpress.org y a réellement répondu il y a moins de 3 h
+    (`PremiumUpdatesBridge::UPDATE_CHECK_MAX_AGE`), et qu'il couvre les extensions et thèmes
+    installés (chacun présent dans `checked`, à la même version : une extension copiée ou mise à
+    jour hors de WordPress le rend périmé, comme pour `wp_update_plugins()`). Le cœur doit en
+    plus avoir été vérifié pour la version installée. Sinon (ou s'il manque), il est rafraîchi.
+    `last_checked` seul ne suffit pas : WordPress l'écrit dans le transient existant AVANT
+    d'appeler wordpress.org, et l'y laisse quand l'appel échoue — anciennes données sous une
+    date toute neuve. Le connecteur note donc l'heure de chaque réponse 200 de api.wordpress.org
+    aux trois vérifications (`Updates\WporgAnswers`, action `http_api_debug`, option de réseau
+    non autochargée `g2rd_connector_wporg_answers`, une écriture par vérification réussie,
+    retirée à la désinstallation). Sans réponse notée (connecteur tout juste mis à jour,
+    wordpress.org bloqué), l'inventaire rafraîchit à chaque fois, comme avant. La commande
+    `check_updates` (« Vérifier les MAJ ») force toujours. Les mises à jour des updaters tiers
+    absents du contexte REST restent annoncées (rejeu de la capture). Une vérification du cœur
+    en échec garde la dernière réponse connue au lieu d'un transient vide ;
   - `db_health` est calculé au plus une fois par jour (`Rest\DbHealth`, option non autochargée
     `g2rd_connector_db_health`, oubliée après chaque commande de nettoyage de la base, retirée à
-    la désinstallation) ; `collected_at` donne la date de ce calcul. Un calcul dont une requête a
-    échoué n'est pas gardé ;
+    la désinstallation, sur chaque blog en multisite) ; `collected_at` donne la date de ce calcul.
+    Un calcul dont une requête a échoué n'est pas gardé. **Ordre de livraison : la plateforme
+    d'abord.** G2RD WP Manager 1.59.0 ignore `collected_at` et date les compteurs de l'heure de
+    la synchronisation (`SiteHealthMetrics::applyDbHealth()`, « Mesuré il y a … ») : avant de
+    diffuser cette version du connecteur, la plateforme doit lire `collected_at` (date ISO 8601
+    bornée à maintenant, repli sur l'heure de la synchronisation). Sinon, elle afficherait
+    « mesuré il y a 2 minutes » pour des compteurs vieux de près de 24 h ;
   - l'OPcache n'est invalidé que pour les fichiers du connecteur : les versions des extensions
     et des thèmes sont lues dans les fichiers eux-mêmes (`get_file_data()`), que l'OPcache ne
     sert jamais.

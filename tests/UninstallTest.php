@@ -11,6 +11,7 @@ use G2RD\Connector\Events\LoginFailedThrottle;
 use G2RD\Connector\Rest\DbHealth;
 use G2RD\Connector\Rollback\UpdateTransaction;
 use G2RD\Connector\Tests\DirectLogin\FakeWpdb;
+use G2RD\Connector\Updates\WporgAnswers;
 
 /**
  * Désinstallation (uninstall.php) : ce que l'allègement du connecteur a ajouté est
@@ -134,6 +135,38 @@ final class UninstallTest extends TestCase {
 		$this->uninstall();
 
 		self::assertArrayNotHasKey( DbHealth::OPTION, $this->options );
+	}
+
+	/** En multisite, l'inventaire de chaque blog garde sa propre santé de la base : retirée sur chacun. */
+	public function test_la_sante_de_la_base_est_retiree_sur_chaque_blog(): void {
+		$deleted = [];
+		Functions\when( 'delete_option' )->alias(
+			function ( string $key ) use ( &$deleted ): bool {
+				$deleted[] = $this->blog . ':' . $key;
+				unset( $this->options[ $key ] );
+				return true;
+			}
+		);
+
+		$this->uninstall();
+
+		self::assertContains( '1:' . DbHealth::OPTION, $deleted );
+		self::assertContains( '2:' . DbHealth::OPTION, $deleted );
+	}
+
+	/** Heure des réponses de wordpress.org (cf. Updates\WporgAnswers) : option de réseau, comme les transients de mise à jour. */
+	public function test_l_heure_des_reponses_de_wordpress_org_est_retiree(): void {
+		$deleted = [];
+		Functions\when( 'delete_site_option' )->alias(
+			static function ( string $key ) use ( &$deleted ): bool {
+				$deleted[] = $key;
+				return true;
+			}
+		);
+
+		$this->uninstall();
+
+		self::assertContains( WporgAnswers::OPTION, $deleted );
 	}
 
 	private function uninstall(): void {

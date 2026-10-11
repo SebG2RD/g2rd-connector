@@ -27,6 +27,7 @@ use G2RD\Connector\Rollback\AutoUpdateGuard;
 use G2RD\Connector\Rollback\HealthEndpoint;
 use G2RD\Connector\Updater\GitHubUpdater;
 use G2RD\Connector\Updates\PremiumUpdatesBridge;
+use G2RD\Connector\Updates\WporgAnswers;
 
 final class Plugin {
 
@@ -100,6 +101,14 @@ final class Plugin {
 		if ( is_admin() ) {
 			( new PremiumUpdatesBridge() )->register();
 		}
+
+		// Heure de la dernière réponse REÇUE de wordpress.org à chaque vérification des
+		// mises à jour (cœur, extensions, thèmes), dans tous les contextes (WP-Cron,
+		// administration, REST) : `last_checked` des transients est écrit avant l'appel,
+		// même s'il échoue. L'inventaire ne tient un transient pour frais qu'avec une
+		// réponse récente (cf. Updates\WporgAnswers). Après le gate d'enrôlement : aucune
+		// écriture avant opt-in.
+		WporgAnswers::register();
 
 		// Découverte des MAJ en contexte WP-Cron, où les updaters tiers acceptent
 		// de s'enregistrer (SEOPress teste explicitement DOING_CRON). C'est ce qui

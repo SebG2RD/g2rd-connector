@@ -98,15 +98,29 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   queries, including a `SHOW TABLE STATUS`. Now:
   * only what the inventory reads is invalidated: the plugin list, the theme cache and the
     autoloaded options (active plugins, active theme);
-  * an update check is refreshed only when its cached answer is more than 3 hours old, missing,
-    made for another WordPress version, or left without an answer from WordPress.org; otherwise
-    no call is made. The platform's "Check updates" command (`check_updates`) still forces it.
-    Updates announced by third-party updaters that do not run in REST requests are still
-    reported. A failed core check now keeps the last known answer instead of an empty one;
+  * an update check is kept, with no call, only when it was checked AND actually answered by
+    WordPress.org less than 3 hours ago, and covers the installed plugins and themes (each one
+    listed in `checked` with the same version: a plugin copied or updated outside WordPress
+    makes it stale, as in `wp_update_plugins()`). The core check must also have been made for
+    the installed version. Otherwise, or when it is missing, it is refreshed. `last_checked`
+    alone is not enough: WordPress writes it into the cached answer BEFORE calling
+    WordPress.org and leaves it there when the call fails, so old data would pass for fresh.
+    The connector therefore notes the time of each 200 answer from api.wordpress.org to the
+    three update checks (`http_api_debug` action, network option
+    `g2rd_connector_wporg_answers`, not autoloaded, one write per successful check, removed on
+    uninstall). With no answer noted (connector just updated, WordPress.org blocked), the
+    inventory refreshes every time, as before. The platform's "Check updates" command
+    (`check_updates`) still forces it. Updates announced by third-party updaters that do not
+    run in REST requests are still reported. A failed core check now keeps the last known
+    answer instead of an empty one;
   * `db_health` is computed at most once a day (option `g2rd_connector_db_health`, not
-    autoloaded, forgotten after each database cleanup command, removed on uninstall); its
-    `collected_at` field gives the date of that computation. A computation with a failed query
-    is not kept;
+    autoloaded, forgotten after each database cleanup command, removed on uninstall, on every
+    site of a multisite network); its `collected_at` field gives the date of that computation.
+    A computation with a failed query is not kept. **Delivery order: the platform first.** G2RD
+    WP Manager 1.59.0 ignores `collected_at` and dates the counters with the sync time ("Measured
+    … ago"): before this connector version is rolled out to sites, the platform must read
+    `collected_at` (ISO 8601 date capped at now, falling back to the sync time). Otherwise it
+    would show "measured 2 minutes ago" for counters up to almost 24 hours old;
   * OPcache is invalidated for the connector's own files only: plugin and theme versions are
     read from the files themselves, which OPcache never serves.
   The JSON fields are unchanged.

@@ -9,6 +9,7 @@ use G2RD\Connector\Commands\CommandExecutor;
 use G2RD\Connector\Rest\DbHealth;
 use G2RD\Connector\Rest\SnapshotController;
 use G2RD\Connector\Updates\PremiumUpdatesBridge;
+use G2RD\Connector\Updates\WporgAnswers;
 
 /**
  * Inventaire plus léger, sans perdre la vérité.
@@ -125,6 +126,114 @@ final class SnapshotLightTest extends SnapshotTestCase {
 	}
 
 	/**
+	 * Le cas réel d'un échec réseau : wp_version_check(), wp_update_plugins() et
+	 * wp_update_themes() écrivent `last_checked = time()` dans le transient existant
+	 * AVANT d'appeler wordpress.org (wp-includes/update.php), puis s'arrêtent sur
+	 * l'erreur. Dernière réponse reçue il y a 13 h (2 h du matin), cron WordPress sans
+	 * réponse il y a 1 h (14 h) : à 15 h, le transient paraît vérifié il y a une heure
+	 * avec les données de 2 h. Il est rafraîchi, pas cru 3 h de plus.
+	 */
+	public function test_un_echec_reseau_apres_une_ancienne_reponse_n_est_pas_tenu_pour_frais(): void {
+		$this->update_transients_checked( 13 * 3600 );
+		foreach ( [ 'update_core', 'update_plugins', 'update_themes' ] as $name ) {
+			$this->transients[ $name ]->last_checked = time() - 3600;
+		}
+
+		$this->snapshot();
+
+		self::assertSame( 1, $this->calls_to( 'wp_version_check' ) );
+		self::assertSame( 1, $this->calls_to( 'wp_update_plugins' ) );
+		self::assertSame( 1, $this->calls_to( 'wp_update_themes' ) );
+	}
+
+	/**
+	 * Aucune réponse notée (connecteur tout juste mis à jour, requêtes vers
+	 * wordpress.org court-circuitées par une extension) : rafraîchi à chaque fois,
+	 * comme avant.
+	 */
+	public function test_sans_reponse_notee_de_wordpress_org_les_transients_sont_rafraichis(): void {
+		$this->update_transients_checked( self::FRESH );
+		unset( $this->site_options[ WporgAnswers::OPTION ] );
+
+		$this->snapshot();
+
+		self::assertSame( 1, $this->calls_to( 'wp_version_check' ) );
+		self::assertSame( 1, $this->calls_to( 'wp_update_plugins' ) );
+		self::assertSame( 1, $this->calls_to( 'wp_update_themes' ) );
+	}
+
+	/** Une réponse reçue pendant l'inventaire est notée : la synchronisation suivante n'appelle plus. */
+	public function test_la_reponse_recue_au_rafraichissement_rend_la_synchronisation_suivante_legere(): void {
+		$this->update_transients_checked( self::STALE );
+
+		$this->snapshot();
+		$this->snapshot();
+
+		self::assertSame( 1, $this->calls_to( 'wp_version_check' ) );
+		self::assertSame( 1, $this->calls_to( 'wp_update_plugins' ) );
+		self::assertSame( 1, $this->calls_to( 'wp_update_themes' ) );
+	}
+
+	/** Seule la vérification restée sans réponse est rafraîchie. */
+	public function test_seule_la_verification_sans_reponse_recente_est_rafraichie(): void {
+		$this->update_transients_checked( self::FRESH );
+		$this->site_options[ WporgAnswers::OPTION ]['themes'] = time() - self::STALE;
+
+		$this->snapshot();
+
+		self::assertSame( 0, $this->calls_to( 'wp_version_check' ) );
+		self::assertSame( 0, $this->calls_to( 'wp_update_plugins' ) );
+		self::assertSame( 1, $this->calls_to( 'wp_update_themes' ) );
+	}
+
+	/**
+	 * Extension copiée hors de WordPress (FTP, hébergeur) : absente de `checked`, elle
+	 * n'aurait aucune information de mise à jour pendant 3 h. wp_update_plugins() le
+	 * détecte lui-même ($plugin_changed) ; l'inventaire aussi.
+	 */
+	public function test_une_extension_installee_hors_de_wordpress_rend_le_transient_perime(): void {
+		$this->update_transients_checked( self::FRESH );
+		unset( $this->transients['update_plugins']->checked['wp-seopress-pro/seopress-pro.php'] );
+
+		$this->snapshot();
+
+		self::assertSame( 1, $this->calls_to( 'wp_update_plugins' ) );
+		self::assertSame( 0, $this->calls_to( 'wp_update_themes' ) );
+		self::assertSame( 0, $this->calls_to( 'wp_version_check' ) );
+	}
+
+	/** Extension mise à jour hors de WordPress : version installée différente de `checked`. */
+	public function test_une_extension_mise_a_jour_hors_de_wordpress_rend_le_transient_perime(): void {
+		$this->update_transients_checked( self::FRESH );
+		$this->transients['update_plugins']->checked['akismet/akismet.php'] = '5.2';
+
+		$this->snapshot();
+
+		self::assertSame( 1, $this->calls_to( 'wp_update_plugins' ) );
+		self::assertSame( 0, $this->calls_to( 'wp_update_themes' ) );
+	}
+
+	/** Pendant thème : absent de `checked`, ou version différente. */
+	public function test_un_theme_installe_ou_mis_a_jour_hors_de_wordpress_rend_le_transient_perime(): void {
+		$this->update_transients_checked( self::FRESH );
+		unset( $this->transients['update_themes']->checked['premium-pro'] );
+
+		$this->snapshot();
+
+		self::assertSame( 1, $this->calls_to( 'wp_update_themes' ) );
+		self::assertSame( 0, $this->calls_to( 'wp_update_plugins' ) );
+
+		$this->calls = [];
+		$this->update_transients_checked( self::FRESH );
+		$this->transients['update_themes']->checked['twentytwentyfive'] = '1.2';
+
+		$this->snapshot();
+
+		self::assertSame( 1, $this->calls_to( 'wp_update_themes' ) );
+		self::assertSame( 0, $this->calls_to( 'wp_update_plugins' ) );
+	}
+
+	/**
 	 * Échec réseau sur une vérification du cœur périmée : le transient n'est plus
 	 * détruit d'abord, la dernière réponse connue reste (au lieu d'un « aucune mise à
 	 * jour » faux).
@@ -139,7 +248,10 @@ final class SnapshotLightTest extends SnapshotTestCase {
 		$this->transients['update_core']->updates = [ $offer ];
 		Functions\when( 'wp_version_check' )->alias(
 			function ( ...$args ): void {
-				$this->calls['wp_version_check'][] = $args; // wordpress.org injoignable : rien d'écrit.
+				$this->calls['wp_version_check'][] = $args;
+				// Comme wp_version_check() : `last_checked` écrit avant l'appel, puis
+				// wordpress.org injoignable, rien d'autre.
+				$this->transients['update_core']->last_checked = time();
 			}
 		);
 

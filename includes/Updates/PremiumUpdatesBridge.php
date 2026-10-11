@@ -90,17 +90,29 @@ final class PremiumUpdatesBridge {
 	 * Âge maximal (en secondes) d'un transient de mise à jour (`update_core`,
 	 * `update_plugins`, `update_themes`) que l'inventaire tient pour frais : 3 h.
 	 *
-	 * En deçà, ses données sont vraies — WordPress les a reçues de wordpress.org (et des
-	 * updaters tiers) il y a moins de 3 h — et suffisent : ni appel à wordpress.org, ni
-	 * destruction. Au-delà, ou s'il manque, l'inventaire le rafraîchit comme avant.
+	 * Frais : vérifié (`last_checked`) ET répondu par wordpress.org (WporgAnswers) il y a
+	 * moins de 3 h, et couvrant les extensions et thèmes installés (cf. is_fresh()). Ses
+	 * données sont alors vraies et suffisent : ni appel à wordpress.org, ni destruction.
+	 * Sinon, ou s'il manque, l'inventaire le rafraîchit comme avant. `last_checked` seul
+	 * ne suffit pas : WordPress l'écrit avant l'appel réseau, même quand celui-ci échoue.
 	 *
 	 * Ce qui les renouvelle entre deux synchronisations de la plateforme (environ toutes
 	 * les 7 h) : les tâches planifiées de WordPress (wp_version_check, wp_update_plugins,
 	 * wp_update_themes, deux fois par jour chacune), la découverte du connecteur (deux
-	 * fois par jour), les écrans d'administration. Une mise à jour (cœur, extension,
-	 * thème) détruit elle-même le transient concerné : la synchronisation qui la suit
-	 * le recharge. Une version publiée entre-temps apparaît au plus 3 h plus tard
-	 * qu'avant ; « Vérifier les MAJ » (commande check_updates) force toujours.
+	 * fois par jour), les écrans d'administration.
+	 *
+	 * Après une mise à jour : Plugin_Upgrader / Theme_Upgrader détruisent le transient
+	 * concerné avec `clear_update_cache` (valeur par défaut : mises à jour de la
+	 * plateforme, de wp-admin, de WP-CLI), Core_Upgrader détruit toujours `update_core`.
+	 * Les mises à jour automatiques de WordPress passent `clear_update_cache => false`
+	 * pour chaque élément et ne détruisent le transient qu'à la fin de leur lot
+	 * (WP_Automatic_Updater::run()) ; une mise à jour hors de WordPress (FTP, panneau de
+	 * l'hébergeur) n'y touche pas. Dans ces cas, la garde version_compare de plugins() /
+	 * themes() (SnapshotController) et du rejeu écarte l'entrée périmée, et la version
+	 * installée, différente de celle de `checked`, rend le transient périmé.
+	 *
+	 * Une version publiée entre-temps apparaît au plus 3 h plus tard qu'avant ;
+	 * « Vérifier les MAJ » (commande check_updates) force toujours.
 	 *
 	 * Écrit en secondes littérales : `HOUR_IN_SECONDS` n'est défini qu'à l'exécution.
 	 */
@@ -323,7 +335,8 @@ final class PremiumUpdatesBridge {
 
 	/**
 	 * Pendant de refresh_update_transients() pour l'inventaire : ne rafraîchit que les
-	 * transients périmés ou absents (cf. UPDATE_CHECK_MAX_AGE), chacun pour soi. Le
+	 * transients qui ne sont pas frais (cf. is_fresh() : vérifiés et répondus il y a
+	 * moins de UPDATE_CHECK_MAX_AGE, couvrant ce qui est installé), chacun pour soi. Le
 	 * rejeu des entrées tierces est installé dans tous les cas : sans lui, une mise à
 	 * jour que seule la capture connaît (updater absent du contexte REST) disparaîtrait
 	 * de l'inventaire dès qu'il n'y a rien à rafraîchir.
@@ -335,8 +348,9 @@ final class PremiumUpdatesBridge {
 	/**
 	 * Transient de mise à jour vérifié il y a moins de UPDATE_CHECK_MAX_AGE, d'après sa
 	 * date `last_checked` (posée par wp_version_check() / wp_update_*() à chaque
-	 * vérification). Absent, sans date, ou daté du futur (horloge revenue en arrière) :
-	 * périmé.
+	 * vérification, AVANT l'appel réseau : condition nécessaire, jamais suffisante —
+	 * cf. answered_recently()). Absent, sans date, ou daté du futur (horloge revenue en
+	 * arrière) : périmé.
 	 *
 	 * @param mixed $transient Transient brut (objet, ou false si absent).
 	 */
@@ -354,20 +368,104 @@ final class PremiumUpdatesBridge {
 	}
 
 	/**
-	 * `update_plugins` / `update_themes` frais : vérifié récemment ET porteur d'une
-	 * réponse de wordpress.org. wp_update_plugins() / wp_update_themes() écrivent
-	 * `last_checked` AVANT d'appeler wordpress.org, et `checked` seulement après une
-	 * réponse 200 (wp-includes/update.php) : sans `checked`, la vérification est restée
-	 * sans réponse (réseau coupé), et la synchronisation suivante réessaie, comme avant.
+	 * wordpress.org a réellement répondu à cette vérification il y a moins de
+	 * UPDATE_CHECK_MAX_AGE (cf. WporgAnswers). Sert aussi au cœur (SnapshotController).
 	 *
-	 * @param mixed $transient Transient brut (objet, ou false si absent).
+	 * @param string $check 'core' | 'plugins' | 'themes'.
 	 */
-	private static function is_fresh( $transient, int $now ): bool {
-		if ( ! self::checked_recently( $transient, $now ) ) {
+	public static function answered_recently( string $check, int $now ): bool {
+		return WporgAnswers::answered_within( $check, $now, self::UPDATE_CHECK_MAX_AGE );
+	}
+
+	/**
+	 * `update_plugins` / `update_themes` frais : les trois conditions ensemble.
+	 *
+	 *  1. Vérifié il y a moins de 3 h (`last_checked`).
+	 *  2. Répondu par wordpress.org il y a moins de 3 h (WporgAnswers). wp_update_plugins()
+	 *     et wp_update_themes() (wp-includes/update.php) écrivent `last_checked = time()`
+	 *     dans le transient existant AVANT d'appeler wordpress.org, puis s'arrêtent sur
+	 *     un échec : le transient garde ses anciens `checked`, `response` et `no_update`
+	 *     avec une date toute neuve. Sans cette condition, une réponse de 2 h suivie d'un
+	 *     cron de 14 h resté sans réponse passerait pour fraîche jusqu'à 17 h. Aucune
+	 *     réponse notée : rafraîchi, comme avant.
+	 *  3. Couvre ce qui est installé : chaque extension (get_plugins()) ou thème
+	 *     (wp_get_themes()) présent dans `checked`, à la même version — la règle de
+	 *     wp_update_plugins() / wp_update_themes() eux-mêmes ($plugin_changed,
+	 *     $theme_changed). Sinon, une extension copiée ou mise à jour hors de WordPress
+	 *     (FTP, hébergeur) resterait jusqu'à 3 h sans information de mise à jour. Listes
+	 *     déjà lues par l'inventaire ensuite : aucun appel réseau, aucune lecture de plus.
+	 *
+	 * @param mixed  $transient Transient brut (objet, ou false si absent).
+	 * @param string $check     'plugins' | 'themes'.
+	 */
+	private static function is_fresh( $transient, string $check, int $now ): bool {
+		if ( ! self::checked_recently( $transient, $now ) || ! self::answered_recently( $check, $now ) ) {
 			return false;
 		}
 		/** @var stdClass $transient */
-		return isset( $transient->checked ) && is_array( $transient->checked ) && [] !== $transient->checked;
+		if ( ! isset( $transient->checked ) || ! is_array( $transient->checked ) || [] === $transient->checked ) {
+			return false;
+		}
+
+		return self::covers_installed(
+			$transient->checked,
+			'plugins' === $check ? self::installed_plugin_versions() : self::installed_theme_versions()
+		);
+	}
+
+	/**
+	 * Toutes les versions installées figurent dans `checked`, identiques (comparées en
+	 * chaînes, comme wp-includes/update.php).
+	 *
+	 * @param array<mixed>          $checked   Versions envoyées à wordpress.org, par fichier d'extension ou feuille de style.
+	 * @param array<string, string> $installed Versions installées, même clé.
+	 */
+	private static function covers_installed( array $checked, array $installed ): bool {
+		foreach ( $installed as $key => $version ) {
+			if ( ! isset( $checked[ $key ] ) || ! is_scalar( $checked[ $key ] ) || (string) $checked[ $key ] !== $version ) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * Versions des extensions installées, comme wp_update_plugins() les envoie
+	 * (get_plugins(), en-tête `Version`). Cache realpath/stat purgé d'abord, comme
+	 * SnapshotController::plugins() : get_plugins() garde son résultat pour la requête.
+	 *
+	 * @return array<string, string>
+	 */
+	private static function installed_plugin_versions(): array {
+		if ( ! function_exists( 'get_plugins' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/plugin.php';
+		}
+		clearstatcache( true );
+
+		$out = [];
+		foreach ( get_plugins() as $file => $data ) {
+			$out[ (string) $file ] = (string) ( $data['Version'] ?? '' );
+		}
+
+		return $out;
+	}
+
+	/**
+	 * Versions des thèmes installés, comme wp_update_themes() les envoie
+	 * (WP_Theme::get( 'Version' ), par feuille de style).
+	 *
+	 * @return array<string, string>
+	 */
+	private static function installed_theme_versions(): array {
+		clearstatcache( true );
+
+		$out = [];
+		foreach ( wp_get_themes() as $theme ) {
+			$out[ (string) $theme->get_stylesheet() ] = (string) $theme->get( 'Version' );
+		}
+
+		return $out;
 	}
 
 	/**
@@ -382,8 +480,8 @@ final class PremiumUpdatesBridge {
 
 			$current_plugins = get_site_transient( 'update_plugins' );
 			$current_themes  = get_site_transient( 'update_themes' );
-			$plugins         = null === $now || ! self::is_fresh( $current_plugins, $now );
-			$themes          = null === $now || ! self::is_fresh( $current_themes, $now );
+			$plugins         = null === $now || ! self::is_fresh( $current_plugins, 'plugins', $now );
+			$themes          = null === $now || ! self::is_fresh( $current_themes, 'themes', $now );
 
 			// Mémorisation AVANT destruction : si une visite de wp-admin a eu lieu
 			// depuis la dernière synchronisation, l'entrée tierce est encore en base

@@ -70,9 +70,10 @@ final class Phase {
 	 * se résume ensuite à la lecture d'une option autochargée.
 	 *
 	 * Le marqueur est écrit AVANT de toucher aux tâches : si l'écriture échoue (ou
-	 * qu'une requête concurrente vient de l'écrire : add_option() rend alors faux),
-	 * rien n'est re-phasé. Sans cela, un marqueur impossible à écrire repousserait la
-	 * tâche à chaque démarrage, et elle ne passerait plus jamais. Une tâche dont le
+	 * qu'une requête concurrente vient de l'écrire : update_option() — add_option()
+	 * quand l'option manque — rend alors faux), rien n'est re-phasé. Sans cela, un
+	 * marqueur impossible à écrire repousserait la tâche à chaque démarrage, et elle
+	 * ne passerait plus jamais. Une tâche dont le
 	 * retrait est refusé garde sa date (aucun doublon) : la migration n'est pas
 	 * rejouée pour autant.
 	 *
