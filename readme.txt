@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.13.0-rc.3
+Stable tag: 1.13.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -80,6 +80,23 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
 
 == Changelog ==
+
+= 1.13.0 =
+
+Stable release of the 1.13 line, piloted as 1.13.0-rc.1 to rc.3 (details in the entries below).
+
+* **Feature: direct login from G2RD WP Manager.** A signed, single-use ticket opens a WordPress
+  session for the account chosen in the manager, with six checks and a setting to turn it off.
+* **Fix: safer automatic and manual rollbacks.** In case of doubt the plugin stays deactivated
+  and the site keeps running; a failed manual rollback puts back the files that were running
+  before the command; a recovery or rollback that fails keeps its restore point; on a multisite
+  network a network-active plugin is reactivated network-wide.
+* **Fix: a protected update recovers a dead one first, never crosses another one, and keeps its
+  health check** even when WordPress throws an exception after copying the files.
+* **Performance: lighter on shared hosting.** WP-Cron is no longer restarted at almost every
+  sync, a failed login holds a page 2 seconds at most, the local purge runs twice a day, and the
+  settings option is autoloaded (one SQL query less per page view).
+* **Fix: a command closes every output buffer it opened**, so nothing can precede its JSON reply.
 
 = 1.13.0-rc.3 =
 
