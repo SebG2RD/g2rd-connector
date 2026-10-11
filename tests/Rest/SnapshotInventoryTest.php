@@ -68,6 +68,8 @@ final class SnapshotInventoryTest extends SnapshotTestCase {
 					'has_update'        => 'bool',
 					'theme_uri'         => 'string',
 					'author'            => 'string',
+					// Seul ajout (1.14, cf. SnapshotThemeOriginTest) : origine réelle du thème.
+					'wporg'             => 'bool',
 				],
 			],
 			'translations'      => [

@@ -110,6 +110,13 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   * OPcache is invalidated for the connector's own files only: plugin and theme versions are
     read from the files themselves, which OPcache never serves.
   The JSON fields are unchanged.
+* **New: real origin of each theme in the inventory.** Each theme of `/snapshot` now carries
+  `wporg`: true only when WordPress.org knows the theme, read from its last answer stored in the
+  `update_themes` transient (entries `response` or `no_update` whose page and package are on
+  wordpress.org or one of its subdomains; an entry added by a third-party updater does not
+  count). Child, premium and custom themes are false. No extra network call. The field is left
+  out when that transient holds no answer from WordPress.org; the manager then keeps its former
+  computation.
 
 = 1.13.0-rc.3 =
 

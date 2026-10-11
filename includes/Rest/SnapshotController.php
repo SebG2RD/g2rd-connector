@@ -414,6 +414,7 @@ final class SnapshotController {
 		$current = wp_get_theme();
 		$updates = get_site_transient( 'update_themes' );
 		$resp    = is_object( $updates ) && isset( $updates->response ) ? (array) $updates->response : [];
+		$wporg   = self::wporg_themes( $updates );
 
 		$out = [];
 		foreach ( $all as $stylesheet => $theme ) {
@@ -433,7 +434,7 @@ final class SnapshotController {
 				}
 			}
 
-			$out[] = [
+			$row = [
 				'stylesheet'        => (string) $stylesheet,
 				'name'              => (string) $theme->get( 'Name' ),
 				'version_installed' => $installed,
@@ -443,9 +444,81 @@ final class SnapshotController {
 				'theme_uri'         => (string) $theme->get( 'ThemeURI' ),
 				'author'            => (string) $theme->get( 'Author' ),
 			];
+			// Origine réelle (cf. wporg_themes()) ; omise sans réponse de wordpress.org.
+			if ( null !== $wporg ) {
+				$row['wporg'] = isset( $wporg[ (string) $stylesheet ] );
+			}
+			$out[] = $row;
 		}
 
 		return $out;
+	}
+
+	/**
+	 * Thèmes que wordpress.org connaît, d'après sa dernière réponse rangée dans le
+	 * transient `update_themes`, sans aucun appel réseau. wp_update_themes()
+	 * (wp-includes/update.php) y range, par feuille de style, les thèmes qu'il a sur
+	 * son répertoire : dans `response` ceux qui ont une mise à jour, dans `no_update`
+	 * les autres ; un thème qu'il ne connaît pas (thème enfant, premium, sur mesure)
+	 * n'est dans aucun des deux.
+	 *
+	 * Un updater tiers peut ajouter sa propre entrée dans `response` (filtre
+	 * `pre_set_site_transient_update_themes`, en-tête `Update URI`, rejeu de la
+	 * capture) : seule une entrée dont la fiche et le paquet sont sur wordpress.org
+	 * (ou un sous-domaine, downloads.wordpress.org) compte.
+	 *
+	 * @param mixed $updates Transient `update_themes`.
+	 * @return array<string, true>|null Feuilles de style connues de wordpress.org ;
+	 *                                  null si le transient n'a pas de réponse de
+	 *                                  wordpress.org (`no_update` absent : réseau
+	 *                                  coupé, jamais vérifié). Le champ est alors
+	 *                                  omis, et la plateforme garde son ancien calcul.
+	 */
+	private static function wporg_themes( $updates ): ?array {
+		if ( ! is_object( $updates ) ) {
+			return null;
+		}
+		/** @var \stdClass $updates */
+		if ( ! isset( $updates->no_update ) || ! is_array( $updates->no_update ) ) {
+			return null;
+		}
+
+		$known    = [];
+		$response = isset( $updates->response ) && is_array( $updates->response ) ? $updates->response : [];
+		foreach ( [ $response, $updates->no_update ] as $entries ) {
+			foreach ( $entries as $stylesheet => $entry ) {
+				if ( self::is_wporg_entry( $entry ) ) {
+					$known[ (string) $stylesheet ] = true;
+				}
+			}
+		}
+		return $known;
+	}
+
+	/**
+	 * Entrée venue de wordpress.org : fiche (`url`) et paquet (`package`) sur
+	 * wordpress.org ou l'un de ses sous-domaines, au moins l'un des deux renseigné.
+	 *
+	 * @param mixed $entry Entrée de `response` ou `no_update` (tableau ; objet toléré).
+	 */
+	private static function is_wporg_entry( $entry ): bool {
+		if ( ! is_array( $entry ) && ! is_object( $entry ) ) {
+			return false;
+		}
+		$entry = (array) $entry;
+		$found = false;
+		foreach ( [ 'url', 'package' ] as $key ) {
+			$address = isset( $entry[ $key ] ) && is_string( $entry[ $key ] ) ? $entry[ $key ] : '';
+			if ( '' === $address ) {
+				continue;
+			}
+			$host = strtolower( (string) wp_parse_url( $address, PHP_URL_HOST ) );
+			if ( 'wordpress.org' !== $host && ! str_ends_with( $host, '.wordpress.org' ) ) {
+				return false;
+			}
+			$found = true;
+		}
+		return $found;
 	}
 
 	/**

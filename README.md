@@ -152,6 +152,15 @@ faux, 401/403), sans réparation possible à distance.
 | GET | `/wp-json/g2rd/v1/snapshot` | Bearer SiteToken (+ signature) | Inventaire complet |
 | POST | `/wp-json/g2rd/v1/command` | Bearer SiteToken (+ signature) | Exécute commande |
 
+### Origine des thèmes dans l'inventaire
+
+- **`themes[].wporg`** : vrai seulement si wordpress.org connaît le thème, d'après sa dernière
+  réponse rangée dans le transient `update_themes` (entrées `response` ou `no_update`), et
+  seulement pour une entrée dont la fiche et le paquet sont sur wordpress.org ou l'un de ses
+  sous-domaines — une entrée ajoutée par un updater tiers ne compte pas. Thème enfant, premium
+  ou sur mesure : faux. Aucun appel réseau de plus. Le champ est omis quand ce transient n'a pas
+  de réponse de wordpress.org (réseau coupé) : le manager garde alors son ancien calcul.
+
 ### Signature des requêtes du manager
 
 En plus du Bearer, le manager signe chaque requête (HMAC-SHA256, clé dérivée du SiteToken,
