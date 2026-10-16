@@ -72,7 +72,7 @@ Disconnect from the plugin settings (button **Disconnect from manager**), or rev
 
 = What happens on uninstall? =
 
-All plugin options (`g2rd_connector_settings`, restore point index, signature state) are removed, the cron jobs are unscheduled, the restore point archives the plugin created in `wp-content/g2rd-snapshots/` are deleted (nothing else in that folder is touched), and the site stops sending anything. The manager-side record is preserved until you delete it from the dashboard.
+All plugin options (`g2rd_connector_settings`, restore point index, signature state) are removed, as are the records of the commands run in the background (`g2rd_cmdrun_*` options, finished or not, on every site of a multisite network); the cron jobs are unscheduled, the restore point archives the plugin created in `wp-content/g2rd-snapshots/` are deleted (nothing else in that folder is touched), and the site stops sending anything. The manager-side record is preserved until you delete it from the dashboard.
 
 == Screenshots ==
 

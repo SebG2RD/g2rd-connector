@@ -151,6 +151,8 @@ faux, 401/403), sans réparation possible à distance.
 | GET | `/wp-json/g2rd/v1/health` | none | Ping public |
 | GET | `/wp-json/g2rd/v1/snapshot` | Bearer SiteToken (+ signature) | Inventaire complet |
 | POST | `/wp-json/g2rd/v1/command` | Bearer SiteToken (+ signature) | Exécute commande |
+| POST | `/wp-json/g2rd/v1/command-runs` | Bearer SiteToken + signature obligatoire | Accepte une commande longue, exécutée après la réponse (1.14, voir « Commandes en arrière-plan ») |
+| GET | `/wp-json/g2rd/v1/command-runs/<numéro>` | Bearer SiteToken + signature obligatoire | État et résultat d'une commande en arrière-plan (1.14) |
 
 ### Origine des thèmes dans l'inventaire
 
@@ -472,6 +474,183 @@ Le snapshot remonte `site.login_url` (`wp_login_url()`, ce qui détecte une conn
 identifiant de connexion, e-mail, date de création) et la capacité `direct_login`. Les vecteurs
 de test du ticket (`tests/fixtures/direct-login-ticket-vectors.json`) sont une copie exacte de
 ceux du manager.
+
+### Commandes en arrière-plan (1.14)
+
+Le CDN de l'hébergeur renvoie une requête restée environ 60 s sans réponse : une longue mise à
+jour passée par `/command` pouvait ainsi s'exécuter deux fois. La plateforme peut désormais
+confier une commande longue au site sous un **numéro qu'elle a tiré** (`command_id`, 128 bits,
+32 caractères hexadécimaux minuscules). Le site l'enregistre, répond « reçu » (202) en une à deux
+secondes, termine la réponse (`litespeed_finish_request()`, à défaut `fastcgi_finish_request()`),
+puis exécute la commande **dans le même processus**, par `CommandExecutor::run()` tel quel :
+même contexte REST, mêmes filets qu'avec `/command`. La plateforme lit ensuite l'état et le
+résultat par des requêtes signées courtes. Un renvoi du même numéro ne déclenche jamais une
+seconde exécution.
+
+Les deux routes sont enregistrées dans les mêmes conditions que `/command` (commandes à distance
+permises), sous l'en-tête anti-cache de tout l'espace `g2rd/v1`. Chaque refus porte un code
+stable `g2rd_connector_<code>` et un message en français (quoi, cause probable, action) ; la
+plateforme rédige ses propres phrases FR/EN à partir du code.
+
+**Accès : jeton et signature, toujours.** Les deux routes exigent le SiteToken
+(`Authorization: Bearer` ou `X-G2RD-Token`) **et** une signature v1 valide, quelle que soit la
+politique du site (`report` ou `required`) : il n'existe aucun ancien appelant à ménager. Jeton
+absent ou faux, signature absente, fausse ou hors fenêtre : 401 ou 403, avec les codes existants.
+La signature lie la méthode, la route (numéro compris, pour la lecture) et le corps (numéro et
+commande compris, pour l'acceptation) : une acceptation signée pour un numéro ne sert ni pour un
+autre, ni pour une lecture. Seul écart : la copie à l'identique d'une acceptation (même nonce,
+signature valide : le CDN qui rejoue un `POST`) passe l'authentification, mais ne reçoit que
+l'état d'une commande déjà reçue sous ce numéro ; si le numéro est inconnu, elle reçoit 401
+`g2rd_connector_signature_replayed`. Dans les deux cas, elle ne déclenche rien. La copie d'une
+lecture est refusée (401).
+
+**`POST /wp-json/g2rd/v1/command-runs` : acceptation.** Corps
+`{"command_id": "<32 hex>", "command": "<commande>", "payload": {…}}`, 16 Ko au plus ; la charge
+est celle de `/command` pour chaque commande.
+
+- Commandes admises : `update_plugin`, `update_theme`, `update_core`, `update_translations`,
+  `rollback_plugin`, `optimize_database`, `delete_spam_comments`, `delete_post_revisions`,
+  `empty_trashed_posts`, `delete_expired_transients`, et la sonde `async_probe` (ci-dessous).
+- Commandes instantanées, refusées ici : elles restent sur `/command` (`clear_cache`,
+  `check_updates`, `delete_restore_point`, `set_signature_policy`).
+
+| Situation à l'arrivée | Réponse | Exécution |
+| --- | --- | --- |
+| Numéro inconnu, site libre | 202 `{command_id, state: "accepted", accepted_at, poll_after_seconds: 2, served_at}` | une fois, après la réponse |
+| Numéro inconnu, site occupé | 409 `g2rd_connector_site_busy` (`busy_with`, `busy_since`) ; rien n'est enregistré | non ; la plateforme réessaie plus tard, sous un nouveau numéro |
+| Numéro connu, même corps (empreinte SHA-256) | 200 : l'état et les dates, `duplicate: true`, jamais le résultat | non |
+| Numéro connu, autre corps | 409 `g2rd_connector_command_id_conflict` | non |
+| Copie d'une acceptation déjà reçue (même nonce) | 200 `duplicate` si le numéro est connu, 401 `g2rd_connector_signature_replayed` sinon | non |
+| Constante d'arrêt posée, numéro inconnu | 503 `g2rd_connector_async_disabled` | non ; la plateforme repasse par `/command` |
+| Corps de plus de 16 Ko | 413 `g2rd_connector_body_too_large`, avant que WordPress ne décode le JSON (filtre `rest_pre_dispatch`, priorité 5) | non |
+| Numéro mal formé ; commande inconnue ou instantanée ; charge qui n'est pas un objet | 400 `g2rd_connector_invalid_command_id`, `g2rd_connector_command_not_async`, `g2rd_connector_invalid_payload` | non |
+| Base de données qui refuse une lecture ou une écriture ; même numéro en cours de réception par une autre requête | 500 `g2rd_connector_store_unavailable`, `g2rd_connector_acceptance_in_progress` | non par cette demande ; la plateforme vérifie le numéro |
+
+Un numéro connu est traité avant la constante d'arrêt : le renvoi d'une commande déjà acceptée
+reçoit son état, jamais 503. Sinon, la plateforme croirait la commande jamais partie et la
+relancerait par `/command` : elle s'exécuterait deux fois.
+
+**`GET /wp-json/g2rd/v1/command-runs/<numéro>` : lecture.** Signée sur la route REST, numéro
+compris, corps vide. Réponse 200
+`{command_id, command, state, accepted_at, started_at, alive_at, finished_at, step?, outcome?, interruption?, served_at}`,
+dates en ISO 8601 UTC :
+
+- `step` : étape de la transaction d'une mise à jour protégée, quand il y en a une ;
+- `outcome` : seulement pour `done` ou `failed`, de la forme de la réponse de `/command`
+  (`{command, status, result, error, at, stray_output?}`, sans `signature_check`) ;
+- `interruption` : `{reason, error, recovery}`, cause de l'interruption (`fatal_error`,
+  `script_exit`, `no_sign_of_life`), message, et résultat de reprise de l'extension s'il existe ;
+  gardé après un résultat tardif ;
+- `served_at` : heure de la réponse, pour que la plateforme écarte une réponse figée par un cache.
+
+Numéro inconnu : 404 `g2rd_connector_run_unknown`, distincte de la 404 `rest_no_route` que rend
+un connecteur sans la route. Numéro mal formé : 400 `g2rd_connector_invalid_command_id` (motif
+de route large, volontairement : jamais une `rest_no_route` prise à tort pour un connecteur trop
+ancien). Base qui refuse la lecture : 500 `g2rd_connector_store_unavailable`, jamais
+« inconnu ». La lecture ne fait qu'un ramassage léger (le numéro lu, puis l'exécution qui tient
+le créneau) et une relecture : ni inventaire, ni requête sortante.
+
+**États.**
+
+| État | Sens | Suivant possible |
+| --- | --- | --- |
+| `accepted` | enregistrée, pas encore démarrée | `running`, `abandoned` |
+| `running` | en cours ; `alive_at` rafraîchi à chaque étape connue | `done`, `failed`, `interrupted` |
+| `done` | la commande a rendu un résultat (le 200 de `/command`) | — |
+| `failed` | la commande a rendu une erreur (le 500 de `/command`) | — |
+| `interrupted` | processus mort en route, ou muet plus de 10 min : le travail est peut-être partiel | `done`, `failed` (résultat tardif) |
+| `abandoned` | acceptée mais jamais démarrée : rien n'a été modifié | — |
+
+- **Signe de vie** : crochets du programme de mise à jour de WordPress (`upgrader_pre_download`,
+  `upgrader_pre_install`, `upgrader_post_install`, `upgrader_process_complete`), chaque table
+  optimisée (action `g2rd_connector_command_progress`), chaque étape de la transaction d'une
+  mise à jour protégée (action `g2rd_connector_update_txn_progress`, enregistrée dans `step`).
+  Une écriture toutes les 5 s au plus, une étape nouvelle sans attendre. Les écouteurs ne sont
+  branchés que pendant une exécution, ne lèvent jamais et rendent la valeur des filtres
+  inchangée.
+- **Ramassage**, à chaque acceptation (200 exécutions non terminées examinées au plus) et à
+  chaque lecture : `accepted` depuis plus de 120 s devient `abandoned` ; `running` sans signe de
+  vie depuis plus de 600 s devient `interrupted` (`no_sign_of_life`). Écritures
+  conditionnelles : une exécution est soit démarrée, soit abandonnée, jamais les deux. Une
+  exécution déclarée interrompue qui était en réalité vivante (étape de plus de 10 minutes) écrit
+  quand même son résultat à sa fin.
+- **Dernier filet** : une erreur fatale, un délai PHP dépassé ou un `exit` d'une extension
+  pendant la commande laissent d'abord passer les filets existants (reprise de la transaction,
+  puis réactivation de l'extension). Un dernier filet passe après eux : il déclare l'exécution
+  `interrupted` (`fatal_error`, avec le message, le fichier et la ligne de l'erreur, ou
+  `script_exit`) et y joint le résultat de reprise consigné pour cette extension depuis le
+  démarrage. Le travail lui-même ne passe jamais par une fonction d'arrêt.
+- Le site ne relance jamais rien de lui-même : une commande abandonnée n'est relancée que par la
+  plateforme, sous un nouveau numéro.
+
+**Une exécution à la fois par site.** Le créneau `g2rd_cmdrun_slot` (JSON, non autochargé) dit
+quelle exécution tourne, depuis quand, et son dernier signe de vie. Le site est occupé (409
+`site_busy`) si une exécution vivante le tient, ou, pour `update_plugin` et `rollback_plugin`, si
+une mise à jour protégée ou sa reprise par le cron est en cours (`busy_with` nul). Un créneau
+resté 600 s sans signe de vie est repris. `UpdateTransaction` garde, inchangé, son rôle de verrou
+des fichiers d'une extension. En multisite, le créneau est propre à chaque site du réseau, comme
+la transaction.
+
+**Après la réponse.** Le filtre `rest_pre_serve_request` (priorité 1000 : les filtres qui posent
+des en-têtes, dont `rest_send_cors_headers()`, passent avant) écrit lui-même le JSON de la
+réponse 202, vide les tampons de sortie, appelle la fonction de fin, puis exécute la commande ;
+`ignore_user_abort( true )` garde le processus en vie si le client ferme la connexion. Seule la
+réponse 202 de cette exécution la démarre : si une autre extension l'a remplacée (pare-feu qui
+rend 401 ou 403…), rien ne démarre : l'exécution reste acceptée, puis le ramassage la déclare
+abandonnée passé 120 s, et rien n'a été modifié. Fonction de fin inopérante : la commande
+s'exécute quand même, la réponse ne part qu'à la fin, et un renvoi du CDN reçoit `duplicate` :
+plus lent, toujours une seule exécution. Hors de ces routes, les filtres `rest_pre_dispatch` et
+`rest_pre_serve_request` rendent leur valeur sans rien lire et ne lèvent jamais.
+
+**Capacité `async_commands`.** L'inventaire (`capabilities` de `/snapshot`) l'annonce quand trois
+conditions sont réunies : commandes à distance permises, `litespeed_finish_request()` ou
+`fastcgi_finish_request()` présente, constante d'arrêt absente. Sinon (Apache + mod_php par
+exemple), la plateforme garde le mode actuel, `/command`, pour ce site : pas de repli par
+WP-Cron. Les routes restent enregistrées sans fonction de fin, pour relire les exécutions passées
+après un changement de serveur.
+
+**Constantes de `wp-config.php`.**
+
+- `define( 'G2RD_CONNECTOR_DISABLE_ASYNC_COMMANDS', true );` coupe l'exécution en arrière-plan
+  sur ce site sans désinstaller le connecteur : la capacité disparaît à la synchronisation
+  suivante, tout numéro neuf reçoit 503 `g2rd_connector_async_disabled` (rien n'est exécuté), et
+  la plateforme repasse par `/command`. Un numéro déjà reçu reçoit toujours son état ; la lecture
+  des exécutions reste possible.
+- `define( 'G2RD_CONNECTOR_ASYNC_PROBE', true );` allume la sonde de diagnostic `async_probe`,
+  éteinte sans elle (commande alors inconnue : 400 `g2rd_connector_command_not_async`). Elle
+  n'est admise que par la route d'acceptation (ni `/command`, ni la file du cron), avec la charge
+  `{"seconds": N}`, N de 10 à 600 par pas de 10 : elle attend par pas de 10 s en donnant signe de
+  vie, ne touche à rien sur le site, et rend `{requested, slept, started_at, finished_at}`. Elle
+  sert à prouver, sur l'hébergement réel, que le processus vit après la réponse au-delà des 60 s
+  du CDN.
+
+**Stockage, bornes, conservation.** Une option par exécution, `g2rd_cmdrun_<numéro>` (JSON, non
+autochargée) : création par `INSERT IGNORE`, changement d'état par `UPDATE` conditionnel sur la
+valeur relue, lectures en SQL direct (jamais servies par un cache d'objets persistant).
+Enregistrement de 64 Ko au plus, mesurés sur le JSON que sert la lecture : au-delà, la sortie
+parasite part d'abord, puis les entrées les plus volumineuses du résultat et du résultat de
+reprise, marqués `result_truncated` ou `recovery_truncated` ; l'état, le statut et les dates
+restent. Erreur et étape de 2 Ko, sortie parasite de 500 caractères. Une exécution terminée est
+gardée **7 jours**, 200 enregistrements au plus (les exécutions terminées les plus anciennes
+partent d'abord) ; une exécution non terminée n'est jamais purgée. Purge sur la tâche
+biquotidienne des points de restauration (500 suppressions au plus) et à chaque acceptation (20
+au plus). Tout est retiré à la désinstallation, créneau compris, sur chaque site d'un réseau
+multisite.
+
+**Données.** Le site n'envoie rien de lui-même : la plateforme lit. Le résultat (`outcome`) est
+celui que `/command` rend déjà. La lecture y ajoute seulement l'état, les dates, l'étape d'une
+mise à jour protégée et, après une interruption, sa cause (pour une erreur fatale de PHP : son
+message, son fichier et sa ligne) et le résultat de reprise, déjà remonté par l'inventaire
+(`pending_outcomes`). Les enregistrements ne sont lus que par la route signée : ni autochargés,
+ni exposés dans l'inventaire ou la page d'administration. Ni le jeton, ni le nonce, ni le corps
+ne sont écrits au journal PHP du site.
+
+**Compatibilité.** `/command`, `CommandController`, la file tirée par le battement de cœur et le
+comportement de `CommandExecutor` ne changent pas ; la politique de signature régit toujours
+`/command`. Le code existant reçoit seulement deux actions de signe de vie
+(`UpdateTransaction::step()` et `touch()`, puis chaque table de
+`CommandExecutor::optimize_database()`), sans effet tant que personne ne les écoute. Rien ne
+change pour un site tant que la plateforme n'active pas ce mode.
 
 ## Charge sur le serveur
 
