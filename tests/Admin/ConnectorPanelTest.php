@@ -110,6 +110,11 @@ final class ConnectorPanelTest extends TestCase {
 			'Connecté',
 			'Connexion interrompue',
 			'Pas encore enrôlé',
+			'Enrôlé',
+			'Pas de signe de vie depuis',
+			'Aucun signe de vie enregistré',
+			'signe de vie horaire désactivé',
+			'dossier inscriptible',
 			'Adresse du manager',
 			'Jeton d’invitation',
 			'Dernier signe de vie',
@@ -123,8 +128,129 @@ final class ConnectorPanelTest extends TestCase {
 		] as $texte ) {
 			self::assertStringContainsString( $texte, $source, "Texte « {$texte} » absent du panneau." );
 		}
-		foreach ( [ 'Heartbeat horaire', 'Webhook events', 'URL du manager', 'Token d' ] as $ancien ) {
+		foreach ( [ 'Heartbeat horaire', 'Webhook events', 'URL du manager', 'Token d', 'Commandes distantes' ] as $ancien ) {
 			self::assertStringNotContainsString( $ancien, $source, "Ancien libellé « {$ancien} » encore présent dans le panneau." );
+		}
+	}
+
+	/**
+	 * Statut vrai : « Connecté » seulement si un échange avec le manager a réussi
+	 * depuis moins de deux heures (signe de vie accepté, relevé du site par le
+	 * manager, ou enrôlement), jamais sur la seule présence du jeton. Signe de vie
+	 * désactivé sans échange récent : « Enrôlé », neutre. Signe de vie actif sans
+	 * échange récent : alerte, avec causes probables et actions. Les cas eux-mêmes
+	 * (seuil, dates absentes ou illisibles) sont vérifiés en exécutant connection.ts
+	 * (banc du compte rendu de la tâche 3) : le dépôt n'a pas d'exécuteur JavaScript.
+	 */
+	public function test_la_pastille_d_etat_suit_le_dernier_echange_reussi(): void {
+		$connexion = self::source( 'assets/admin/src/connection.ts' );
+		$panneau   = self::panneau();
+
+		self::assertMatchesRegularExpression( '/export const SILENCE_MS = 2 \* 60 \* 60 \* 1000;/', $connexion, 'Seuil du silence attendu : deux heures.' );
+		self::assertMatchesRegularExpression( '/timeOf\(\s*facts\.lastHeartbeatAt\s*\),\s*timeOf\(\s*facts\.enrolledAt\s*\)/', $connexion, 'Le dernier échange se lit dans lastHeartbeatAt et enrolledAt.' );
+		self::assertMatchesRegularExpression(
+			"/if \\( null !== last && now - last < SILENCE_MS \\) \\{\\s*return \\{ kind: 'connected' \\};/",
+			$connexion,
+			'« connected » doit exiger un échange réussi depuis moins de SILENCE_MS.'
+		);
+		self::assertSame( 1, substr_count( $connexion, "return { kind: 'connected' };" ), '« connected » ne doit être rendu qu’à un seul endroit, après la preuve d’échange.' );
+		self::assertMatchesRegularExpression( "/if \\( ! facts\\.heartbeatEnabled \\) \\{\\s*return \\{ kind: 'heartbeat-off' \\};/", $connexion );
+
+		self::assertMatchesRegularExpression( "/'connected' === status\\.kind && \\(\\s*<Status cx=\\{ cx \\} tone=\"ok\">\\s*Connecté\\s*</", $panneau, '« Connecté » (ok) seulement pour l’état « connected ».' );
+		self::assertMatchesRegularExpression( "/'heartbeat-off' === status\\.kind && \\(\\s*<Status cx=\\{ cx \\} tone=\"neutral\">\\s*Enrôlé\\s*</", $panneau );
+		self::assertMatchesRegularExpression( '/null !== silence && \(\s*<Status cx=\{ cx \} tone="warn">/', $panneau );
+		self::assertStringNotContainsString( 'state.enrolled && null === tokenProblem', $panneau, 'La pastille ne doit plus se déduire de la seule présence du jeton.' );
+		foreach ( [ 'enrolled', 'heartbeatEnabled', 'lastHeartbeatAt', 'enrolledAt' ] as $champ ) {
+			self::assertStringContainsString( "{$champ}: saved.{$champ}", $panneau, "L'état doit suivre « {$champ} » tel qu'enregistré, pas un interrupteur non enregistré." );
+		}
+
+		preg_match( "/export const SILENCE_HELP =\\s*'([^']+)'/", $connexion, $aide );
+		self::assertArrayHasKey( 1, $aide, 'SILENCE_HELP introuvable dans connection.ts.' );
+		foreach ( [ 'Causes probables', 'WP-Cron', 'Actions', '« IPv4 vers le manager »', '« Enregistrer »', 'support G2RD' ] as $attendu ) {
+			self::assertStringContainsString( $attendu, $aide[1], "L'explication du silence ne mentionne pas « {$attendu} »." );
+		}
+		self::assertStringContainsString( '${ SILENCE_HELP }', $panneau, 'L’explication du silence n’est pas affichée par le panneau.' );
+	}
+
+	/**
+	 * Échec d'enrôlement : une cause et une action par famille d'erreur. Problème
+	 * de réseau ou blocage en chemin (CDN, pare-feu) : « IPv4 vers le manager »
+	 * puis « Enregistrer », et jamais de nouvelle invitation, inutile tant que la
+	 * requête n'atteint pas le manager. Invitation refusée par le manager : nouvelle
+	 * invitation.
+	 */
+	public function test_chaque_echec_d_enrolement_a_sa_cause_et_son_action(): void {
+		$connexion = self::source( 'assets/admin/src/connection.ts' );
+
+		preg_match( '/export type EnrollFailure =((?:\s*\|\s*\'[a-z-]+\')+);/', $connexion, $union );
+		self::assertArrayHasKey( 1, $union, 'Type EnrollFailure introuvable dans connection.ts.' );
+		preg_match_all( "/'([a-z-]+)'/", $union[1], $familles );
+		$familles = $familles[1];
+		sort( $familles );
+
+		preg_match( '/export function enrollFailureKind\b(.*?)\n\}\n/s', $connexion, $fonction );
+		self::assertArrayHasKey( 1, $fonction, 'Fonction enrollFailureKind introuvable.' );
+		preg_match_all( "/'([a-z-]+)'/", $fonction[1], $rendues );
+		$rendues = array_values( array_unique( array_intersect( $rendues[1], $familles ) ) );
+		sort( $rendues );
+		self::assertSame( $familles, $rendues, 'Chaque famille d’échec doit pouvoir être rendue par enrollFailureKind.' );
+
+		$messages = self::table( $connexion, 'ENROLL_FAILURES' );
+		$cles     = array_keys( $messages );
+		sort( $cles );
+		self::assertSame( $familles, $cles, 'ENROLL_FAILURES doit avoir un message par famille, et rien d’autre.' );
+
+		foreach ( [ 'unreachable', 'blocked' ] as $famille ) {
+			self::assertStringContainsString( '« IPv4 vers le manager »', $messages[ $famille ], "Échec « {$famille} » : l'interrupteur IPv4 n'est pas proposé." );
+			self::assertStringContainsString( '« Enregistrer »', $messages[ $famille ], "Échec « {$famille} » : le garde IPv4 n'agit qu'après l'enregistrement." );
+			self::assertStringNotContainsString( 'Générez une nouvelle invitation', $messages[ $famille ], "Échec « {$famille} » : une nouvelle invitation ne servirait à rien." );
+		}
+		self::assertStringContainsString( 'Ne générez pas de nouvelle invitation', $messages['blocked'] );
+		self::assertStringContainsString( 'nouvelle invitation', $messages['refused'] );
+		self::assertStringContainsString( '15 minutes', $messages['refused'] );
+
+		// Le panneau affiche ce message, et reprend les réglages joints à l'erreur.
+		$panneau = self::panneau();
+		self::assertStringContainsString( 'ENROLL_FAILURES[ enrollFailureKind( error ) ]', $panneau );
+		self::assertMatchesRegularExpression( '/const kept = savedDataOf\( e \);\s*if \( null !== kept \) \{\s*accept\( kept \);/', $panneau );
+	}
+
+	/**
+	 * Comparaison avec le serveur : les codes et données d'erreur que lit
+	 * enrollFailureKind sont bien ceux que produisent ManagerClient::enroll et
+	 * AdminController::handle_enroll, et les noms d'interrupteur et de bouton cités
+	 * par les messages existent dans le panneau.
+	 */
+	public function test_les_messages_d_enrolement_correspondent_au_serveur_et_au_panneau(): void {
+		$connexion = self::source( 'assets/admin/src/connection.ts' );
+		$client    = self::source( 'includes/Outbound/ManagerClient.php' );
+		$controle  = self::source( 'includes/Rest/AdminController.php' );
+
+		self::assertStringContainsString( "'g2rd_connector_enroll_invalid_response'", $client );
+		self::assertStringContainsString( "'g2rd_connector_enroll_invalid_response'", $connexion );
+		foreach ( [ $client, $controle, $connexion ] as $source ) {
+			self::assertStringContainsString( 'manager_answered', $source );
+		}
+		self::assertMatchesRegularExpression( "/'boot'\s*=>\s*BootData::build\(\)/", $controle, 'L’échec d’enrôlement doit porter les réglages enregistrés.' );
+
+		$panneau = self::panneau();
+		preg_match_all( '/«\s*([^»]+?)\s*»/u', self::sans_commentaires( $connexion ), $cites );
+		self::assertNotEmpty( $cites[1] );
+		foreach ( array_unique( $cites[1] ) as $nom ) {
+			self::assertTrue(
+				str_contains( $panneau, 'title="' . $nom . '"' ) || 1 === preg_match( '/>\s*' . preg_quote( $nom, '/' ) . '\s*</u', $panneau ),
+				"« {$nom} », cité par connection.ts, n'est ni un réglage ni un bouton du panneau."
+			);
+		}
+	}
+
+	/**
+	 * Chaque explication d'échec de signature se termine par une action (quoi,
+	 * cause probable, action).
+	 */
+	public function test_chaque_echec_de_signature_propose_une_action(): void {
+		foreach ( self::table( self::panneau(), 'SIGNATURE_FAILURES' ) as $code => $phrase ) {
+			self::assertMatchesRegularExpression( '/contactez le support G2RD|Faites vérifier|Déconnectez/u', $phrase, "Le code « {$code} » n'indique aucune action." );
 		}
 	}
 
@@ -309,6 +435,24 @@ final class ConnectorPanelTest extends TestCase {
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * Entrées d'une table de textes du panneau (`const NOM: Record< …, string > =
+	 * { clé: 'texte', … }`), clé => texte.
+	 *
+	 * @return array<string, string>
+	 */
+	private static function table( string $source, string $nom ): array {
+		preg_match( '/const ' . $nom . '\b[^=]*=\s*\{(.*?)\n\};/s', $source, $bloc );
+		self::assertArrayHasKey( 1, $bloc, "Table {$nom} introuvable." );
+		preg_match_all( "/^\\s*'?([\\w-]+)'?:\\s*\\n?\\s*'([^']*)'/m", $bloc[1], $entrees, PREG_SET_ORDER );
+		$table = [];
+		foreach ( $entrees as [ , $cle, $texte ] ) {
+			$table[ $cle ] = $texte;
+		}
+		self::assertNotEmpty( $table, "Table {$nom} vide." );
+		return $table;
 	}
 
 	private static function panneau(): string {

@@ -5,7 +5,9 @@
  * Comportement adaptatif :
  *  - Si le thème parent est un thème G2RD qui expose le filtre
  *    `g2rd_options_external_tabs` (≥ v1.19, thème enfant compris) → on s'enregistre
- *    comme tab dans la page Options G2RD. La page autonome reste alors enregistrée
+ *    comme tab dans la console d'options du thème (Apparence → Options G2RD
+ *    jusqu'à la 1.40, menu de premier niveau « G2RD » à partir de la 1.41, cf.
+ *    is_theme_console_page()). La page autonome reste alors enregistrée
  *    HORS du menu, comme page de secours (admin.php?page=g2rd-connector) si la
  *    console du thème ne charge pas l'onglet.
  *  - Sinon → menu top-level "G2RD Connector" avec dashicon dédié.
@@ -205,6 +207,12 @@ final class Page {
 		return $classes;
 	}
 
+	/**
+	 * Page autonome (sans thème G2RD) et page de secours du mode onglet :
+	 * formulaire PHP. Libellés et descriptions identiques à ceux du panneau React
+	 * (assets/admin/src/ConnectorPanel.tsx), pour un seul vocabulaire des mêmes
+	 * réglages ; les noms des champs envoyés restent inchangés.
+	 */
 	public function render_standalone_page(): void {
 		if ( ! current_user_can( self::CAPABILITY ) ) {
 			return;
@@ -235,8 +243,8 @@ final class Page {
 						<strong><?php echo esc_html__( 'Site enrôlé.', 'g2rd-connector' ); ?></strong>
 						<?php
 						printf(
-							/* translators: %1$s URL du manager, %2$d ID du site */
-							esc_html__( 'Connecté à %1$s — site ID #%2$d.', 'g2rd-connector' ),
+							/* translators: %1$s adresse du manager, %2$d numéro du site dans le manager */
+							esc_html__( 'Manager : %1$s — site n° %2$d.', 'g2rd-connector' ),
 							esc_html( (string) $settings['manager_url'] ),
 							(int) $settings['site_id']
 						);
@@ -249,12 +257,12 @@ final class Page {
 						// PremiumUpdatesBridge.
 						$capture = PremiumUpdatesBridge::last_capture();
 						if ( null === $capture ) {
-							echo esc_html__( 'Dernière capture des MAJ tierces : jamais. Ouvrez Extensions ou Tableau de bord → Mises à jour pour l’amorcer.', 'g2rd-connector' );
+							echo esc_html__( 'Dernière capture des mises à jour tierces : jamais. Ouvrez Extensions ou Tableau de bord → Mises à jour pour l’amorcer.', 'g2rd-connector' );
 						} else {
 							$captured_ts = strtotime( $capture['captured_at'] );
 							printf(
 								/* translators: 1: date locale de la capture, 2: nombre de plugins, 3: nombre de thèmes */
-								esc_html__( 'Dernière capture des MAJ tierces : %1$s — %2$d extension(s), %3$d thème(s).', 'g2rd-connector' ),
+								esc_html__( 'Dernière capture des mises à jour tierces : %1$s — %2$d extension(s), %3$d thème(s).', 'g2rd-connector' ),
 								esc_html( (string) wp_date( 'j M Y H:i', false === $captured_ts ? null : $captured_ts ) ),
 								(int) $capture['plugins'],
 								(int) $capture['themes']
@@ -270,51 +278,51 @@ final class Page {
 
 				<table class="form-table" role="presentation">
 					<tr>
-						<th scope="row"><label for="g2rd_manager_url"><?php echo esc_html__( 'URL du manager', 'g2rd-connector' ); ?></label></th>
+						<th scope="row"><label for="g2rd_manager_url"><?php echo esc_html__( 'Adresse du manager', 'g2rd-connector' ); ?></label></th>
 						<td>
 							<input type="url" name="g2rd_manager_url" id="g2rd_manager_url"
 								value="<?php echo esc_attr( (string) $settings['manager_url'] ); ?>"
 								class="regular-text" required>
-							<p class="description"><?php echo esc_html__( 'Ex : https://wp-manager.g2rd.fr', 'g2rd-connector' ); ?></p>
+							<p class="description"><?php echo esc_html__( 'Adresse de votre tableau de bord G2RD WP Manager, par exemple https://wp-manager.g2rd.fr.', 'g2rd-connector' ); ?></p>
 						</td>
 					</tr>
 					<?php if ( ! $enrolled ) : ?>
 					<tr>
-						<th scope="row"><label for="g2rd_invitation_token"><?php echo esc_html__( 'Token d\'invitation', 'g2rd-connector' ); ?></label></th>
+						<th scope="row"><label for="g2rd_invitation_token"><?php echo esc_html__( 'Jeton d’invitation', 'g2rd-connector' ); ?></label></th>
 						<td>
 							<input type="text" name="g2rd_invitation_token" id="g2rd_invitation_token"
 								class="regular-text" autocomplete="off">
-							<p class="description"><?php echo esc_html__( 'Généré côté manager dans la page Sites → Inviter un site.', 'g2rd-connector' ); ?></p>
+							<p class="description"><?php echo esc_html__( 'Généré dans le manager : fiche du site, « Inviter ce site à se connecter ». Valable 15 minutes.', 'g2rd-connector' ); ?></p>
 						</td>
 					</tr>
 					<?php endif; ?>
 					<tr>
-						<th scope="row"><?php echo esc_html__( 'Heartbeat horaire', 'g2rd-connector' ); ?></th>
+						<th scope="row"><?php echo esc_html__( 'Signe de vie horaire', 'g2rd-connector' ); ?></th>
 						<td>
 							<label>
 								<input type="checkbox" name="g2rd_heartbeat_enabled" value="1"
 									<?php checked( (bool) $settings['heartbeat_enabled'] ); ?>>
-								<?php echo esc_html__( 'Envoyer les métriques au manager toutes les heures', 'g2rd-connector' ); ?>
+								<?php echo esc_html__( 'Toutes les heures, le site envoie au manager ses versions (WordPress, PHP, connecteur), l’espace disque libre, le nombre d’extensions actives et d’utilisateurs, et relève les commandes en attente si les commandes à distance sont autorisées.', 'g2rd-connector' ); ?>
 							</label>
 						</td>
 					</tr>
 					<tr>
-						<th scope="row"><?php echo esc_html__( 'Webhook events', 'g2rd-connector' ); ?></th>
+						<th scope="row"><?php echo esc_html__( 'Événements en temps réel', 'g2rd-connector' ); ?></th>
 						<td>
 							<label>
 								<input type="checkbox" name="g2rd_events_enabled" value="1"
 									<?php checked( (bool) $settings['events_enabled'] ); ?>>
-								<?php echo esc_html__( 'Notifier le manager en temps réel (login, plugin install, update)', 'g2rd-connector' ); ?>
+								<?php echo esc_html__( 'Prévient le manager dès qu’ils se produisent : connexions réussies ou échouées, extensions activées ou désactivées, mises à jour installées.', 'g2rd-connector' ); ?>
 							</label>
 						</td>
 					</tr>
 					<tr>
-						<th scope="row"><?php echo esc_html__( 'Commandes distantes', 'g2rd-connector' ); ?></th>
+						<th scope="row"><?php echo esc_html__( 'Commandes à distance', 'g2rd-connector' ); ?></th>
 						<td>
 							<label>
 								<input type="checkbox" name="g2rd_remote_commands_enabled" value="1"
 									<?php checked( (bool) $settings['remote_commands_enabled'] ); ?>>
-								<?php echo esc_html__( 'Autoriser le manager à déclencher cache:clear / update à distance', 'g2rd-connector' ); ?>
+								<?php echo esc_html__( 'Autorise le manager à lancer des opérations sur ce site : mises à jour, restaurations d’extensions, vidage du cache, nettoyage de la base de données. Celles qu’il met en file sont relevées avec le signe de vie horaire.', 'g2rd-connector' ); ?>
 							</label>
 						</td>
 					</tr>
@@ -324,12 +332,12 @@ final class Page {
 							<label>
 								<input type="checkbox" name="g2rd_force_ipv4_to_manager" value="1"
 									<?php checked( (bool) ( $settings['force_ipv4_to_manager'] ?? false ) ); ?>>
-								<?php echo esc_html__( 'Forcer l\'IPv4 pour les appels vers le manager (si l\'hébergeur bloque l\'IPv6 sortante)', 'g2rd-connector' ); ?>
+								<?php echo esc_html__( 'À activer si l’hébergeur bloque l’IPv6 sortante du serveur : signes de vie, événements et enrôlement passent alors par l’IPv4. Ne concerne que les appels vers le manager.', 'g2rd-connector' ); ?>
 							</label>
 						</td>
 					</tr>
 					<tr>
-						<th scope="row"><?php echo esc_html__( 'Connexion directe', 'g2rd-connector' ); ?></th>
+						<th scope="row"><?php echo esc_html__( 'Connexion directe depuis G2RD', 'g2rd-connector' ); ?></th>
 						<td>
 							<label>
 								<input type="checkbox" name="g2rd_allow_direct_login" value="1"
@@ -436,12 +444,37 @@ final class Page {
 		return \G2RD\Connector\BootData::build();
 	}
 
+	/**
+	 * Script de l'onglet, sur la seule page de la console du thème G2RD (cf.
+	 * is_theme_console_page) : c'est lui qui appelle window.G2RDOptions.registerTab.
+	 */
 	public function enqueue_react_tab( string $hook ): void {
-		// Ne s'enregistre que sur la page Options G2RD du thème (hook = "appearance_page_g2rd-options")
-		if ( 'appearance_page_g2rd-options' !== $hook ) {
+		if ( ! self::is_theme_console_page( $hook ) ) {
 			return;
 		}
 		$this->do_enqueue();
+	}
+
+	/**
+	 * La page d'administration courante (suffixe de hook) est-elle la console
+	 * d'options du thème G2RD, celle qui affiche les onglets d'extension ?
+	 *
+	 *  - Thèmes 1.19 à 1.40 : Apparence → Options G2RD, « appearance_page_g2rd-options ».
+	 *  - Thèmes 1.41 et plus : menu de premier niveau « G2RD », slug
+	 *    \G2RD\AdminConsole::MENU_SLUG (« g2rd »), donc « toplevel_page_g2rd ».
+	 *    L'ancienne adresse (?page=g2rd-options) y est redirigée en 301 : le
+	 *    premier hook n'y est jamais atteint.
+	 *
+	 * Les sous-pages du menu « G2RD » (« g2rd_page_… ») n'affichent pas les
+	 * onglets d'extension : le script n'y est pas chargé.
+	 */
+	public static function is_theme_console_page( string $hook ): bool {
+		// Slug lu dans le thème quand il le publie (1.41 et plus), sans dépendre
+		// de sa classe au chargement ; « g2rd » sinon (sa valeur depuis la 1.41).
+		$slug = defined( 'G2RD\\AdminConsole::MENU_SLUG' )
+			? (string) constant( 'G2RD\\AdminConsole::MENU_SLUG' )
+			: 'g2rd';
+		return in_array( $hook, [ 'appearance_page_g2rd-options', 'toplevel_page_' . $slug ], true );
 	}
 
 	public function enqueue_standalone_assets( string $hook ): void {

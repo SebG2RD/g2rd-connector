@@ -143,7 +143,9 @@ final class AdminController {
 		$result = ( new ManagerClient() )->enroll( $token, $url );
 
 		if ( is_wp_error( $result ) ) {
-			$status = (int) ( $result->get_error_data()['status'] ?? 0 );
+			$data   = $result->get_error_data();
+			$data   = is_array( $data ) ? $data : [];
+			$status = (int) ( $data['status'] ?? 0 );
 			if ( $status < 400 ) {
 				// Erreur réseau / réponse invalide : le manager n'a pas répondu
 				// correctement → 502 Bad Gateway plutôt que 500 générique.
@@ -152,7 +154,16 @@ final class AdminController {
 			return new WP_Error(
 				$result->get_error_code(),
 				$result->get_error_message(),
-				[ 'status' => $status ]
+				[
+					'status'           => $status,
+					// Réponse du manager lui-même, ou refus en chemin (CDN, pare-feu) :
+					// le panneau n'en tire pas la même cause (cf. ManagerClient::enroll).
+					'manager_answered' => ! empty( $data['manager_answered'] ),
+					// Adresse et interrupteurs viennent d'être enregistrés malgré
+					// l'échec : le panneau reprend ces réglages tels que retenus, au
+					// lieu de garder pour l'onglet les valeurs d'avant.
+					'boot'             => BootData::build(),
+				]
 			);
 		}
 

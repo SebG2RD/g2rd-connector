@@ -246,6 +246,83 @@ final class PageTest extends TestCase {
 	}
 
 	/**
+	 * Thèmes 1.19 à 1.40 : la console est la page Apparence → Options G2RD.
+	 */
+	public function test_le_script_de_l_onglet_se_charge_sur_la_console_des_themes_1_19_a_1_40(): void {
+		self::assertTrue( Page::is_theme_console_page( 'appearance_page_g2rd-options' ) );
+	}
+
+	/**
+	 * Thèmes 1.41 et plus : la console est la page du menu de premier niveau
+	 * « G2RD » (slug \G2RD\AdminConsole::MENU_SLUG, « g2rd ») ; l'ancienne adresse
+	 * y est redirigée, le hook de la 1.40 n'y est jamais atteint. Sans ce hook,
+	 * registerTab n'était jamais appelé et l'onglet « Manager G2RD » restait vide.
+	 */
+	public function test_le_script_de_l_onglet_se_charge_sur_la_console_des_themes_1_41_et_plus(): void {
+		self::assertTrue( Page::is_theme_console_page( 'toplevel_page_g2rd' ) );
+	}
+
+	/**
+	 * Ailleurs, rien n'est chargé : ni sur les autres pages de l'administration, ni
+	 * sur les sous-pages du menu « G2RD » (« g2rd_page_… », sans onglets
+	 * d'extension), ni sur la page du connecteur (ses propres assets ont leur hook).
+	 */
+	public function test_rien_n_est_charge_hors_de_la_console_du_theme(): void {
+		foreach ( [ 'dashboard', 'index.php', 'plugins.php', 'g2rd_page_g2rd-facturation', 'toplevel_page_g2rd-connector', 'admin_page_g2rd-connector', 'appearance_page_g2rd', 'toplevel_page_g2rd-options', '' ] as $hook ) {
+			self::assertFalse( Page::is_theme_console_page( $hook ), "Hook « {$hook} »." );
+		}
+
+		Functions\expect( 'wp_enqueue_script' )->never();
+		Functions\expect( 'wp_enqueue_style' )->never();
+		Functions\expect( 'wp_localize_script' )->never();
+		foreach ( [ 'dashboard', 'g2rd_page_g2rd-facturation', 'toplevel_page_g2rd-connector' ] as $hook ) {
+			( new Page() )->enqueue_react_tab( $hook );
+		}
+	}
+
+	/**
+	 * Le formulaire PHP (page autonome, page de secours) parle comme le panneau
+	 * React : mêmes libellés pour les mêmes réglages, plus aucun ancien libellé, et
+	 * pas de « Connecté » que rien ne prouve ici. Les noms des champs envoyés, eux,
+	 * ne changent pas.
+	 */
+	public function test_le_formulaire_reprend_les_libelles_du_panneau(): void {
+		Functions\when( 'get_site_option' )->justReturn( false );
+		$this->options[ Settings::OPTION_KEY ] = [
+			'manager_url' => 'https://wp-manager.g2rd.fr',
+			'site_id'     => 7,
+			'site_token'  => 'jeton-historique',
+		];
+		$enrole                                = $this->render();
+		$this->options[ Settings::OPTION_KEY ] = [ 'manager_url' => 'https://wp-manager.g2rd.fr' ];
+		$non_enrole                            = $this->render();
+
+		foreach ( [
+			'Adresse du manager',
+			'Signe de vie horaire',
+			'Événements en temps réel',
+			'Commandes à distance',
+			'IPv4 vers le manager',
+			'Connexion directe depuis G2RD',
+			'Site enrôlé.',
+			'Manager : https://wp-manager.g2rd.fr — site n° 7.',
+			'Dernière capture des mises à jour tierces',
+			'Déconnecter du manager',
+		] as $texte ) {
+			self::assertStringContainsString( $texte, $enrole, "Texte « {$texte} » absent de la page." );
+		}
+		self::assertStringContainsString( 'Jeton d’invitation', $non_enrole );
+		self::assertStringContainsString( 'Enrôler le site', $non_enrole );
+
+		foreach ( [ 'URL du manager', 'Token d', 'Heartbeat horaire', 'Webhook events', 'Commandes distantes', 'Connecté à', 'site ID', 'MAJ tierces' ] as $ancien ) {
+			self::assertStringNotContainsString( $ancien, $enrole . $non_enrole, "Ancien libellé « {$ancien} » encore présent dans la page." );
+		}
+		foreach ( [ 'g2rd_manager_url', 'g2rd_invitation_token', 'g2rd_heartbeat_enabled', 'g2rd_events_enabled', 'g2rd_remote_commands_enabled', 'g2rd_force_ipv4_to_manager', 'g2rd_allow_direct_login' ] as $champ ) {
+			self::assertStringContainsString( 'name="' . $champ . '"', $enrole . $non_enrole, "Champ « {$champ} » absent du formulaire." );
+		}
+	}
+
+	/**
 	 * Thème actif simulé : $active est le dossier du thème actif, $template celui de
 	 * son thème parent (le même s'il n'en a pas), $versions l'en-tête « Version » de
 	 * chaque thème installé. wp_get_theme() sans argument rend le thème actif, comme

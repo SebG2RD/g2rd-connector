@@ -107,8 +107,9 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   that arrived after the tab was left; if the tab was opened again before that answer
   arrived, the panel is refreshed with it. Reloading the page was not affected.
 * **Change: the connector panel is reorganised in four sections, with French labels.**
-  "Connexion au manager": state badge (connected; connection interrupted, with its cause when
-  the connection token is unreadable or refused; not enrolled yet), site number, last sign of
+  "Connexion au manager": state badge (connected; no sign of life; enrolled; connection
+  interrupted, with its cause when the connection token is unreadable or refused; not enrolled
+  yet; see below), site number, last sign of
   life, manager address, invitation token, and the test, enrol or disconnect, and save
   buttons. "Échanges avec le manager": one row per setting, with an icon, a switch and a
   short description of what it really does (hourly sign of life, formerly "Heartbeat
@@ -129,6 +130,46 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   browser, which does not prove that the manager reaches the site. When the connection token
   is unreadable or refused, the panel gives the same explanation as the admin notice,
   probable cause included.
+* **Fix: the "Manager G2RD" tab loads in the console of G2RD theme 1.41 and later.** Theme
+  1.41 moved its console from Appearance → G2RD Options to a top-level "G2RD" menu and
+  redirects the old address there, but the connector loaded its script only on the old page:
+  with theme 1.41.x the tab was listed but stayed empty, and the settings page is hidden from
+  the menu in tab mode, so the connector had no visible settings at all. The script now loads
+  on the console page of both theme generations (1.19 to 1.40, and 1.41 and later), and on no
+  other admin page.
+* **Change: the connection badge shows the real state of the link with the manager.**
+  "Connecté" (connected) used to appear as soon as the site was enrolled with a readable token,
+  even while the manager had been unreachable for days. It now needs a successful exchange
+  less than two hours old: a sign of life accepted by the manager, the manager reading the
+  site, or the enrolment itself. With the hourly sign of life on and no exchange for two
+  hours, the badge reads "Pas de signe de vie depuis …" (no sign of life for …) and the panel
+  explains the probable causes (WP-Cron not triggered for lack of visits, outgoing calls to
+  the manager blocked, e.g. IPv6) and what to do (reload the page a minute later, turn on "IPv4
+  vers le manager" and save, check WP-Cron). With the sign of life off and no recent exchange,
+  the badge is a neutral "Enrôlé" (enrolled) and the last sign of life says it is off.
+* **Change: an enrolment failure now gives its own probable cause and action.** The manager
+  did not answer, or a CDN or firewall refused the request on the way (HTTP 403 with no answer
+  from the manager, as with the IPv6 refusals of September): turn on "IPv4 vers le manager",
+  save, then retry with the same invitation; a new invitation would be blocked the same way.
+  The manager refused the invitation (expired, already used, or site address different from
+  the one recorded): generate a new invitation. Expired WordPress session, invalid address,
+  wrong address (HTTP 404) and too many attempts have their own message too. The error
+  returned by the enrolment endpoint now says whether the manager itself answered
+  (`manager_answered`) and carries the settings saved before the attempt (`boot`): after a
+  failed enrolment, the panel and the theme tab keep the address and switches as saved,
+  instead of showing the previous ones again and sending them back on the next save.
+* **Change: the settings page speaks like the panel.** The PHP settings page (sites without
+  the G2RD theme, and the fallback page in tab mode) now uses the panel's labels and
+  descriptions: "Adresse du manager", "Jeton d'invitation", "Signe de vie horaire" (formerly
+  "Heartbeat horaire"), "Événements en temps réel" (formerly "Webhook events"), "Commandes à
+  distance" (formerly "Commandes distantes"), "IPv4 vers le manager", "Connexion directe
+  depuis G2RD". Its enrolled banner no longer claims "Connecté à …", which nothing on that page
+  checks, and reads "Manager : … — site n° …". Form field names are unchanged.
+* **Change: smaller wording fixes in the panel.** Each signature check failure now ends with
+  what to do (for a replayed request: refused when signed commands are required, possibly run
+  twice otherwise; contact G2RD support if it repeats). The remote commands switch says that
+  queued commands are picked up with the hourly sign of life, and the restore points line
+  says when the folder is writable.
 
 = 1.14.0-rc.2 =
 

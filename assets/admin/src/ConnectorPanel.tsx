@@ -18,6 +18,13 @@ import { useState } from '@wordpress/element';
 import { Button, FormToggle } from '@wordpress/components';
 import apiFetch from '@wordpress/api-fetch';
 import type { ConnectorBootData } from './index';
+import {
+	ENROLL_FAILURES,
+	SILENCE_HELP,
+	connectionStatus,
+	elapsed,
+	enrollFailureKind,
+} from './connection';
 import { Icon } from './icons';
 import type { IconName } from './icons';
 import { classesFor, detectUiMode } from './ui';
@@ -26,9 +33,10 @@ interface Props {
 	data: ConnectorBootData;
 	/**
 	 * Reçoit les données fraîches renvoyées par le serveur après chaque action
-	 * réussie (enregistrement, enrôlement, déconnexion), même si le panneau a été
-	 * démonté entre-temps : l'onglet de la console du thème les garde pour son
-	 * prochain montage (cf. index.tsx).
+	 * réussie (enregistrement, enrôlement, déconnexion), et après un enrôlement
+	 * échoué dont le serveur a déjà enregistré l'adresse et les interrupteurs,
+	 * même si le panneau a été démonté entre-temps : l'onglet de la console du
+	 * thème les garde pour son prochain montage (cf. index.tsx).
 	 */
 	onDataChange?: ( fresh: ConnectorBootData ) => void;
 }
@@ -78,9 +86,9 @@ const TOKEN_PROBLEMS: Record< string, string > = {
  */
 const SIGNATURE_FAILURES: Record< string, string > = {
 	signature_invalid:
-		'Signature invalide : la requête n’a pas été signée avec le jeton de ce site, ou elle a été modifiée en chemin.',
+		'Signature invalide : la requête n’a pas été signée avec le jeton de ce site, ou elle a été modifiée en chemin. Si cela se répète, déconnectez puis réenrôlez le site avec une nouvelle invitation, ou contactez le support G2RD.',
 	signature_replayed:
-		'Requête signée reçue une seconde fois (rejeu). Cause fréquente : un CDN qui renvoie une requête restée longtemps sans réponse.',
+		'Requête signée reçue une seconde fois (rejeu). Cause fréquente : un CDN qui renvoie une requête restée longtemps sans réponse. Le double a été refusé si « Exiger des commandes signées » était activé (ou s’il s’agissait d’une restauration) ; sinon il a pu être exécuté une seconde fois. Un cas isolé ne demande rien ; si cela se répète, contactez le support G2RD.',
 	clock_skew:
 		'Horloge décalée : la requête était datée de plus de 5 minutes d’écart avec l’heure du site. Faites vérifier l’heure du serveur par l’hébergeur.',
 	nonce_store_full:
@@ -88,7 +96,7 @@ const SIGNATURE_FAILURES: Record< string, string > = {
 	token_unavailable:
 		'Jeton de connexion illisible ou refusé sur ce site : la signature ne pouvait pas être vérifiée. Déconnectez le site du manager, puis enrôlez-le avec une nouvelle invitation.',
 	signature_missing:
-		'Commande reçue sans signature alors qu’elle en exige une. Cause probable : manager antérieur aux commandes signées, ou réponse altérée en chemin.',
+		'Commande reçue sans signature alors qu’elle en exige une. Cause probable : manager antérieur aux commandes signées, ou réponse altérée en chemin. Si vous hébergez vous-même le manager, mettez-le à jour ; sinon, contactez le support G2RD.',
 	signature_error:
 		'Erreur inattendue pendant la vérification de la signature. Si cela se répète, contactez le support G2RD.',
 };
@@ -138,10 +146,30 @@ function errorDetail( error: unknown ): string {
 		: 'aucune réponse exploitable du serveur';
 }
 
+/**
+ * Réglages tels qu'enregistrés, joints par le serveur à un échec (enrôlement
+ * refusé après l'enregistrement de l'adresse et des interrupteurs, cf.
+ * Rest\AdminController::handle_enroll) ; null si l'erreur n'en porte pas,
+ * notamment quand WordPress a refusé la demande avant tout enregistrement.
+ *
+ * @param error Valeur rejetée.
+ */
+function savedDataOf( error: unknown ): ConnectorBootData | null {
+	const boot = ( error as { data?: { boot?: unknown } | null } | null )?.data
+		?.boot;
+	return boot && 'object' === typeof boot
+		? ( boot as ConnectorBootData )
+		: null;
+}
+
 export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 	const [ mode ] = useState( detectUiMode );
 	const cx = classesFor( mode );
 	const [ state, setState ] = useState( data );
+	// Derniers réglages connus du serveur (chargement, puis chaque réponse) : la
+	// pastille d'état en dépend, pas d'un interrupteur modifié mais pas encore
+	// enregistré.
+	const [ saved, setSaved ] = useState( data );
 	const [ token, setToken ] = useState( '' );
 	const [ busy, setBusy ] = useState< Busy >( null );
 	const [ notice, setNotice ] = useState< ActionNotice >( null );
@@ -150,31 +178,47 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 		setState( ( current ) => ( { ...current, ...patch } ) );
 
 	/**
-	 * Action qui renvoie les données fraîches du serveur : état du panneau et
+	 * Données fraîches du serveur : état du panneau, réglages enregistrés et
 	 * copie de l'onglet sont mis à jour ensemble.
+	 *
+	 * @param fresh Données renvoyées par le serveur.
+	 */
+	const accept = ( fresh: ConnectorBootData ): void => {
+		setState( fresh );
+		setSaved( fresh );
+		onDataChange?.( fresh );
+	};
+
+	/**
+	 * Action qui renvoie les données fraîches du serveur. En cas d'échec, les
+	 * réglages que le serveur a malgré tout enregistrés (joints à l'erreur) sont
+	 * repris de la même façon.
 	 *
 	 * @param kind    Action en cours (boutons désactivés pendant ce temps).
 	 * @param request Appel REST.
 	 * @param success Message de réussite, d'après les données fraîches.
-	 * @param failure Message d'échec, d'après le détail de l'erreur.
+	 * @param failure Message d'échec, d'après le détail et l'erreur rejetée.
 	 */
 	const run = async (
 		kind: Exclude< Busy, null >,
 		request: () => Promise< ConnectorBootData >,
 		success: ( fresh: ConnectorBootData ) => string,
-		failure: ( detail: string ) => string
+		failure: ( detail: string, error: unknown ) => string
 	): Promise< void > => {
 		setBusy( kind );
 		setNotice( null );
 		try {
 			const fresh = await request();
-			setState( fresh );
-			onDataChange?.( fresh );
+			accept( fresh );
 			setNotice( { status: 'success', message: success( fresh ) } );
 		} catch ( e ) {
+			const kept = savedDataOf( e );
+			if ( null !== kept ) {
+				accept( kept );
+			}
 			setNotice( {
 				status: 'error',
-				message: failure( errorDetail( e ) ),
+				message: failure( errorDetail( e ), e ),
 			} );
 		} finally {
 			setBusy( null );
@@ -212,8 +256,10 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 			},
 			( fresh ) =>
 				`Site enrôlé : il est le site n° ${ fresh.siteId } du manager.`,
-			( detail ) =>
-				`Le site n’a pas été enrôlé (${ detail }). Cause probable : jeton d’invitation expiré (valable 15 minutes) ou déjà utilisé, ou adresse du manager erronée. Générez une nouvelle invitation depuis la fiche du site dans le manager, vérifiez l’adresse, puis réessayez.`
+			( detail, error ) =>
+				`Le site n’a pas été enrôlé (${ detail }). ${
+					ENROLL_FAILURES[ enrollFailureKind( error ) ]
+				}`
 		);
 
 	const unenroll = async (): Promise< void > => {
@@ -269,6 +315,37 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 		? ( TOKEN_PROBLEMS[ state.tokenState ] ?? null )
 		: null;
 	const lastHeartbeat = formatDate( state.lastHeartbeatAt );
+	const now = Date.now();
+	const status = connectionStatus(
+		{
+			enrolled: saved.enrolled,
+			tokenBroken: null !== tokenProblem,
+			heartbeatEnabled: saved.heartbeatEnabled,
+			lastHeartbeatAt: saved.lastHeartbeatAt,
+			enrolledAt: saved.enrolledAt,
+		},
+		now
+	);
+	// Signe de vie actif mais aucun échange réussi depuis plus de deux heures :
+	// pastille et explication (causes probables, actions).
+	let silence: { label: string; text: string } | null = null;
+	if ( 'silent' === status.kind ) {
+		silence =
+			null === status.since
+				? {
+						label: 'Aucun signe de vie enregistré',
+						text: `Aucun échange réussi avec le manager n’est enregistré sur ce site, alors que le signe de vie part toutes les heures. ${ SILENCE_HELP }`,
+					}
+				: {
+						label: `Pas de signe de vie depuis ${ elapsed(
+							status.since,
+							now
+						) }`,
+						text: `Aucun échange réussi avec le manager depuis le ${ DATE_FORMAT.format(
+							status.since
+						) }, alors que le signe de vie part toutes les heures. ${ SILENCE_HELP }`,
+					};
+	}
 	const failures = state.signatureFailures;
 	const lastFailure = formatDate( failures.last_failed_at );
 	const capture = state.lastUpdatesCapture;
@@ -280,7 +357,7 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 				).toLocaleString( 'fr-FR', { maximumFractionDigits: 1 } ) } Mo)`
 			: 'aucun' ) +
 		( points.dir_writable
-			? ''
+			? ' — dossier inscriptible.'
 			: ' — dossier non inscriptible : la restauration des extensions est indisponible sur ce site.' );
 
 	return (
@@ -304,19 +381,31 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 							G2RD WP Manager.
 						</p>
 					</div>
-					{ ! state.enrolled && (
+					{ /* État prouvé par le dernier échange réussi (connection.ts),
+					     jamais par la seule présence du jeton. */ }
+					{ 'not-enrolled' === status.kind && (
 						<Status cx={ cx } tone="neutral">
 							Pas encore enrôlé
 						</Status>
 					) }
-					{ null !== tokenProblem && (
+					{ 'interrupted' === status.kind && (
 						<Status cx={ cx } tone="warn">
 							Connexion interrompue
 						</Status>
 					) }
-					{ state.enrolled && null === tokenProblem && (
+					{ 'connected' === status.kind && (
 						<Status cx={ cx } tone="ok">
 							Connecté
+						</Status>
+					) }
+					{ 'heartbeat-off' === status.kind && (
+						<Status cx={ cx } tone="neutral">
+							Enrôlé
+						</Status>
+					) }
+					{ null !== silence && (
+						<Status cx={ cx } tone="warn">
+							{ silence.label }
 						</Status>
 					) }
 				</div>
@@ -335,6 +424,19 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 						</div>
 					) }
 
+					{ null !== silence && (
+						<div
+							className={ `notice notice-warning inline ${ cx(
+								'notice-inline'
+							) }` }
+						>
+							<p>
+								<strong>Pas de signe de vie.</strong>{ ' ' }
+								{ silence.text }
+							</p>
+						</div>
+					) }
+
 					{ state.enrolled && (
 						<dl className="g2rd-connector-facts">
 							<Fact cx={ cx } label="Site">
@@ -343,7 +445,11 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 								</span>
 							</Fact>
 							<Fact cx={ cx } label="Dernier signe de vie">
-								{ lastHeartbeat ?? 'aucun pour l’instant' }
+								{ `${ lastHeartbeat ?? 'aucun pour l’instant' }${
+									saved.heartbeatEnabled
+										? ''
+										: ' — signe de vie horaire désactivé'
+								}` }
 							</Fact>
 						</dl>
 					) }
@@ -494,7 +600,7 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 						id="g2rd-connector-commands"
 						icon="terminal"
 						title="Commandes à distance"
-						description="Autorise le manager à lancer des opérations sur ce site : mises à jour, restaurations d’extensions, vidage du cache, nettoyage de la base de données."
+						description="Autorise le manager à lancer des opérations sur ce site : mises à jour, restaurations d’extensions, vidage du cache, nettoyage de la base de données. Celles qu’il met en file sont relevées avec le signe de vie horaire."
 						checked={ state.remoteCommandsEnabled }
 						onChange={ ( remoteCommandsEnabled ) =>
 							update( { remoteCommandsEnabled } )
