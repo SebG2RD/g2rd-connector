@@ -7,6 +7,7 @@ namespace G2RD\Connector\Tests\Updates;
 use Brain\Monkey\Functions;
 use G2RD\Connector\Tests\TestCase;
 use G2RD\Connector\Updates\WporgAnswers;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Heure de la dernière réponse REÇUE de wordpress.org, par vérification, liée à
@@ -276,6 +277,64 @@ final class WporgAnswersTest extends TestCase {
 		}
 
 		self::assertSame( [], $this->writes );
+	}
+
+	/**
+	 * Les adresses réelles des trois vérifications (wp-includes/update.php, WordPress
+	 * 6.9.4) : https://, et le repli en http:// quand le https:// échoue.
+	 */
+	#[DataProvider( 'real_check_urls' )]
+	public function test_les_adresses_reelles_des_verifications_sont_acceptees( string $url ): void {
+		self::check( 200, $url, self::answer_body( $url ) );
+
+		self::assertSame( [ WporgAnswers::OPTION ], $this->writes, $url );
+	}
+
+	/**
+	 * Adresses refusées : autre schéma que http ou https, port, identifiants avant « @ »,
+	 * chemin qui n'est pas exactement celui d'une vérification, autre hôte.
+	 */
+	#[DataProvider( 'refused_urls' )]
+	public function test_une_adresse_qui_n_est_pas_exactement_celle_d_une_verification_est_refusee( string $url ): void {
+		self::check( 200, $url, self::answer_body( $url ) );
+
+		self::assertSame( [], $this->writes, $url );
+	}
+
+	/** @return array<string, array{string}> */
+	public static function real_check_urls(): array {
+		$query = '?version=6.9.4&php=8.3.14&locale=fr_FR&mysql=8.0.36&local_package=&blogs=1&users=3&multisite_enabled=0&initial_db_version=58975';
+
+		return [
+			'cœur, https'           => [ 'https://api.wordpress.org/core/version-check/1.7/' . $query ],
+			'cœur, repli http'      => [ 'http://api.wordpress.org/core/version-check/1.7/' . $query ],
+			'extensions, https'     => [ 'https://api.wordpress.org/plugins/update-check/1.1/' ],
+			'extensions, repli http' => [ 'http://api.wordpress.org/plugins/update-check/1.1/' ],
+			'thèmes, https'         => [ 'https://api.wordpress.org/themes/update-check/1.1/' ],
+			'thèmes, repli http'    => [ 'http://api.wordpress.org/themes/update-check/1.1/' ],
+		];
+	}
+
+	/** @return array<string, array{string}> */
+	public static function refused_urls(): array {
+		return [
+			'schéma ftp'                    => [ 'ftp://api.wordpress.org/plugins/update-check/1.1/' ],
+			'schéma file'                   => [ 'file://api.wordpress.org/plugins/update-check/1.1/' ],
+			'sans schéma'                   => [ '//api.wordpress.org/plugins/update-check/1.1/' ],
+			'port'                          => [ 'https://api.wordpress.org:8443/plugins/update-check/1.1/' ],
+			'port 443 explicite'            => [ 'https://api.wordpress.org:443/themes/update-check/1.1/' ],
+			'port 80 explicite'             => [ 'http://api.wordpress.org:80/core/version-check/1.7/?version=6.9.4' ],
+			'identifiant et mot de passe'   => [ 'https://user:secret@api.wordpress.org/plugins/update-check/1.1/' ],
+			'identifiant seul'              => [ 'https://user@api.wordpress.org/themes/update-check/1.1/' ],
+			'hôte caché derrière « @ »'     => [ 'https://api.wordpress.org@exemple.test/plugins/update-check/1.1/' ],
+			'autre version de l\'API'       => [ 'https://api.wordpress.org/plugins/update-check/1.0/' ],
+			'chemin prolongé'               => [ 'https://api.wordpress.org/plugins/update-check/1.1/autre' ],
+			'chemin sans la version'        => [ 'https://api.wordpress.org/themes/update-check/' ],
+			'sans la barre finale'          => [ 'https://api.wordpress.org/core/version-check/1.7?version=6.9.4' ],
+			'chemin préfixé'                => [ 'https://api.wordpress.org/x/plugins/update-check/1.1/' ],
+			'sous-domaine'                  => [ 'https://api.wordpress.org.exemple.test/plugins/update-check/1.1/' ],
+			'hôte dans la requête'          => [ 'https://exemple.test/?u=https://api.wordpress.org/plugins/update-check/1.1/' ],
+		];
 	}
 
 	public function test_une_reponse_garde_l_heure_des_autres_verifications(): void {

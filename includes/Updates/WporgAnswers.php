@@ -95,15 +95,19 @@ final class WporgAnswers {
 	private const HOST = 'api.wordpress.org';
 
 	/**
-	 * Adresses des trois vérifications (wp-includes/update.php), par vérification :
-	 * core/version-check/1.7/, plugins/update-check/1.1/, themes/update-check/1.1/. Le
-	 * numéro de version de l'API n'est pas retenu : il change sans que le sens change.
+	 * Chemins EXACTS des trois vérifications (wp-includes/update.php, WordPress 6.9.4), par
+	 * vérification. Une autre version de l'API ne compte pas : sa réponse n'est pas notée
+	 * et l'inventaire rafraîchit à chaque synchronisation (plus lourd, jamais faux) jusqu'à
+	 * une version du connecteur qui la connaît.
 	 */
 	private const CHECK_PATHS = [
-		'core'    => '/core/version-check/',
-		'plugins' => '/plugins/update-check/',
-		'themes'  => '/themes/update-check/',
+		'core'    => '/core/version-check/1.7/',
+		'plugins' => '/plugins/update-check/1.1/',
+		'themes'  => '/themes/update-check/1.1/',
 	];
+
+	/** Schémas des trois adresses : https://, et http:// pour le repli de WordPress. */
+	private const SCHEMES = [ 'https', 'http' ];
 
 	/**
 	 * Clé que le corps JSON doit porter pour que la réponse compte, par vérification : les
@@ -370,23 +374,23 @@ final class WporgAnswers {
 		return $out;
 	}
 
-	/** Vérification visée par l'adresse, ou null (autre hôte, autre service). */
+	/**
+	 * Vérification visée par l'adresse, ou null. Seules comptent les adresses que
+	 * WordPress appelle : schéma http ou https, hôte api.wordpress.org, ni port ni
+	 * identifiants, chemin exactement celui d'une vérification (CHECK_PATHS). La requête
+	 * (`?version=…` du cœur) n'entre pas en compte.
+	 */
 	private static function check_of( string $url ): ?string {
-		$host = wp_parse_url( $url, PHP_URL_HOST );
-		if ( ! is_string( $host ) || self::HOST !== strtolower( $host ) ) {
+		$parts = wp_parse_url( $url );
+		if ( ! is_array( $parts ) || isset( $parts['port'] ) || isset( $parts['user'] ) || isset( $parts['pass'] ) ) {
 			return null;
 		}
-		$path = wp_parse_url( $url, PHP_URL_PATH );
-		if ( ! is_string( $path ) ) {
+		if ( ! in_array( strtolower( $parts['scheme'] ?? '' ), self::SCHEMES, true ) || self::HOST !== strtolower( $parts['host'] ?? '' ) ) {
 			return null;
 		}
-		foreach ( self::CHECK_PATHS as $check => $prefix ) {
-			if ( str_starts_with( $path, $prefix ) ) {
-				return $check;
-			}
-		}
+		$check = array_search( $parts['path'] ?? '', self::CHECK_PATHS, true );
 
-		return null;
+		return is_string( $check ) ? $check : null;
 	}
 
 	/**
