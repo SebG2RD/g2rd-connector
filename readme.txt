@@ -97,8 +97,15 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   reads "Connexion au tableau de bord centralisé G2RD WP Manager.".
 * **Fix: leaving the tab no longer leaves an orphaned copy of the connector panel in memory.**
   The `mount` function given to the theme console now returns its cleanup function: the
-  panel's React root is unmounted when another tab is opened, and coming back mounts a fresh
-  panel.
+  panel's React root is unmounted when another tab is opened.
+* **Fix: coming back to the "Manager G2RD" tab shows the last saved settings.** Each time the
+  tab was opened again, the panel started over from the values the page was loaded with:
+  after a save, an enrollment or a disconnection, going to another tab and back showed the
+  earlier values ("Site non enrôlé" after an enrollment), and saving again from there
+  silently sent them back, security settings included (signature required, direct login,
+  remote commands). The panel now starts from the last answer of the server, including one
+  that arrived after the tab was left; if the tab was opened again before that answer
+  arrived, the panel is refreshed with it. Reloading the page was not affected.
 
 = 1.14.0-rc.2 =
 

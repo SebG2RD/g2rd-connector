@@ -212,6 +212,40 @@ final class PageTest extends TestCase {
 	}
 
 	/**
+	 * Le script de l'onglet (assets/admin/src/index.tsx) repasse clé, libellé,
+	 * description et icône à registerTab. Les consoles 1.39 et 1.41 n'y prennent que
+	 * `mount` et lisent ces valeurs dans le filtre : les deux copies doivent rester
+	 * identiques, sans quoi une console qui lirait un jour celles du script
+	 * afficherait autre chose.
+	 */
+	public function test_les_metadonnees_du_script_restent_celles_du_filtre(): void {
+		Functions\when( 'get_site_option' )->justReturn( false );
+		Functions\when( 'rest_url' )->alias( static fn ( string $path = '' ): string => 'https://site.test/wp-json/' . $path );
+		Functions\when( 'wp_create_nonce' )->justReturn( 'nonce' );
+		$onglet = ( new Page() )->register_as_theme_tab( [] )[0];
+		$source = file_get_contents( dirname( __DIR__, 2 ) . '/assets/admin/src/index.tsx' );
+		self::assertIsString( $source, 'assets/admin/src/index.tsx est illisible.' );
+
+		self::assertSame(
+			1,
+			preg_match( '/registerTab\(\s*\{(.*?)\}\s*\)/s', $source, $appel ),
+			'Appel à window.G2RDOptions.registerTab( { … } ) introuvable dans assets/admin/src/index.tsx.'
+		);
+		foreach ( [ 'key', 'label', 'description', 'icon' ] as $champ ) {
+			self::assertSame(
+				1,
+				preg_match( '/\b' . $champ . ":\s*'((?:[^'\\\\]|\\\\.)*)'/", $appel[1], $valeur ),
+				"Champ « {$champ} » introuvable dans l'appel à registerTab de index.tsx."
+			);
+			self::assertSame(
+				$onglet[ $champ ],
+				stripslashes( $valeur[1] ),
+				"« {$champ} » diffère entre index.tsx et Page::register_as_theme_tab : à garder identique."
+			);
+		}
+	}
+
+	/**
 	 * Thème actif simulé : $active est le dossier du thème actif, $template celui de
 	 * son thème parent (le même s'il n'en a pas), $versions l'en-tête « Version » de
 	 * chaque thème installé. wp_get_theme() sans argument rend le thème actif, comme

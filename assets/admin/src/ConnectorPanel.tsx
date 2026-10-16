@@ -24,12 +24,19 @@ import type { ConnectorBootData } from './index';
 
 interface Props {
 	data: ConnectorBootData;
+	/**
+	 * Reçoit les données fraîches renvoyées par le serveur après chaque action
+	 * réussie (enregistrement, enrôlement, déconnexion), même si le panneau a été
+	 * démonté entre-temps : l'onglet de la console du thème les garde pour son
+	 * prochain montage (cf. index.tsx).
+	 */
+	onDataChange?: ( fresh: ConnectorBootData ) => void;
 }
 
 type Busy = null | 'save' | 'enroll' | 'unenroll';
 type ActionNotice = { status: 'success' | 'error'; message: string } | null;
 
-export function ConnectorPanel( { data }: Props ): JSX.Element {
+export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 	const [ state, setState ] = useState( data );
 	const [ token, setToken ] = useState( '' );
 	const [ busy, setBusy ] = useState< Busy >( null );
@@ -57,6 +64,7 @@ export function ConnectorPanel( { data }: Props ): JSX.Element {
 				data: settingsPayload(),
 			} );
 			setState( fresh );
+			onDataChange?.( fresh );
 			setNotice( {
 				status: 'success',
 				message: 'Réglages enregistrés.',
@@ -78,6 +86,7 @@ export function ConnectorPanel( { data }: Props ): JSX.Element {
 				data: { ...settingsPayload(), invitation_token: token.trim() },
 			} );
 			setState( fresh );
+			onDataChange?.( fresh );
 			setToken( '' );
 			setNotice( {
 				status: 'success',
@@ -103,6 +112,7 @@ export function ConnectorPanel( { data }: Props ): JSX.Element {
 				method: 'POST',
 			} );
 			setState( fresh );
+			onDataChange?.( fresh );
 			setNotice( {
 				status: 'success',
 				message: 'Site déconnecté du manager.',

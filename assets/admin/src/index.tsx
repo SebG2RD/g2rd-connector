@@ -103,6 +103,8 @@ function mountStandalone(): void {
 	);
 }
 
+type TabRoot = ReturnType< typeof createRoot >;
+
 /**
  * Racine React de chaque conteneur d'onglet, et démontage en attente.
  *
@@ -115,11 +117,60 @@ function mountStandalone(): void {
  */
 const tabRoots = new WeakMap<
 	HTMLElement,
-	{ root: ReturnType< typeof createRoot >; unmountTimer?: number }
+	{ root: TabRoot; unmountTimer?: number }
 >();
 
 /** Numéro de montage : clé du panneau, pour qu'un remontage reparte d'un état neuf. */
 let tabMounts = 0;
+
+/**
+ * Derniers réglages connus, partagés par les montages successifs de l'onglet.
+ *
+ * Les données que la console passe à mount() sont celles du chargement de la
+ * page (figées dans le filtre PHP), et le panneau repart d'un état neuf à chaque
+ * montage : sans cette copie, revenir sur l'onglet réafficherait les valeurs
+ * d'avant le dernier enregistrement (ou « non enrôlé » après un enrôlement), et
+ * un nouvel enregistrement les renverrait au serveur sans avertissement, y
+ * compris sur les réglages de sécurité. null = aucune réponse du serveur depuis
+ * le chargement de la page.
+ */
+let latestData: ConnectorBootData | null = null;
+
+/** Panneau d'onglet affiché : sa racine et son numéro de montage (null hors de l'onglet). */
+let shownPanel: { root: TabRoot; mount: number } | null = null;
+
+function renderTabPanel(
+	root: TabRoot,
+	mount: number,
+	data: ConnectorBootData
+): void {
+	root.render(
+		<StrictMode>
+			<ConnectorPanel
+				key={ mount }
+				data={ data }
+				onDataChange={ ( fresh ) => rememberTabData( mount, fresh ) }
+			/>
+		</StrictMode>
+	);
+}
+
+/**
+ * Garde la réponse du serveur pour le prochain montage. Si elle vient d'un
+ * panneau déjà quitté (requête encore en cours quand on a changé d'onglet) alors
+ * que l'onglet a été rouvert entre-temps, le panneau affiché était parti des
+ * réglages d'avant : il repart de ceux-ci.
+ *
+ * @param mount Numéro de montage du panneau qui a reçu la réponse.
+ * @param fresh Données renvoyées par le serveur.
+ */
+function rememberTabData( mount: number, fresh: ConnectorBootData ): void {
+	latestData = fresh;
+	if ( shownPanel && shownPanel.mount !== mount ) {
+		shownPanel.mount = ++tabMounts;
+		renderTabPanel( shownPanel.root, shownPanel.mount, fresh );
+	}
+}
 
 function mountThemeTab(
 	container: HTMLElement,
@@ -133,13 +184,13 @@ function mountThemeTab(
 		tabRoots.set( container, entry );
 	}
 	const mounted = entry;
-	tabMounts++;
-	mounted.root.render(
-		<StrictMode>
-			<ConnectorPanel key={ tabMounts } data={ data } />
-		</StrictMode>
-	);
+	const shown = { root: mounted.root, mount: ++tabMounts };
+	shownPanel = shown;
+	renderTabPanel( shown.root, shown.mount, latestData ?? data );
 	return () => {
+		if ( shownPanel === shown ) {
+			shownPanel = null;
+		}
 		window.clearTimeout( mounted.unmountTimer );
 		mounted.unmountTimer = window.setTimeout( () => {
 			tabRoots.delete( container );
@@ -152,6 +203,9 @@ function registerAsThemeTab(): void {
 	if ( ! window.G2RDOptions?.registerTab ) {
 		return;
 	}
+	// Libellé, description et icône : la console 1.39 comme la 1.41 les lit dans
+	// le filtre PHP et ne prend ici que `mount`. À garder identiques à ceux de
+	// Page::register_as_theme_tab (includes/Admin/Page.php) ; PageTest le vérifie.
 	window.G2RDOptions.registerTab( {
 		key: 'connector',
 		label: 'Manager G2RD',
