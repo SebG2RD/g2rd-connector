@@ -334,6 +334,7 @@ final class PhaseTest extends TestCase {
 		Plugin::instance()->boot();
 
 		self::assertNotFalse( has_action( 'http_api_debug', [ WporgAnswers::class, 'record' ] ) );
+		self::assertNotFalse( has_filter( 'pre_http_request', [ WporgAnswers::class, 'observe_preempted' ] ), 'Requêtes court-circuitées (mu-plugin Hostinger) aussi.' );
 	}
 
 	/** Site pas encore enrôlé : rien n'est écrit, donc rien n'est écouté (guideline 7). */
@@ -344,6 +345,7 @@ final class PhaseTest extends TestCase {
 		Plugin::instance()->boot();
 
 		self::assertFalse( has_action( 'http_api_debug', [ WporgAnswers::class, 'record' ] ) );
+		self::assertFalse( has_filter( 'pre_http_request', [ WporgAnswers::class, 'observe_preempted' ] ) );
 	}
 
 	private function schedule( int $timestamp, string $recurrence, string $hook ): void {

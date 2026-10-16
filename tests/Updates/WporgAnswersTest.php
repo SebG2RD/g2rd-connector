@@ -17,7 +17,9 @@ use PHPUnit\Framework\Attributes\DataProvider;
  * WordPress 6.9.4) écrivent `last_checked = time()` dans le transient AVANT d'appeler
  * wordpress.org, puis s'arrêtent sur une erreur : `last_checked` dit quand WordPress a
  * essayé, pas quand wordpress.org a répondu. La réponse passe par l'action
- * `http_api_debug` ; elle n'est notée que si WordPress écrit ensuite le transient.
+ * `http_api_debug` — ou, requête court-circuitée (mu-plugin Hostinger, cf.
+ * HostingerProxy), par la valeur finale du filtre `pre_http_request` ; elle n'est notée
+ * que si WordPress écrit ensuite le transient.
  *
  * Le banc rejoue l'ordre de WordPress : écriture d'avant l'appel (filtre
  * `pre_set_site_transient_{$transient}` puis action `set_site_transient_{$transient}`,
@@ -57,6 +59,7 @@ final class WporgAnswersTest extends TestCase {
 		);
 		Functions\when( 'wp_parse_url' )->alias( static fn ( string $url, int $component = -1 ) => parse_url( $url, $component ) );
 		Functions\when( 'maybe_serialize' )->alias( static fn ( $data ) => is_array( $data ) || is_object( $data ) ? serialize( $data ) : $data );
+		HostingerProxy::reset();
 	}
 
 	public function test_une_reponse_200_a_la_verification_des_extensions_est_notee(): void {
@@ -411,18 +414,295 @@ final class WporgAnswersTest extends TestCase {
 		self::assertFalse( WporgAnswers::answered_within( 'core', $now, self::MAX_AGE ) );
 	}
 
+	// ─── Requête court-circuitée par `pre_http_request` (mu-plugin Hostinger) ─────
+
+	/**
+	 * Le cas du pilote (g2rd.fr, WordPress 7.1.3, 16/10/2026) : le mu-plugin Hostinger refait
+	 * la requête vers api.wordpress.org vers son proxy et rend la réponse du proxy par le
+	 * filtre `pre_http_request` (cf. HostingerProxy). WordPress l'utilise comme réponse de
+	 * wordpress.org et écrit le transient qui la porte : notée, une fois, quel que soit
+	 * l'hôte du proxy. Seul le proxy est appelé.
+	 */
+	#[DataProvider( 'proxied_checks' )]
+	public function test_une_verification_servie_par_le_proxy_hostinger_est_notee( string $check, string $url, string $proxy_host ): void {
+		HostingerProxy::$proxy_host = $proxy_host;
+
+		self::proxied_check( $url, self::answering( self::answer_body( $url ) ) );
+
+		self::assertSame( [ WporgAnswers::OPTION ], $this->writes );
+		self::assertTrue( WporgAnswers::answered_within( $check, time(), self::MAX_AGE ) );
+		self::assertSame( [ str_replace( 'api.wordpress.org', $proxy_host, $url ) ], HostingerProxy::$network );
+	}
+
+	/** @return array<string, array{string, string, string}> */
+	public static function proxied_checks(): array {
+		return [
+			'cœur'                  => [ 'core', self::CORE_URL, 'wpapi.hostinger.io' ],
+			'extensions'            => [ 'plugins', self::PLUGINS_URL, 'wpapi.hostinger.io' ],
+			'thèmes'                => [ 'themes', self::THEMES_URL, 'wpapi.hostinger.io' ],
+			'extensions, autre hôte' => [ 'plugins', self::PLUGINS_URL, 'miroir.exemple.test' ],
+		];
+	}
+
+	/** Une seule écriture en base, au moment où WordPress écrit la réponse servie par le proxy. */
+	public function test_une_seule_ecriture_en_base_par_verification_servie_par_le_proxy(): void {
+		self::write( 'update_plugins' );
+		HostingerProxy::request( self::PLUGINS_URL, self::answering( self::answer_body( self::PLUGINS_URL ) ) );
+		self::assertSame( [], $this->writes, 'Rien n\'est écrit à la réception.' );
+
+		self::write( 'update_plugins' );
+		self::write( 'update_plugins' );
+
+		self::assertSame( [ WporgAnswers::OPTION ], $this->writes );
+	}
+
+	/**
+	 * Le proxy ne répond pas, en https:// puis au repli en http:// : WordPress s'arrête sans
+	 * rien écrire. Rien n'est noté, et l'amorce tombe : un 200 qu'une autre extension obtient
+	 * ensuite d'update-check par le proxy, dans la même requête PHP, n'est pas emporté par
+	 * l'écriture suivante du transient.
+	 */
+	public function test_une_erreur_reseau_du_proxy_puis_du_repli_http_n_est_pas_notee(): void {
+		foreach ( [ self::PLUGINS_URL, self::THEMES_URL, self::CORE_URL ] as $url ) {
+			$received = self::proxied_check( $url, self::unreachable() );
+			self::assertInstanceOf( \WP_Error::class, $received );
+
+			HostingerProxy::request( $url, self::answering( self::answer_body( $url ) ) );
+			self::write( self::transient_of( $url ) );
+		}
+
+		self::assertSame( [], $this->writes );
+		self::assertContains( 'http://wpapi.hostinger.io/plugins/update-check/1.1/', HostingerProxy::$network, 'Le repli en http:// passe aussi par le proxy.' );
+	}
+
+	/** Le proxy échoue en https:// et répond au repli en http:// : la réponse du repli compte. */
+	public function test_le_repli_en_http_servi_par_le_proxy_compte(): void {
+		self::proxied_check(
+			self::THEMES_URL,
+			static fn ( string $url ) => str_starts_with( $url, 'https://' )
+				? new \WP_Error( 'http_request_failed', 'cURL error 28: Operation timed out' )
+				: self::http_response( 200, self::answer_body( $url ) )
+		);
+
+		self::assertSame( [ WporgAnswers::OPTION ], $this->writes );
+		self::assertTrue( WporgAnswers::answered_within( 'themes', time(), self::MAX_AGE ) );
+	}
+
+	/**
+	 * Le proxy rend un 200 au corps HTML : WordPress écrit un transient vide (extensions,
+	 * thèmes) ou s'arrête (cœur). Rien n'est noté.
+	 */
+	public function test_un_200_au_corps_html_servi_par_le_proxy_n_est_pas_note(): void {
+		$defi = '<!DOCTYPE html><html><head><title>Just a moment...</title></head><body>Vérification de votre navigateur</body></html>';
+
+		foreach ( [ self::PLUGINS_URL, self::THEMES_URL, self::CORE_URL ] as $url ) {
+			self::proxied_check( $url, self::answering( $defi ) );
+		}
+
+		self::assertSame( [], $this->writes );
+		foreach ( [ 'core', 'plugins', 'themes' ] as $check ) {
+			self::assertFalse( WporgAnswers::answered_within( $check, time(), self::MAX_AGE ), $check );
+		}
+	}
+
+	/**
+	 * Interception que WordPress n'écrit pas ensuite : appel d'update-check fait par une
+	 * autre extension (ni écriture avant, ni après), ou vérification amorcée que WordPress
+	 * n'achève pas. Rien n'est noté.
+	 */
+	public function test_une_interception_sans_ecriture_du_transient_ensuite_n_est_pas_notee(): void {
+		HostingerProxy::request( self::PLUGINS_URL, self::answering( self::answer_body( self::PLUGINS_URL ) ) );
+		self::write( 'update_themes' );
+		HostingerProxy::request( self::THEMES_URL, self::answering( self::answer_body( self::THEMES_URL ) ) );
+
+		self::assertSame( [], $this->writes );
+		self::assertFalse( WporgAnswers::answered_within( 'plugins', time(), self::MAX_AGE ) );
+		self::assertFalse( WporgAnswers::answered_within( 'themes', time(), self::MAX_AGE ) );
+	}
+
+	/**
+	 * Une autre extension appelle update-check par le proxy, puis WordPress vérifie dans la
+	 * même requête PHP et échoue : l'écriture d'avant l'appel de WordPress n'emporte pas la
+	 * réponse de l'extension. La vérification suivante de WordPress, réussie, est notée.
+	 */
+	public function test_la_reponse_servie_par_le_proxy_a_une_autre_extension_ne_compte_pas(): void {
+		HostingerProxy::request( self::PLUGINS_URL, self::answering( self::answer_body( self::PLUGINS_URL ) ) );
+		self::proxied_check( self::PLUGINS_URL, self::unreachable() );
+
+		self::assertSame( [], $this->writes );
+
+		self::proxied_check( self::PLUGINS_URL, self::answering( self::answer_body( self::PLUGINS_URL ) ) );
+		self::assertSame( [ WporgAnswers::OPTION ], $this->writes );
+	}
+
+	/**
+	 * Requêtes interceptées vers d'autres adresses (informations d'extension, traductions,
+	 * autre version de l'API, téléchargements, autre hôte), même entre deux écritures des
+	 * transients et avec un corps qui porte toutes les clés : rien n'est noté.
+	 */
+	public function test_une_autre_adresse_interceptee_n_est_pas_notee(): void {
+		$body = '{"offers":[{"response":"latest"}],"plugins":[],"themes":[],"translations":[],"no_update":[]}';
+		foreach ( [ 'update_core', 'update_plugins', 'update_themes' ] as $transient ) {
+			self::write( $transient );
+		}
+		foreach ( [
+			'https://api.wordpress.org/plugins/info/1.2/?action=plugin_information&slug=akismet',
+			'https://api.wordpress.org/themes/info/1.2/?action=theme_information',
+			'https://api.wordpress.org/translations/core/1.0/?version=7.1.3',
+			'https://api.wordpress.org/core/version-check/1.6/?version=7.1.3',
+			'https://api.wordpress.org/plugins/update-check/1.0/',
+		] as $url ) {
+			HostingerProxy::request( $url, self::answering( $body ) );
+		}
+		WporgAnswers::observe_preempted( self::http_response( 200, $body ), [], 'https://downloads.wordpress.org/plugin/akismet.5.3.zip' );
+		WporgAnswers::observe_preempted( self::http_response( 200, $body ), [], 'https://wpapi.hostinger.io/plugins/update-check/1.1/' );
+		WporgAnswers::observe_preempted( self::http_response( 200, $body ), [], 'https://api.wordpress.org:8443/plugins/update-check/1.1/' );
+		foreach ( [ 'update_core', 'update_plugins', 'update_themes' ] as $transient ) {
+			self::write( $transient );
+		}
+
+		self::assertSame( [], $this->writes );
+	}
+
+	/**
+	 * Un filtre qui refait la requête vers la MÊME adresse (requête imbriquée vers
+	 * api.wordpress.org, vue par `http_api_debug`) puis rend sa réponse : une seule réponse
+	 * en attente, une seule écriture. S'il la transforme en autre chose qu'un 200 porteur
+	 * des données, WordPress s'arrête : elle n'est plus en attente, et l'écriture d'avant
+	 * l'appel d'une vérification suivante, ratée, ne l'emporte pas.
+	 */
+	public function test_une_interception_qui_refait_la_meme_requete_ne_compte_qu_une_fois(): void {
+		$answer = self::http_response( 200, self::answer_body( self::PLUGINS_URL ) );
+
+		self::write( 'update_plugins' );
+		WporgAnswers::record( $answer, 'response', 'WpOrg\Requests\Requests', [], self::PLUGINS_URL );
+		WporgAnswers::confirm_response( $answer, [], self::PLUGINS_URL );
+		WporgAnswers::observe_preempted( $answer, [], self::PLUGINS_URL );
+		self::write( 'update_plugins' );
+
+		self::assertSame( [ WporgAnswers::OPTION ], $this->writes );
+
+		$this->writes = [];
+		unset( $this->site_options[ WporgAnswers::OPTION ] );
+		self::write( 'update_themes' );
+		$themes = self::http_response( 200, self::answer_body( self::THEMES_URL ) );
+		WporgAnswers::record( $themes, 'response', 'WpOrg\Requests\Requests', [], self::THEMES_URL );
+		WporgAnswers::confirm_response( $themes, [], self::THEMES_URL );
+		WporgAnswers::observe_preempted( self::http_response( 503, 'Service indisponible' ), [], self::THEMES_URL );
+
+		self::write( 'update_themes' );
+		self::failure( self::THEMES_URL );
+		self::failure( 'http://api.wordpress.org/themes/update-check/1.1/' );
+
+		self::assertSame( [], $this->writes );
+	}
+
+	/**
+	 * Seule une erreur réseau (WP_Error) en https:// fait retenter WordPress en http://
+	 * (`$ssl && is_wp_error( … )`, wp-includes/update.php) : toute autre valeur qui n'est
+	 * pas un tableau, rendue par un filtre, l'arrête sans rien écrire. L'amorce tombe : un
+	 * 200 qu'une autre extension obtient ensuite d'update-check n'est pas emporté par
+	 * l'écriture suivante du transient.
+	 *
+	 * @param mixed $value Valeur rendue par le filtre.
+	 */
+	#[DataProvider( 'non_response_values' )]
+	public function test_une_interception_qui_ne_rend_ni_tableau_ni_erreur_retire_l_amorce( $value ): void {
+		self::write( 'update_plugins' );
+		WporgAnswers::observe_preempted( $value, [], self::PLUGINS_URL );
+
+		self::response( 200, self::PLUGINS_URL );
+		self::write( 'update_plugins' );
+		self::failure( self::PLUGINS_URL );
+		self::failure( 'http://api.wordpress.org/plugins/update-check/1.1/' );
+
+		self::assertSame( [], $this->writes );
+	}
+
+	/** @return array<string, array{mixed}> */
+	public static function non_response_values(): array {
+		return [
+			'true'          => [ true ],
+			'chaîne'        => [ '{"plugins":[]}' ],
+			'entier'        => [ 200 ],
+			'null'          => [ null ],
+		];
+	}
+
+	/**
+	 * wp_remote_retrieve_response_code() (wp-includes/http.php) rend le code tel quel, et
+	 * update.php le compare strictement (`200 !== …`) : un code « 200 » en chaîne, rendu par
+	 * un filtre `pre_http_request` ou `http_response`, arrête WordPress sans écrire le
+	 * transient. Ce n'est pas une réponse : rien n'est noté, ni à une écriture suivante.
+	 */
+	public function test_un_code_200_en_chaine_n_est_pas_une_reponse(): void {
+		$plugins                     = self::http_response( 200, self::answer_body( self::PLUGINS_URL ) );
+		$plugins['response']['code'] = '200';
+		self::write( 'update_plugins' );
+		WporgAnswers::observe_preempted( $plugins, [], self::PLUGINS_URL );
+		self::write( 'update_plugins' );
+		self::failure( self::PLUGINS_URL );
+		self::failure( 'http://api.wordpress.org/plugins/update-check/1.1/' );
+
+		$received                 = self::http_response( 200, self::answer_body( self::THEMES_URL ) );
+		$read                     = $received;
+		$read['response']['code'] = '200';
+		self::write( 'update_themes' );
+		WporgAnswers::record( $received, 'response', 'WpOrg\Requests\Requests', [], self::THEMES_URL );
+		WporgAnswers::confirm_response( $read, [], self::THEMES_URL );
+		self::write( 'update_themes' );
+		self::failure( self::THEMES_URL );
+		self::failure( 'http://api.wordpress.org/themes/update-check/1.1/' );
+
+		self::assertSame( [], $this->writes );
+	}
+
+	/**
+	 * Le filtre rend toujours la valeur reçue, sans la modifier (identité stricte), qu'elle
+	 * compte ou non, pour une vérification amorcée comme pour une autre adresse.
+	 *
+	 * @param mixed $value Valeur reçue par le filtre.
+	 */
+	#[DataProvider( 'preempted_values' )]
+	public function test_la_valeur_de_pre_http_request_est_rendue_telle_quelle( $value, string $url ): void {
+		foreach ( [ 'update_core', 'update_plugins', 'update_themes' ] as $transient ) {
+			self::write( $transient );
+		}
+
+		self::assertSame( $value, WporgAnswers::observe_preempted( $value, [ 'timeout' => 30 ], $url ) );
+	}
+
+	/** @return array<string, array{mixed, string}> */
+	public static function preempted_values(): array {
+		$error = new \WP_Error( 'http_request_failed', 'cURL error 28: Operation timed out' );
+
+		return [
+			'pas de court-circuit'     => [ false, self::PLUGINS_URL ],
+			'200 des extensions'       => [ self::http_response( 200, self::answer_body( self::PLUGINS_URL ) ), self::PLUGINS_URL ],
+			'200 du cœur'              => [ self::http_response( 200, self::answer_body( self::CORE_URL ) ), self::CORE_URL ],
+			'200 au corps HTML'        => [ self::http_response( 200, '<html></html>' ), self::THEMES_URL ],
+			'403'                      => [ self::http_response( 403, 'Forbidden' ), self::THEMES_URL ],
+			'erreur réseau'            => [ $error, self::PLUGINS_URL ],
+			'erreur réseau, repli'     => [ $error, 'http://api.wordpress.org/plugins/update-check/1.1/' ],
+			'autre valeur'             => [ true, self::CORE_URL ],
+			'autre adresse'            => [ self::http_response( 200, self::answer_body( self::PLUGINS_URL ) ), 'https://exemple.test/' ],
+		];
+	}
+
 	/**
 	 * Réponse sur `http_api_debug`, puis telle que WordPress la lit (filtre
 	 * `http_response`, en dernier) ; écritures des trois transients : filtre
 	 * `pre_set_site_transient_{$transient}` (en dernier, après les updaters tiers), action
 	 * `set_site_transient_{$transient}`, et filtre `pre_update_site_option_{$option}` pour
-	 * la réécriture identique.
+	 * la réécriture identique. Requête court-circuitée : valeur finale du filtre
+	 * `pre_http_request`, en dernier (après le mu-plugin Hostinger, priorité 10).
 	 */
 	public function test_l_ecoute_est_branchee_sur_http_api_debug_et_sur_l_ecriture_des_transients(): void {
 		WporgAnswers::register();
 
 		self::assertNotFalse( has_action( 'http_api_debug', [ WporgAnswers::class, 'record' ] ) );
 		self::assertSame( PHP_INT_MAX, has_filter( 'http_response', [ WporgAnswers::class, 'confirm_response' ] ) );
+		self::assertSame( PHP_INT_MAX, has_filter( 'pre_http_request', [ WporgAnswers::class, 'observe_preempted' ] ) );
 		foreach ( [ 'update_core', 'update_plugins', 'update_themes' ] as $transient ) {
 			self::assertSame( PHP_INT_MAX, has_filter( 'pre_set_site_transient_' . $transient, [ WporgAnswers::class, 'before_write' ] ), $transient );
 			self::assertNotFalse( has_action( 'set_site_transient_' . $transient, [ WporgAnswers::class, 'after_write' ] ), $transient );
@@ -451,6 +731,49 @@ final class WporgAnswersTest extends TestCase {
 			}
 		}
 		self::write( $transient );
+	}
+
+	/**
+	 * Vérification complète sur un site qui a le mu-plugin Hostinger, dans l'ordre de
+	 * wp-includes/update.php (WordPress 6.9.4 et 7.1.3) : écriture d'avant l'appel, requête
+	 * (HostingerProxy::request()), repli en http:// sur une erreur réseau en https://, puis
+	 * écriture de la réponse si WordPress la fait — code 200 exactement
+	 * (`200 !== wp_remote_retrieve_response_code()`), et pour le cœur un JSON qui porte
+	 * `offers` ; extensions et thèmes : tout 200, même au corps HTML (transient vide).
+	 *
+	 * @param callable(string): mixed $remote Réponse du réseau, par adresse demandée.
+	 * @return mixed Ce que WordPress a reçu.
+	 */
+	private static function proxied_check( string $url, callable $remote ): mixed {
+		$transient = self::transient_of( $url );
+
+		self::write( $transient );
+		$received = HostingerProxy::request( $url, $remote );
+		if ( $received instanceof \WP_Error && str_starts_with( $url, 'https://' ) ) {
+			$received = HostingerProxy::request( 'http://' . substr( $url, strlen( 'https://' ) ), $remote );
+		}
+		if ( ! is_array( $received ) || ! is_array( $received['response'] ?? null ) || 200 !== ( $received['response']['code'] ?? null ) ) {
+			return $received;
+		}
+		if ( 'update_core' === $transient ) {
+			$decoded = json_decode( trim( (string) ( $received['body'] ?? '' ) ), true );
+			if ( ! is_array( $decoded ) || ! isset( $decoded['offers'] ) ) {
+				return $received;
+			}
+		}
+		self::write( $transient );
+
+		return $received;
+	}
+
+	/** Réseau qui répond 200 avec ce corps, à toute adresse. */
+	private static function answering( string $body ): \Closure {
+		return static fn (): array => self::http_response( 200, $body );
+	}
+
+	/** Réseau injoignable (délai dépassé), à toute adresse. */
+	private static function unreachable(): \Closure {
+		return static fn (): \WP_Error => new \WP_Error( 'http_request_failed', 'cURL error 28: Operation timed out' );
 	}
 
 	/**
