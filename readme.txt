@@ -133,6 +133,25 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   count). Child, premium and custom themes are false. No extra network call. The field is left
   out when that transient holds no answer from WordPress.org; the manager then keeps its former
   computation.
+* **New: long commands can run in the background (`async_commands`).** The host's CDN resends a
+  request left about 60 seconds without an answer, so a long update could run twice. Two new
+  routes, `POST /wp-json/g2rd/v1/command-runs` and `GET /wp-json/g2rd/v1/command-runs/<id>`,
+  are registered under the same condition as `/command` (remote commands allowed). Both require
+  the token AND a valid signature, whatever the site's signature policy. The platform hands a
+  long command (updates, plugin rollback, database cleanups) to the site under an ID it chose;
+  the site answers "received" within a second or two, finishes the response
+  (`litespeed_finish_request()` or `fastcgi_finish_request()`), then runs the command in the
+  same process, through the same code as `/command`. The platform reads the result with short
+  signed requests. A resend of the same ID only gets the state back: the command never runs
+  twice. A site runs one background command at a time (another one is refused as busy, with
+  nothing run). The inventory announces the
+  `async_commands` capability only when the server can finish a response early and the
+  `G2RD_CONNECTOR_DISABLE_ASYNC_COMMANDS` constant is not set in `wp-config.php`; otherwise the
+  platform keeps using `/command`, as before. Run records are kept 7 days, 200 at most
+  (options `g2rd_cmdrun_*`, not autoloaded, removed on uninstall). A diagnostic command,
+  `async_probe`, stays off unless `G2RD_CONNECTOR_ASYNC_PROBE` is set in `wp-config.php`.
+  `/command` and the heartbeat queue are unchanged; nothing changes for a site until the
+  platform turns the mode on.
 
 = 1.13.0 =
 

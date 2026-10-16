@@ -10,6 +10,7 @@ declare(strict_types=1);
 namespace G2RD\Connector;
 
 use G2RD\Connector\Admin\Page;
+use G2RD\Connector\CommandRuns\AfterResponseRunner;
 use G2RD\Connector\CommandRuns\RunStore;
 use G2RD\Connector\Cron\HeartbeatJob;
 use G2RD\Connector\Cron\Phase;
@@ -22,6 +23,7 @@ use G2RD\Connector\Outbound\ManagerIpv4Guard;
 use G2RD\Connector\Rest\AdminController;
 use G2RD\Connector\Rest\Auth;
 use G2RD\Connector\Rest\CommandController;
+use G2RD\Connector\Rest\CommandRunsController;
 use G2RD\Connector\Rest\HealthController;
 use G2RD\Connector\Rest\SnapshotController;
 use G2RD\Connector\Rollback\AutoUpdateGuard;
@@ -166,6 +168,25 @@ final class Plugin {
 		add_action( 'rest_api_init', [ new SnapshotController(), 'register' ] );
 		if ( Settings::get( 'remote_commands_enabled' ) ) {
 			add_action( 'rest_api_init', [ new CommandController(), 'register' ] );
+
+			// Commandes longues exécutées en arrière-plan (1.14) : `POST /command-runs` et
+			// `GET /command-runs/<numéro>`, signées, dans les mêmes conditions que `/command`
+			// et sous l'anti-cache de `g2rd/v1` (prevent_rest_cache()). Enregistrées même sans
+			// fonction de fin de réponse (lecture des exécutions passées après un changement
+			// de serveur) : seule la capacité `async_commands` de l'inventaire en dépend
+			// (CommandRuns\Capability). Rien n'est appelé ici. Les deux filtres sont branchés
+			// sur toutes les requêtes REST du site : hors de ces routes, ils rendent leur
+			// valeur sans rien lire, et ne lèvent jamais.
+			$runner = AfterResponseRunner::instance();
+			add_action( 'rest_api_init', [ new CommandRunsController( \Closure::fromCallable( [ $runner, 'queue' ] ) ), 'register' ] );
+			// Corps de plus de 16 Ko refusé avant que WordPress ne décode le JSON (priorité 5,
+			// avant l'anti-cache, qui vaut aussi pour ce refus).
+			add_filter( 'rest_pre_dispatch', [ CommandRunsController::class, 'guard_body_size' ], 5, 3 );
+			// Réponse « reçue » servie et terminée, puis commande exécutée. Priorité tardive :
+			// les filtres qui posent des en-têtes, dont rest_send_cors_headers() de WordPress
+			// (priorité 10, branché à rest_api_init), passent avant que la réponse parte ;
+			// sinon leurs en-têtes seraient perdus (« headers already sent » au journal PHP).
+			add_filter( 'rest_pre_serve_request', [ $runner, 'maybe_serve' ], 1000, 4 );
 		}
 
 		// Outbound : cron heartbeat (opt-in via Settings).
