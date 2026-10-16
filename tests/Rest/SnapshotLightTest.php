@@ -147,9 +147,10 @@ final class SnapshotLightTest extends SnapshotTestCase {
 	}
 
 	/**
-	 * Aucune réponse notée (connecteur tout juste mis à jour, requêtes vers
-	 * wordpress.org court-circuitées par une extension) : rafraîchi à chaque fois,
-	 * comme avant.
+	 * Aucune réponse notée (connecteur tout juste mis à jour, requête court-circuitée par
+	 * `pre_http_request` avec une erreur ou un code autre que 200 (un 200 fourni par le
+	 * filtre est noté, comme WordPress le tient pour une réponse)) : rafraîchi à chaque
+	 * fois, comme avant.
 	 */
 	public function test_sans_reponse_notee_de_wordpress_org_les_transients_sont_rafraichis(): void {
 		$this->update_transients_checked( self::FRESH );

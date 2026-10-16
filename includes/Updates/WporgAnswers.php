@@ -32,9 +32,10 @@
  * L'inventaire (PremiumUpdatesBridge::is_fresh(), SnapshotController) ne tient un
  * transient pour frais que si `last_checked` ET cette heure ont moins de
  * PremiumUpdatesBridge::UPDATE_CHECK_MAX_AGE. Ce qui n'est pas noté (connecteur tout
- * juste mis à jour, requête court-circuitée par le filtre `pre_http_request`,
- * wordpress.org bloqué) laisse l'inventaire rafraîchir à chaque synchronisation, comme
- * avant la 1.14 : plus lourd, jamais faux.
+ * juste mis à jour, requête court-circuitée par `pre_http_request` avec une erreur ou un
+ * code autre que 200 (un 200 fourni par le filtre est noté, comme WordPress le tient pour
+ * une réponse), wordpress.org bloqué) laisse l'inventaire rafraîchir à chaque
+ * synchronisation, comme avant la 1.14 : plus lourd, jamais faux.
  *
  * Option de RÉSEAU, comme les transients de mise à jour (transients de site) : en
  * multisite, une vérification vaut pour tous les blogs. En site simple,
