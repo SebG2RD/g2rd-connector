@@ -507,7 +507,13 @@ chacun s'additionne.
     non autochargée `g2rd_connector_wporg_answers`, une écriture par vérification réussie,
     retirée à la désinstallation), si son corps est du JSON qui porte les données de la
     vérification (`offers`, `plugins` ou `themes`) : après un 200 au corps HTML (page de défi
-    d'un CDN), WordPress écrit un transient vide, qui ne doit pas passer pour frais. Sans
+    d'un CDN), WordPress écrit un transient vide, qui ne doit pas passer pour frais. La
+    réponse reste en attente en mémoire et n'est notée que si WordPress écrit ensuite, dans la
+    même requête PHP, le transient qui la porte (filtre `pre_set_site_transient_{$transient}`
+    puis action `set_site_transient_{$transient}`, ou réécriture identique) : un 200 que
+    WordPress n'écrit pas (filtre `http_response` qui le transforme, appel d'update-check fait
+    par une autre extension) ne compte pas, et l'écriture de `last_checked` d'avant l'appel ne
+    note jamais rien. Une requête court-circuitée par `pre_http_request` n'est jamais notée. Sans
     réponse notée (connecteur tout juste mis à jour,
     wordpress.org bloqué), l'inventaire rafraîchit à chaque fois, comme avant. La commande
     `check_updates` (« Vérifier les MAJ ») force toujours. Les mises à jour des updaters tiers

@@ -159,31 +159,55 @@ abstract class SnapshotTestCase extends TestCase {
 	}
 
 	/**
-	 * Ce que WordPress passe à `http_api_debug` (WP_Http::request()) après une réponse
-	 * 200 de wordpress.org à l'une des trois vérifications : la réponse est notée.
+	 * Ce que voit WporgAnswers d'une vérification réussie de WordPress, dans l'ordre de
+	 * wp-includes/update.php : écriture du transient d'avant l'appel, réponse 200 de
+	 * wordpress.org (`http_api_debug` puis `http_response`, WP_Http::request()), écriture
+	 * du transient qui la porte. La réponse est notée.
 	 */
 	protected static function wporg_answered( string $check ): void {
+		$transient = 'update_' . $check;
+
+		self::transient_written( $transient );
+		self::wporg_response( $check );
+		self::transient_written( $transient );
+	}
+
+	/**
+	 * Réponse 200 de wordpress.org à l'une des trois vérifications, telle que
+	 * `http_api_debug` la reçoit, puis telle que WordPress la lit après le filtre
+	 * `http_response` : la même, sauf code transformé par un autre filtre (`$read_code`).
+	 */
+	protected static function wporg_response( string $check, int $read_code = 200 ): void {
 		$requests = [
 			'core'    => [ 'https://api.wordpress.org/core/version-check/1.7/?version=' . self::WP_VERSION, '{"offers":[{"response":"latest"}],"translations":[]}' ],
 			'plugins' => [ 'https://api.wordpress.org/plugins/update-check/1.1/', '{"plugins":[],"translations":[],"no_update":[]}' ],
 			'themes'  => [ 'https://api.wordpress.org/themes/update-check/1.1/', '{"themes":[],"translations":[],"no_update":[]}' ],
 		];
 		[ $url, $body ] = $requests[ $check ];
-
-		WporgAnswers::record(
-			[
-				'headers'  => [],
-				'body'     => $body,
-				'response' => [
-					'code'    => 200,
-					'message' => 'OK',
-				],
+		$received       = [
+			'headers'  => [],
+			'body'     => $body,
+			'response' => [
+				'code'    => 200,
+				'message' => 'OK',
 			],
-			'response',
-			'WpOrg\Requests\Requests',
-			[],
-			$url
-		);
+		];
+		$read           = $received;
+
+		$read['response']['code'] = $read_code;
+
+		WporgAnswers::record( $received, 'response', 'WpOrg\Requests\Requests', [], $url );
+		WporgAnswers::confirm_response( $read, [], $url );
+	}
+
+	/**
+	 * set_site_transient() d'un transient de mise à jour, vu par WporgAnswers : filtre
+	 * `pre_set_site_transient_{$transient}`, puis action `set_site_transient_{$transient}`
+	 * (Brain Monkey note les branchements sans jamais les appeler).
+	 */
+	protected static function transient_written( string $transient ): void {
+		$value = WporgAnswers::before_write( (object) [ 'last_checked' => time() ], $transient );
+		WporgAnswers::after_write( $value, 0, $transient );
 	}
 
 	/** Offre « à jour » que wordpress.org rend toujours (api.wordpress.org/core/version-check/1.7/). */

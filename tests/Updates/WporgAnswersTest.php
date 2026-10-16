@@ -9,16 +9,29 @@ use G2RD\Connector\Tests\TestCase;
 use G2RD\Connector\Updates\WporgAnswers;
 
 /**
- * Heure de la dernière réponse REÇUE de wordpress.org, par vérification.
+ * Heure de la dernière réponse REÇUE de wordpress.org, par vérification, liée à
+ * l'écriture du transient qui la porte.
  *
- * wp_version_check(), wp_update_plugins() et wp_update_themes() écrivent
- * `last_checked = time()` dans le transient AVANT d'appeler wordpress.org, puis
- * s'arrêtent sur une erreur : `last_checked` dit quand WordPress a essayé, pas quand
- * wordpress.org a répondu. La réponse, elle, passe par l'action `http_api_debug`.
+ * wp_version_check(), wp_update_plugins() et wp_update_themes() (wp-includes/update.php,
+ * WordPress 6.9.4) écrivent `last_checked = time()` dans le transient AVANT d'appeler
+ * wordpress.org, puis s'arrêtent sur une erreur : `last_checked` dit quand WordPress a
+ * essayé, pas quand wordpress.org a répondu. La réponse passe par l'action
+ * `http_api_debug` ; elle n'est notée que si WordPress écrit ensuite le transient.
+ *
+ * Le banc rejoue l'ordre de WordPress : écriture d'avant l'appel (filtre
+ * `pre_set_site_transient_{$transient}` puis action `set_site_transient_{$transient}`,
+ * wp-includes/option.php), réponse (`http_api_debug`), écriture de la réponse quand
+ * WordPress la fait (cœur : 200 portant des offres ; extensions et thèmes : tout 200).
  */
 final class WporgAnswersTest extends TestCase {
 
 	private const MAX_AGE = 3 * 3600;
+
+	private const PLUGINS_URL = 'https://api.wordpress.org/plugins/update-check/1.1/';
+
+	private const THEMES_URL = 'https://api.wordpress.org/themes/update-check/1.1/';
+
+	private const CORE_URL = 'https://api.wordpress.org/core/version-check/1.7/?version=6.9.4&php=8.3';
 
 	/** @var array<string, mixed> Options de réseau, par nom. */
 	private array $site_options = [];
@@ -42,11 +55,12 @@ final class WporgAnswersTest extends TestCase {
 			}
 		);
 		Functions\when( 'wp_parse_url' )->alias( static fn ( string $url, int $component = -1 ) => parse_url( $url, $component ) );
+		Functions\when( 'maybe_serialize' )->alias( static fn ( $data ) => is_array( $data ) || is_object( $data ) ? serialize( $data ) : $data );
 	}
 
 	public function test_une_reponse_200_a_la_verification_des_extensions_est_notee(): void {
 		$avant = time();
-		self::response( 200, 'https://api.wordpress.org/plugins/update-check/1.1/' );
+		self::check( 200, self::PLUGINS_URL );
 
 		$noted = $this->site_options[ WporgAnswers::OPTION ]['plugins'] ?? null;
 		self::assertIsInt( $noted );
@@ -56,23 +70,156 @@ final class WporgAnswersTest extends TestCase {
 		self::assertFalse( WporgAnswers::answered_within( 'themes', time(), self::MAX_AGE ), 'Chaque vérification pour soi.' );
 	}
 
-	/** Repli de WordPress en http:// quand le https:// échoue : la réponse compte aussi. */
+	/** Une seule écriture en base par vérification réussie, au moment où WordPress écrit la réponse. */
+	public function test_une_seule_ecriture_en_base_par_verification_reussie(): void {
+		self::write( 'update_plugins' );
+		self::response( 200, self::PLUGINS_URL );
+		self::assertSame( [], $this->writes, 'Rien n\'est écrit à la réception.' );
+
+		self::write( 'update_plugins' );
+
+		self::assertSame( [ WporgAnswers::OPTION ], $this->writes );
+	}
+
+	/**
+	 * Repli de WordPress en http:// quand le https:// échoue (erreur réseau) : la
+	 * réponse du repli compte, l'écriture d'avant l'appel vaut pour les deux.
+	 */
 	public function test_le_repli_en_http_compte_aussi(): void {
+		self::write( 'update_themes' );
+		self::failure( self::THEMES_URL );
 		self::response( 200, 'http://api.wordpress.org/themes/update-check/1.1/' );
+		self::write( 'update_themes' );
 
 		self::assertTrue( WporgAnswers::answered_within( 'themes', time(), self::MAX_AGE ) );
 	}
 
 	public function test_le_coeur_compte_seulement_avec_des_offres(): void {
-		$url = 'https://api.wordpress.org/core/version-check/1.7/?version=6.9.4&php=8.3';
-
 		// Sans `offers`, wp_version_check() s'arrête sans rien écrire.
-		self::response( 200, $url, '{"translations":[]}' );
-		self::response( 200, $url, 'Service indisponible' );
+		self::check( 200, self::CORE_URL, '{"translations":[]}' );
+		self::check( 200, self::CORE_URL, 'Service indisponible' );
 		self::assertFalse( WporgAnswers::answered_within( 'core', time(), self::MAX_AGE ) );
 
-		self::response( 200, $url, '{"offers":[{"response":"latest","current":"6.9.4"}]}' );
+		self::check( 200, self::CORE_URL, '{"offers":[{"response":"latest","current":"6.9.4"}]}' );
 		self::assertTrue( WporgAnswers::answered_within( 'core', time(), self::MAX_AGE ) );
+	}
+
+	/**
+	 * Un 200 que WordPress n'écrit pas (filtre `http_response` qui le transforme, appel
+	 * d'une autre extension) : rien n'est noté, même si le transient a été écrit avant
+	 * l'appel.
+	 */
+	public function test_un_200_sans_ecriture_du_transient_n_est_pas_note(): void {
+		self::response( 200, self::PLUGINS_URL );
+		self::write( 'update_themes' );
+		self::write( 'update_core' );
+
+		self::write( 'update_themes' );
+		self::response( 200, self::THEMES_URL );
+
+		self::assertSame( [], $this->writes );
+		self::assertFalse( WporgAnswers::answered_within( 'plugins', time(), self::MAX_AGE ) );
+		self::assertFalse( WporgAnswers::answered_within( 'themes', time(), self::MAX_AGE ) );
+	}
+
+	/**
+	 * Un filtre `http_response` transforme le 200 (WP_Http::request() l'applique juste
+	 * après `http_api_debug`) : WordPress lit la réponse transformée et n'écrit pas le
+	 * transient. La réponse ne reste pas en attente : une seconde vérification dans la
+	 * même requête PHP (cron qui enchaîne wp_update_plugins et la découverte du
+	 * connecteur), ratée, ne l'emporte pas à son écriture d'avant l'appel.
+	 */
+	public function test_un_200_transforme_par_un_filtre_http_response_n_est_pas_note(): void {
+		self::write( 'update_plugins' );
+		self::response( 200, self::PLUGINS_URL, null, 503 );
+
+		self::write( 'update_plugins' );
+		self::failure( self::PLUGINS_URL );
+		self::failure( 'http://api.wordpress.org/plugins/update-check/1.1/' );
+
+		self::write( 'update_core' );
+		self::response( 200, self::CORE_URL, null, 200, '<html>Maintenance</html>' );
+		self::write( 'update_core' );
+
+		self::assertSame( [], $this->writes );
+	}
+
+	/** Un filtre `http_response` qui garde un 200 porteur des données : WordPress l'écrit, il est noté. */
+	public function test_un_200_que_le_filtre_http_response_garde_valable_est_note(): void {
+		self::write( 'update_themes' );
+		self::response( 200, self::THEMES_URL, null, 200, '{"themes":{"twentytwentyfive":{"new_version":"1.4"}},"translations":[],"no_update":[]}' );
+		self::write( 'update_themes' );
+
+		self::assertSame( [ WporgAnswers::OPTION ], $this->writes );
+	}
+
+	/**
+	 * Écriture d'avant l'appel (`last_checked`, update.php l. 76-77, 424-425, 711-712),
+	 * puis échec : aucune réponse n'était en attente, rien n'est noté — ni à cette
+	 * écriture, ni à une écriture suivante du même transient.
+	 */
+	public function test_l_ecriture_d_avant_l_appel_puis_un_echec_n_est_pas_notee(): void {
+		self::write( 'update_plugins' );
+		self::failure( self::PLUGINS_URL );
+		self::failure( 'http://api.wordpress.org/plugins/update-check/1.1/' );
+
+		self::write( 'update_core' );
+		self::response( 403, self::CORE_URL );
+
+		self::write( 'update_plugins' );
+		self::write( 'update_core' );
+
+		self::assertSame( [], $this->writes );
+	}
+
+	/**
+	 * Une autre extension appelle elle-même update-check, puis WordPress vérifie dans la
+	 * même requête PHP et échoue : l'écriture d'avant l'appel de WordPress ne doit pas
+	 * emporter la réponse de l'extension (anciennes données sous une date neuve).
+	 */
+	public function test_la_reponse_d_une_autre_extension_ne_compte_pas_pour_la_verification_de_wordpress(): void {
+		self::response( 200, self::PLUGINS_URL );
+		self::write( 'update_plugins' );
+		self::failure( self::PLUGINS_URL );
+		self::failure( 'http://api.wordpress.org/plugins/update-check/1.1/' );
+
+		self::assertSame( [], $this->writes );
+
+		// La vérification suivante de WordPress, réussie, est notée normalement.
+		self::check( 200, self::PLUGINS_URL );
+		self::assertSame( [ WporgAnswers::OPTION ], $this->writes );
+	}
+
+	/**
+	 * Réponse identique à ce que le transient porte déjà, dans la même seconde que
+	 * l'écriture d'avant l'appel : update_network_option() (wp-includes/option.php) ne
+	 * réécrit pas la base et set_site_transient() ne déclenche pas son action. La base
+	 * porte pourtant exactement la réponse : notée.
+	 */
+	public function test_une_reecriture_identique_note_la_reponse(): void {
+		self::write( 'update_core' );
+		self::response( 200, self::CORE_URL );
+		self::write( 'update_core', 'identical' );
+
+		self::assertSame( [ WporgAnswers::OPTION ], $this->writes );
+		self::assertTrue( WporgAnswers::answered_within( 'core', time(), self::MAX_AGE ) );
+	}
+
+	/**
+	 * Écriture de la réponse refusée par la base (ni action, ni valeur identique) : rien
+	 * n'est noté, et la réponse ne survit pas à cette écriture — l'écriture d'avant
+	 * l'appel d'une vérification suivante, ratée, ne l'emporte pas.
+	 */
+	public function test_une_reponse_dont_l_ecriture_echoue_n_est_jamais_notee(): void {
+		self::write( 'update_plugins' );
+		self::response( 200, self::PLUGINS_URL );
+		self::write( 'update_plugins', 'failed' );
+
+		self::write( 'update_plugins' );
+		self::failure( self::PLUGINS_URL );
+		self::write( 'update_plugins' );
+
+		self::assertSame( [], $this->writes );
 	}
 
 	/**
@@ -85,8 +232,8 @@ final class WporgAnswersTest extends TestCase {
 	public function test_un_200_au_corps_html_n_est_pas_note(): void {
 		$defi = '<!DOCTYPE html><html><head><title>Just a moment...</title></head><body>Vérification de votre navigateur</body></html>';
 
-		self::response( 200, 'https://api.wordpress.org/plugins/update-check/1.1/', $defi );
-		self::response( 200, 'https://api.wordpress.org/themes/update-check/1.1/', $defi );
+		self::check( 200, self::PLUGINS_URL, $defi );
+		self::check( 200, self::THEMES_URL, $defi );
 
 		self::assertSame( [], $this->writes );
 		self::assertFalse( WporgAnswers::answered_within( 'plugins', time(), self::MAX_AGE ) );
@@ -95,40 +242,38 @@ final class WporgAnswersTest extends TestCase {
 
 	/** Un 200 au JSON vide ou sans la clé de sa vérification : même transient vide, rien n'est noté. */
 	public function test_un_200_sans_la_cle_de_sa_verification_n_est_pas_note(): void {
-		$extensions = 'https://api.wordpress.org/plugins/update-check/1.1/';
-		$themes     = 'https://api.wordpress.org/themes/update-check/1.1/';
-
 		foreach ( [ '', '{}', '[]', 'null', '"plugins"', '{"translations":[],"no_update":[]}' ] as $body ) {
-			self::response( 200, $extensions, $body );
-			self::response( 200, $themes, $body );
+			self::check( 200, self::PLUGINS_URL, $body );
+			self::check( 200, self::THEMES_URL, $body );
 		}
-		self::response( 200, $extensions, '{"themes":[],"translations":[],"no_update":[]}' );
-		self::response( 200, $themes, '{"plugins":[],"translations":[],"no_update":[]}' );
+		self::check( 200, self::PLUGINS_URL, '{"themes":[],"translations":[],"no_update":[]}' );
+		self::check( 200, self::THEMES_URL, '{"plugins":[],"translations":[],"no_update":[]}' );
 
 		self::assertSame( [], $this->writes );
 	}
 
 	/** 403 du CDN, erreur réseau, délai dépassé : rien n'est noté. */
 	public function test_un_echec_n_est_pas_note(): void {
-		self::response( 403, 'https://api.wordpress.org/plugins/update-check/1.1/' );
-		self::response( 500, 'https://api.wordpress.org/themes/update-check/1.1/' );
-		WporgAnswers::record(
-			new \WP_Error( 'http_request_failed', 'cURL error 28: Operation timed out' ),
-			'response',
-			'WpOrg\Requests\Requests',
-			[],
-			'https://api.wordpress.org/core/version-check/1.7/'
-		);
+		self::check( 403, self::PLUGINS_URL );
+		self::check( 500, self::THEMES_URL );
+		self::write( 'update_core' );
+		self::failure( 'https://api.wordpress.org/core/version-check/1.7/' );
 
 		self::assertSame( [], $this->writes );
 	}
 
-	/** Le reste du trafic HTTP du site n'écrit rien. */
+	/** Le reste du trafic HTTP du site n'écrit rien, même entre deux écritures des transients. */
 	public function test_les_autres_requetes_ne_sont_pas_notees(): void {
-		self::response( 200, 'https://api.wordpress.org/plugins/info/1.2/?action=plugin_information' );
-		self::response( 200, 'https://downloads.wordpress.org/plugin/akismet.5.3.zip' );
-		self::response( 200, 'https://api.github.com/repos/g2rd/g2rd-connector/releases/latest' );
-		self::response( 200, 'https://exemple.test/api.wordpress.org/plugins/update-check/1.1/' );
+		foreach ( [ 'update_core', 'update_plugins', 'update_themes' ] as $transient ) {
+			self::write( $transient );
+		}
+		self::response( 200, 'https://api.wordpress.org/plugins/info/1.2/?action=plugin_information', self::answer_body( self::PLUGINS_URL ) );
+		self::response( 200, 'https://downloads.wordpress.org/plugin/akismet.5.3.zip', self::answer_body( self::PLUGINS_URL ) );
+		self::response( 200, 'https://api.github.com/repos/g2rd/g2rd-connector/releases/latest', self::answer_body( self::PLUGINS_URL ) );
+		self::response( 200, 'https://exemple.test/api.wordpress.org/plugins/update-check/1.1/', self::answer_body( self::PLUGINS_URL ) );
+		foreach ( [ 'update_core', 'update_plugins', 'update_themes' ] as $transient ) {
+			self::write( $transient );
+		}
 
 		self::assertSame( [], $this->writes );
 	}
@@ -136,7 +281,7 @@ final class WporgAnswersTest extends TestCase {
 	public function test_une_reponse_garde_l_heure_des_autres_verifications(): void {
 		$this->site_options[ WporgAnswers::OPTION ] = [ 'core' => time() - 600 ];
 
-		self::response( 200, 'https://api.wordpress.org/plugins/update-check/1.1/' );
+		self::check( 200, self::PLUGINS_URL );
 
 		self::assertSame( time() - 600, $this->site_options[ WporgAnswers::OPTION ]['core'] ?? null );
 		self::assertTrue( WporgAnswers::answered_within( 'core', time(), self::MAX_AGE ) );
@@ -160,33 +305,121 @@ final class WporgAnswersTest extends TestCase {
 		self::assertFalse( WporgAnswers::answered_within( 'core', $now, self::MAX_AGE ) );
 	}
 
-	public function test_l_ecoute_est_branchee_sur_http_api_debug(): void {
+	/**
+	 * Réponse sur `http_api_debug`, puis telle que WordPress la lit (filtre
+	 * `http_response`, en dernier) ; écritures des trois transients : filtre
+	 * `pre_set_site_transient_{$transient}` (en dernier, après les updaters tiers), action
+	 * `set_site_transient_{$transient}`, et filtre `pre_update_site_option_{$option}` pour
+	 * la réécriture identique.
+	 */
+	public function test_l_ecoute_est_branchee_sur_http_api_debug_et_sur_l_ecriture_des_transients(): void {
 		WporgAnswers::register();
 
 		self::assertNotFalse( has_action( 'http_api_debug', [ WporgAnswers::class, 'record' ] ) );
+		self::assertSame( PHP_INT_MAX, has_filter( 'http_response', [ WporgAnswers::class, 'confirm_response' ] ) );
+		foreach ( [ 'update_core', 'update_plugins', 'update_themes' ] as $transient ) {
+			self::assertSame( PHP_INT_MAX, has_filter( 'pre_set_site_transient_' . $transient, [ WporgAnswers::class, 'before_write' ] ), $transient );
+			self::assertNotFalse( has_action( 'set_site_transient_' . $transient, [ WporgAnswers::class, 'after_write' ] ), $transient );
+			self::assertSame( PHP_INT_MAX, has_filter( 'pre_update_site_option__site_transient_' . $transient, [ WporgAnswers::class, 'before_option_update' ] ), $transient );
+		}
 	}
 
 	/**
-	 * Réponse telle que WP_Http::request() la passe à `http_api_debug`. Sans corps donné :
-	 * celui qu'api.wordpress.org rend à la vérification visée par l'adresse.
+	 * Vérification complète, dans l'ordre de wp-includes/update.php : écriture d'avant
+	 * l'appel, réponse, puis écriture de la réponse si WordPress la fait (cœur : 200 dont
+	 * le JSON porte `offers` ; extensions et thèmes : tout 200).
 	 */
-	private static function response( int $code, string $url, ?string $body = null ): void {
-		WporgAnswers::record(
-			[
-				'headers'  => [],
-				'body'     => $body ?? self::answer_body( $url ),
-				'response' => [
-					'code'    => $code,
-					'message' => '',
-				],
-				'cookies'  => [],
-				'filename' => null,
+	private static function check( int $code, string $url, ?string $body = null ): void {
+		$transient = self::transient_of( $url );
+		$body    ??= self::answer_body( $url );
+
+		self::write( $transient );
+		self::response( $code, $url, $body );
+		if ( 200 !== $code ) {
+			return;
+		}
+		if ( 'update_core' === $transient ) {
+			$decoded = json_decode( trim( $body ), true );
+			if ( ! is_array( $decoded ) || ! isset( $decoded['offers'] ) ) {
+				return;
+			}
+		}
+		self::write( $transient );
+	}
+
+	/**
+	 * set_site_transient() (wp-includes/option.php, WordPress 6.9.4) : filtre
+	 * `pre_set_site_transient_{$transient}`, puis, sans cache objet persistant,
+	 * update_site_option() — action `set_site_transient_{$transient}` si la base a changé
+	 * ; valeur identique : update_network_option() s'arrête juste après le filtre
+	 * `pre_update_site_option_{$option}`, sans action ; écriture refusée : ni l'un ni
+	 * l'autre.
+	 *
+	 * @param string $outcome 'changed' | 'identical' | 'failed'.
+	 */
+	private static function write( string $transient, string $outcome = 'changed' ): void {
+		$value = WporgAnswers::before_write( (object) [ 'last_checked' => time() ], $transient );
+		$old   = 'identical' === $outcome ? clone $value : (object) [ 'last_checked' => time() - 3600 ];
+		$value = WporgAnswers::before_option_update( $value, $old, '_site_transient_' . $transient );
+		if ( 'changed' === $outcome ) {
+			WporgAnswers::after_write( $value, 0, $transient );
+		}
+	}
+
+	/**
+	 * Réponse telle que WP_Http::request() la passe à `http_api_debug`, puis au filtre
+	 * `http_response` — inchangée, sauf code ou corps transformés par un autre filtre.
+	 * Sans corps donné : celui qu'api.wordpress.org rend à la vérification visée.
+	 */
+	private static function response( int $code, string $url, ?string $body = null, ?int $read_code = null, ?string $read_body = null ): void {
+		$received = self::http_response( $code, $body ?? self::answer_body( $url ) );
+		WporgAnswers::record( $received, 'response', 'WpOrg\Requests\Requests', [], $url );
+
+		$read = null === $read_code && null === $read_body
+			? $received
+			: self::http_response( $read_code ?? $code, $read_body ?? $received['body'] );
+		WporgAnswers::confirm_response( $read, [], $url );
+	}
+
+	/**
+	 * Réponse au format de WP_Http::request().
+	 *
+	 * @return array{headers: array<string, string>, body: string, response: array{code: int, message: string}, cookies: list<mixed>, filename: null}
+	 */
+	private static function http_response( int $code, string $body ): array {
+		return [
+			'headers'  => [],
+			'body'     => $body,
+			'response' => [
+				'code'    => $code,
+				'message' => '',
 			],
+			'cookies'  => [],
+			'filename' => null,
+		];
+	}
+
+	/** Erreur réseau (délai dépassé, connexion refusée) telle que WP_Http::request() la passe à `http_api_debug`. */
+	private static function failure( string $url ): void {
+		WporgAnswers::record(
+			new \WP_Error( 'http_request_failed', 'cURL error 28: Operation timed out' ),
 			'response',
 			'WpOrg\Requests\Requests',
 			[],
 			$url
 		);
+	}
+
+	/** Transient écrit par la vérification visée par l'adresse. */
+	private static function transient_of( string $url ): string {
+		if ( str_contains( $url, '/plugins/update-check/' ) ) {
+			return 'update_plugins';
+		}
+		if ( str_contains( $url, '/themes/update-check/' ) ) {
+			return 'update_themes';
+		}
+
+		return 'update_core';
 	}
 
 	/** Corps d'une vraie réponse d'api.wordpress.org, d'après l'adresse (wp-includes/update.php). */

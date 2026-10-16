@@ -176,6 +176,34 @@ final class SnapshotLightTest extends SnapshotTestCase {
 		self::assertSame( 1, $this->calls_to( 'wp_update_themes' ) );
 	}
 
+	/**
+	 * wordpress.org répond 200 aux extensions, mais un filtre `http_response` transforme
+	 * la réponse (503) : WordPress n'écrit pas le transient qui la porterait, seule
+	 * l'écriture d'avant l'appel a eu lieu (anciennes données sous une date neuve). La
+	 * réponse n'est pas notée, ni à cette synchronisation ni à la suivante, faite ici
+	 * dans le même processus PHP : la suivante rafraîchit encore.
+	 */
+	public function test_une_reponse_que_wordpress_n_ecrit_pas_ne_rend_pas_la_synchronisation_suivante_legere(): void {
+		$this->update_transients_checked( self::STALE );
+		Functions\when( 'wp_update_plugins' )->alias(
+			function ( ...$args ): void {
+				$this->calls['wp_update_plugins'][] = $args;
+				self::transient_written( 'update_plugins' );
+				$this->transients['update_plugins'] = (object) [ 'last_checked' => time() ];
+				self::wporg_response( 'plugins', 503 );
+			}
+		);
+
+		$this->snapshot();
+		$this->snapshot();
+
+		self::assertSame( 2, $this->calls_to( 'wp_update_plugins' ) );
+		self::assertSame( 1, $this->calls_to( 'wp_version_check' ) );
+		self::assertSame( 1, $this->calls_to( 'wp_update_themes' ) );
+		self::assertFalse( PremiumUpdatesBridge::answered_recently( 'plugins', time() ) );
+		self::assertTrue( PremiumUpdatesBridge::answered_recently( 'themes', time() ) );
+	}
+
 	/** Seule la vérification restée sans réponse est rafraîchie. */
 	public function test_seule_la_verification_sans_reponse_recente_est_rafraichie(): void {
 		$this->update_transients_checked( self::FRESH );

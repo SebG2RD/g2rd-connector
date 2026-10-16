@@ -110,7 +110,13 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
     `g2rd_connector_wporg_answers`, not autoloaded, one write per successful check, removed on
     uninstall), when its body is JSON carrying the data of that check (`offers`, `plugins` or
     `themes`): after a 200 with an HTML body (a CDN challenge page), WordPress writes an empty
-    cached answer, which must not pass for fresh. With no answer noted (connector just updated, WordPress.org blocked), the
+    cached answer, which must not pass for fresh. The answer is kept pending in memory and
+    noted only when WordPress then writes the cached answer that carries it, in the same PHP
+    request (`set_site_transient_{$transient}` action, or an identical rewrite): a 200 that
+    WordPress does not write (turned into something else by an `http_response` filter, or an
+    update-check call made by another plugin) does not count, and the `last_checked` write made
+    before the call never notes anything. A request short-circuited by `pre_http_request` is
+    never noted. With no answer noted (connector just updated, WordPress.org blocked), the
     inventory refreshes every time, as before. The platform's "Check updates" command
     (`check_updates`) still forces it. Updates announced by third-party updaters that do not
     run in REST requests are still reported. A failed core check now keeps the last known
