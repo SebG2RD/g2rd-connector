@@ -17,21 +17,32 @@
  *     valeur relue ;
  *   - rendu : « DELETE … AND option_value = %s » sur la valeur relue.
  * Une écriture perdue (aucune ligne touchée) veut dire qu'un autre processus a écrit
- * entre la lecture et l'écriture : jamais deux détenteurs.
+ * entre la lecture et l'écriture : jamais deux détenteurs. Ces requêtes sont celles
+ * d'OptionRow, partagées avec RunStore.
  *
  * Toujours relu en base, jamais par get_option() : c'est un verrou, et un cache d'objets
  * persistant (LiteSpeed Object Cache) pourrait le servir libre alors qu'il vient d'être
  * pris. Une lecture que la base refuse n'est jamais prise pour un créneau libre.
  *
- * Le numéro d'exécution n'est pas contrôlé ici : il n'entre pas dans le nom de l'option,
- * seulement dans sa valeur, et la route d'acceptation l'a déjà contrôlé
- * (RunStore::ID_PATTERN). Le créneau n'est pas réentrant : une exécution qui le tient le
- * trouve occupé par elle-même.
+ * Le numéro d'exécution (RunStore::ID_PATTERN) est contrôlé à la prise, avant toute
+ * écriture, et à chaque lecture : une valeur dont le numéro est mal formé est illisible,
+ * donc reprise. La plateforme ne reçoit ainsi dans `busy_with` qu'un numéro qu'elle peut
+ * rapprocher d'une de ses exécutions. Le créneau n'est pas réentrant : une exécution qui
+ * le tient le trouve occupé par elle-même.
  *
- * Limite connue : une exécution finie dont le rendu échoue (base indisponible à cet
- * instant) laisse le créneau pris jusqu'à 600 s après son dernier signe de vie, puis il
- * est repris par la prise suivante. Le ramassage (RunReaper) ne rend, lui, que le
- * créneau d'une exécution qu'il clôt (morte en route).
+ * Limite connue (rendu perdu) : une exécution finie dont le rendu échoue (base
+ * indisponible à cet instant) laisse le créneau pris jusqu'à 600 s après son dernier signe
+ * de vie, puis il est repris par la prise suivante. Le ramassage (RunReaper) ne rend, lui,
+ * que le créneau d'une exécution qu'il clôt (morte en route).
+ *
+ * Limite connue (multisite) : le créneau est rangé dans la table des options du blog
+ * courant ($wpdb->options), donc un créneau par blog, comme UpdateTransaction (option
+ * `g2rd_update_txn`, elle aussi par blog). Or le cœur, les extensions, les thèmes et les
+ * traductions sont des fichiers partagés par tout le réseau : deux blogs d'un même réseau
+ * suivis comme deux sites pourraient lancer update_core ou update_theme au même moment.
+ * Ce n'est pas une régression (la transaction a la même portée), mais un créneau valable
+ * pour tout le réseau demanderait de le ranger dans la table des métadonnées du réseau
+ * ($wpdb->sitemeta) : choix à trancher avant la route d'acceptation (tâche 19).
  *
  * @package G2RD\Connector
  */
@@ -68,16 +79,14 @@ final class ExecutionSlot {
 	 */
 	public const REASON_STORE_UNAVAILABLE = 'store_unavailable';
 
-	/** Valeur « non autochargée » comprise par toutes les versions de WordPress prises en charge. */
-	private const AUTOLOAD_OFF = 'no';
-
 	/**
 	 * Lectures et écritures au plus par prise. Une écriture perdue se règle en relisant :
 	 * d'ordinaire, le gagnant est vivant et la prise répond « occupé » dès la deuxième
-	 * lecture. La troisième couvre un détenteur mort qui rend le créneau pendant qu'on le
-	 * reprend (le créneau est alors libre). Au-delà, rien n'est pris : « INSERT IGNORE »
-	 * peut aussi ne toucher aucune ligne sans rien écrire (erreur changée en
-	 * avertissement), et c'est alors une écriture refusée.
+	 * lecture. Si le détenteur mort rend le créneau pendant qu'on le reprend, la deuxième
+	 * lecture le trouve libre et la prise le crée ; la troisième lecture couvre une autre
+	 * prise qui le crée au même instant. Au-delà, rien n'est pris : « INSERT IGNORE » peut
+	 * aussi ne toucher aucune ligne sans rien écrire (erreur changée en avertissement), et
+	 * c'est alors une écriture refusée.
 	 */
 	private const MAX_ATTEMPTS = 3;
 
@@ -93,6 +102,11 @@ final class ExecutionSlot {
 	 * Libre, ou tenu par une exécution morte ou illisible : pris, par création ou par
 	 * écriture conditionnelle sur la valeur relue.
 	 *
+	 * Numéro mal formé (RunStore::ID_PATTERN), ou commande impossible à encoder : jamais le
+	 * cas après les contrôles de la route (appelant fautif). Rien n'est écrit, comme pour
+	 * une écriture refusée : un créneau pris sous un numéro mal formé serait illisible, donc
+	 * repris par la prise suivante, et le site aurait deux détenteurs.
+	 *
 	 * @param string $command_id Numéro de l'exécution, contrôlé par la route.
 	 * @param string $command    Commande admise (AsyncCommands::is_admitted()).
 	 * @param int    $now        Heure courante (secondes Unix).
@@ -101,6 +115,9 @@ final class ExecutionSlot {
 	 *         « occupé ».
 	 */
 	public static function acquire( string $command_id, string $command, int $now ): array {
+		if ( ! self::is_valid_id( $command_id ) ) {
+			return self::unavailable();
+		}
 		$value = wp_json_encode(
 			[
 				'command_id' => $command_id,
@@ -109,15 +126,15 @@ final class ExecutionSlot {
 				'alive_at'   => $now,
 			]
 		);
-		// Numéro ou commande non UTF-8 : jamais le cas après les contrôles de la route.
-		// Rien n'est écrit, comme pour une écriture refusée.
+		// Commande non UTF-8 : jamais le cas après les contrôles de la route. Rien n'est
+		// écrit, comme pour une écriture refusée.
 		if ( ! is_string( $value ) ) {
 			return self::unavailable();
 		}
 
 		for ( $attempt = 0; $attempt < self::MAX_ATTEMPTS; $attempt++ ) {
 			try {
-				$raw = self::read_raw();
+				$raw = OptionRow::read_raw( self::OPTION );
 			} catch ( StoreUnavailable $e ) {
 				return self::unavailable();
 			}
@@ -135,7 +152,9 @@ final class ExecutionSlot {
 				return self::busy_with_update_transaction();
 			}
 
-			$written = null === $raw ? self::insert( $value ) : self::replace( $raw, $value );
+			$written = null === $raw
+				? OptionRow::insert_ignore( self::OPTION, $value )
+				: OptionRow::replace( self::OPTION, $raw, $value );
 			if ( 1 === $written ) {
 				return [ 'acquired' => true ];
 			}
@@ -160,7 +179,7 @@ final class ExecutionSlot {
 	 */
 	public static function touch( string $command_id, int $now ): void {
 		try {
-			$raw = self::read_raw();
+			$raw = OptionRow::read_raw( self::OPTION );
 		} catch ( StoreUnavailable $e ) {
 			return;
 		}
@@ -172,7 +191,7 @@ final class ExecutionSlot {
 		$holder['alive_at'] = $now;
 		$value              = wp_json_encode( $holder );
 		if ( is_string( $value ) ) {
-			self::replace( $raw, $value );
+			OptionRow::replace( self::OPTION, $raw, $value );
 		}
 	}
 
@@ -189,7 +208,7 @@ final class ExecutionSlot {
 	 */
 	public static function release( string $command_id ): bool {
 		try {
-			$raw = self::read_raw();
+			$raw = OptionRow::read_raw( self::OPTION );
 		} catch ( StoreUnavailable $e ) {
 			return false;
 		}
@@ -198,7 +217,7 @@ final class ExecutionSlot {
 			return false;
 		}
 
-		return 1 === self::delete( $raw );
+		return 1 === OptionRow::delete_if_unchanged( self::OPTION, $raw );
 	}
 
 	/**
@@ -211,7 +230,7 @@ final class ExecutionSlot {
 	 *                          autant libre.
 	 */
 	public static function holder(): ?array {
-		$raw = self::read_raw();
+		$raw = OptionRow::read_raw( self::OPTION );
 
 		return null === $raw ? null : self::decode( $raw );
 	}
@@ -219,9 +238,22 @@ final class ExecutionSlot {
 	/**
 	 * Le détenteur a-t-il donné signe de vie depuis 600 s au plus ?
 	 *
+	 * Une prise (`since`) ou un signe de vie (`alive_at`) daté de plus de 600 s dans le
+	 * futur est tenu pour illisible, donc repris comme une valeur abîmée. Sans cette
+	 * borne, une horloge qui recule (resynchronisation NTP, migration de machine) ou un
+	 * entier démesuré laisserait le site « occupé » bien au-delà de 600 s, sans limite, et
+	 * la plateforme finirait par abandonner (site_busy_timeout) sans cause réelle. La marge
+	 * de 600 s couvre une heure courante lue un peu plus tôt par l'appelant ; une horloge
+	 * qui recule de moins de 600 s retarde la reprise d'autant, 1 200 s au plus.
+	 *
 	 * @param array{command_id: string, command: string, since: int, alive_at: int} $holder
 	 */
 	private static function is_alive( array $holder, int $now ): bool {
+		$horizon = $now + self::STALE_AFTER_SECONDS;
+		if ( $holder['alive_at'] > $horizon || $holder['since'] > $horizon ) {
+			return false;
+		}
+
 		return $now - $holder['alive_at'] <= self::STALE_AFTER_SECONDS;
 	}
 
@@ -254,7 +286,9 @@ final class ExecutionSlot {
 
 	/**
 	 * Décode la valeur du créneau. Null si elle est illisible : pas un objet JSON (une
-	 * sérialisation PHP n'est jamais décodée), ou un champ absent ou d'un autre type.
+	 * sérialisation PHP n'est jamais décodée), un champ absent ou d'un autre type, ou un
+	 * numéro mal formé (RunStore::ID_PATTERN), que la plateforme ne saurait rapprocher
+	 * d'aucune de ses exécutions.
 	 *
 	 * @return array{command_id: string, command: string, since: int, alive_at: int}|null
 	 */
@@ -270,6 +304,9 @@ final class ExecutionSlot {
 		if ( ! is_string( $command_id ) || ! is_string( $command ) || ! is_int( $since ) || ! is_int( $alive_at ) ) {
 			return null;
 		}
+		if ( ! self::is_valid_id( $command_id ) ) {
+			return null;
+		}
 
 		return [
 			'command_id' => $command_id,
@@ -279,96 +316,7 @@ final class ExecutionSlot {
 		];
 	}
 
-	/**
-	 * Valeur brute du créneau, lue en base. Null s'il est libre.
-	 *
-	 * @throws StoreUnavailable Si la base renvoie une erreur (cf. RunStore::read_raw()).
-	 */
-	private static function read_raw(): ?string {
-		global $wpdb;
-
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- lecture sans cache voulue : un cache d'objets persistant servirait un verrou périmé.
-		$value = $wpdb->get_var(
-			$wpdb->prepare(
-				"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
-				self::OPTION
-			)
-		);
-
-		// get_var() rend null aussi quand la requête échoue : seule `last_error`, remise
-		// à vide par wpdb avant chaque requête, distingue l'échec de l'absence.
-		$db_error = (string) $wpdb->last_error;
-		if ( '' !== $db_error ) {
-			throw new StoreUnavailable( $db_error ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- l'argument n'est pas le message (texte fixe, StoreUnavailable::MESSAGE) : l'erreur de la base, gardée pour le journal, jamais affichée.
-		}
-
-		return is_string( $value ) ? $value : null;
-	}
-
-	/**
-	 * Crée le créneau s'il n'existe pas.
-	 *
-	 * @return int|false 1 s'il est créé ; 0 s'il existe déjà ; false si la base refuse.
-	 */
-	private static function insert( string $value ): int|false {
-		global $wpdb;
-
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- création atomique voulue (add_option lit puis écrit) ; option jamais lue par get_option(), cache vidé juste après.
-		$inserted = $wpdb->query(
-			$wpdb->prepare(
-				"INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, %s)",
-				self::OPTION,
-				$value,
-				self::AUTOLOAD_OFF
-			)
-		);
-		wp_cache_delete( self::OPTION, 'options' );
-
-		return false === $inserted ? false : (int) $inserted;
-	}
-
-	/**
-	 * Remplace le créneau, seulement s'il vaut encore `$expected` (la valeur relue).
-	 *
-	 * @return int|false 1 s'il est remplacé ; 0 s'il a changé ou disparu entre-temps ;
-	 *                   false si la base refuse.
-	 */
-	private static function replace( string $expected, string $value ): int|false {
-		global $wpdb;
-
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- écriture conditionnelle atomique voulue (update_option lit puis écrit) ; cache vidé juste après.
-		$updated = $wpdb->query(
-			$wpdb->prepare(
-				"UPDATE {$wpdb->options} SET option_value = %s WHERE option_name = %s AND option_value = %s",
-				$value,
-				self::OPTION,
-				$expected
-			)
-		);
-		wp_cache_delete( self::OPTION, 'options' );
-
-		return false === $updated ? false : (int) $updated;
-	}
-
-	/**
-	 * Supprime le créneau, seulement s'il vaut encore `$expected` (la valeur relue).
-	 *
-	 * @return int|false 1 s'il est supprimé ; 0 s'il a changé ou disparu entre-temps ;
-	 *                   false si la base refuse.
-	 */
-	private static function delete( string $expected ): int|false {
-		global $wpdb;
-
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- suppression conditionnelle voulue (delete_option ne compare pas la valeur) : un créneau repris entre la lecture et la suppression est gardé ; cache vidé juste après.
-		$deleted = $wpdb->query(
-			$wpdb->prepare(
-				"DELETE FROM {$wpdb->options} WHERE option_name = %s AND option_value = %s",
-				self::OPTION,
-				$expected
-			)
-		);
-		wp_cache_delete( self::OPTION, 'options' );
-
-		return false === $deleted ? false : (int) $deleted;
+	private static function is_valid_id( string $command_id ): bool {
+		return 1 === preg_match( RunStore::ID_PATTERN, $command_id );
 	}
 }

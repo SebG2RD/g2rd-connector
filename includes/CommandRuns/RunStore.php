@@ -14,6 +14,8 @@
  *     la valeur relue. Une ligne modifiée : on a gagné ; aucune : un autre processus a
  *     écrit entre-temps (c'est la voie que UpdateTransaction::reserve() désigne).
  * add_option() et update_option() ne le garantissent pas : ils lisent, puis écrivent.
+ * Les requêtes elles-mêmes sont celles d'OptionRow, partagées avec le créneau
+ * (ExecutionSlot) : une correction du verrou vaut pour les deux.
  *
  * Les lectures passent aussi par SQL, jamais par get_option() : un cache d'objets
  * persistant (LiteSpeed Object Cache) servirait un état périmé. Une lecture que la base
@@ -74,9 +76,6 @@ final class RunStore {
 	 */
 	public const MAX_RECORDS = 200;
 
-	/** Valeur « non autochargée » comprise par toutes les versions de WordPress prises en charge. */
-	private const AUTOLOAD_OFF = 'no';
-
 	/** Suppressions au plus par passage de la tâche biquotidienne (purge_now()). */
 	private const CRON_MAX_DELETIONS = 500;
 
@@ -130,8 +129,6 @@ final class RunStore {
 	 * @param array<string, mixed> $record Enregistrement complet, numéro compris.
 	 */
 	public static function create( array $record ): bool {
-		global $wpdb;
-
 		$command_id = $record['command_id'] ?? null;
 		if ( ! is_string( $command_id ) || ! self::is_valid_id( $command_id ) ) {
 			return false;
@@ -141,19 +138,7 @@ final class RunStore {
 			return false;
 		}
 
-		$name = self::option_name( $command_id );
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- création atomique voulue (add_option lit puis écrit) ; option jamais lue par get_option(), cache vidé juste après.
-		$inserted = $wpdb->query(
-			$wpdb->prepare(
-				"INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, %s)",
-				$name,
-				$value,
-				self::AUTOLOAD_OFF
-			)
-		);
-		wp_cache_delete( $name, 'options' );
-
-		return 1 === $inserted;
+		return 1 === OptionRow::insert_ignore( self::option_name( $command_id ), $value );
 	}
 
 	/**
@@ -164,29 +149,11 @@ final class RunStore {
 	 *                          le numéro n'est pas pour autant inconnu.
 	 */
 	public static function read_raw( string $command_id ): ?string {
-		global $wpdb;
-
 		if ( ! self::is_valid_id( $command_id ) ) {
 			return null;
 		}
 
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- lecture sans cache voulue : un cache d'objets persistant servirait un état périmé.
-		$value = $wpdb->get_var(
-			$wpdb->prepare(
-				"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
-				self::option_name( $command_id )
-			)
-		);
-
-		// get_var() rend null aussi quand la requête échoue (« MySQL server has gone
-		// away », trop de connexions) : seule `last_error`, remise à vide par wpdb avant
-		// chaque requête, distingue l'échec de l'absence.
-		$db_error = (string) $wpdb->last_error;
-		if ( '' !== $db_error ) {
-			throw new StoreUnavailable( $db_error ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- l'argument n'est pas le message (texte fixe, StoreUnavailable::MESSAGE) : l'erreur de la base, gardée pour le journal, jamais affichée.
-		}
-
-		return is_string( $value ) ? $value : null;
+		return OptionRow::read_raw( self::option_name( $command_id ) );
 	}
 
 	/**
@@ -241,8 +208,6 @@ final class RunStore {
 	 * @param array<string, mixed> $record Nouvel enregistrement complet, même numéro.
 	 */
 	public static function swap( string $command_id, string $expected_raw, array $record ): bool {
-		global $wpdb;
-
 		if ( ! self::is_valid_id( $command_id ) ) {
 			return false;
 		}
@@ -256,19 +221,7 @@ final class RunStore {
 			return false;
 		}
 
-		$name = self::option_name( $command_id );
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- écriture conditionnelle atomique voulue (update_option lit puis écrit) ; cache vidé juste après.
-		$updated = $wpdb->query(
-			$wpdb->prepare(
-				"UPDATE {$wpdb->options} SET option_value = %s WHERE option_name = %s AND option_value = %s",
-				$value,
-				$name,
-				$expected_raw
-			)
-		);
-		wp_cache_delete( $name, 'options' );
-
-		return 1 === $updated;
+		return 1 === OptionRow::replace( self::option_name( $command_id ), $expected_raw, $value );
 	}
 
 	/**
@@ -328,7 +281,7 @@ final class RunStore {
 			if ( $deleted >= $max_deletions || ( ! $expired && $records <= self::MAX_RECORDS ) ) {
 				break;
 			}
-			$result = self::delete_if_unchanged( $name, $raw );
+			$result = OptionRow::delete_if_unchanged( $name, $raw );
 			if ( false === $result ) {
 				break;
 			}
@@ -363,7 +316,7 @@ final class RunStore {
 		for ( $batch = 0; $batch < self::DELETE_ALL_MAX_BATCHES; $batch++ ) {
 			$deleted = 0;
 			foreach ( self::scan() as [ $name, $raw ] ) {
-				$result = self::delete_if_unchanged( $name, $raw );
+				$result = OptionRow::delete_if_unchanged( $name, $raw );
 				if ( false === $result ) {
 					return $total + $deleted;
 				}
@@ -578,28 +531,6 @@ final class RunStore {
 		}
 
 		return $found;
-	}
-
-	/**
-	 * Supprime une option seulement si elle vaut encore `$raw` (la valeur lue).
-	 *
-	 * @return int|false 1 si elle est supprimée ; 0 si elle a été réécrite ou supprimée
-	 *                   entre-temps ; false si la base refuse.
-	 */
-	private static function delete_if_unchanged( string $name, string $raw ): int|false {
-		global $wpdb;
-
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- suppression conditionnelle voulue (delete_option ne compare pas la valeur) : un enregistrement réécrit entre la lecture et la suppression est gardé ; cache vidé juste après.
-		$deleted = $wpdb->query(
-			$wpdb->prepare(
-				"DELETE FROM {$wpdb->options} WHERE option_name = %s AND option_value = %s",
-				$name,
-				$raw
-			)
-		);
-		wp_cache_delete( $name, 'options' );
-
-		return false === $deleted ? false : (int) $deleted;
 	}
 
 	/**

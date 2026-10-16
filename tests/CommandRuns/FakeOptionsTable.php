@@ -59,6 +59,13 @@ final class FakeOptionsTable {
 	 */
 	public bool $read_fails = false;
 
+	/**
+	 * Quand vrai, « INSERT IGNORE » ne touche aucune ligne et n'écrit rien, même si le nom
+	 * est libre : MySQL change en avertissement l'erreur que IGNORE fait taire (valeur
+	 * refusée en mode non strict…), et la requête « réussit » sans rien écrire.
+	 */
+	public bool $insert_ignore_writes_nothing = false;
+
 	/** Erreur de la dernière requête, vide si elle a réussi (wpdb::$last_error). */
 	public string $last_error = '';
 
@@ -111,7 +118,7 @@ final class FakeOptionsTable {
 
 		if ( $this->is( 'INSERT IGNORE INTO {options} (option_name, option_value, autoload) VALUES (%s, %s, %s)', $template ) ) {
 			[ $name, $value, $autoload ] = $args;
-			if ( isset( $this->rows[ $name ] ) ) {
+			if ( isset( $this->rows[ $name ] ) || $this->insert_ignore_writes_nothing ) {
 				return 0;
 			}
 			$this->rows[ $name ] = [

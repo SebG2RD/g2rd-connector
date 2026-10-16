@@ -1,7 +1,10 @@
 <?php
 /**
- * Lecture d'une exécution impossible : la base a renvoyé une erreur (connexion perdue,
- * trop de connexions, table verrouillée…). Levée par RunStore::read_raw() et read().
+ * Lecture d'une exécution ou du créneau impossible : la base a renvoyé une erreur
+ * (connexion perdue, trop de connexions, table verrouillée…). Levée par
+ * OptionRow::read_raw(), et donc par RunStore::read_raw(), RunStore::read() et
+ * ExecutionSlot::holder(). ExecutionSlot::acquire(), touch() et release() la rattrapent
+ * eux-mêmes et ne la laissent jamais remonter.
  *
  * Ce n'est PAS un numéro inconnu. Le confondre fausserait le statut : la plateforme lit
  * la 404 `run_unknown` comme une exécution perdue (état définitif « non vérifiée ») et
@@ -11,7 +14,9 @@
  * Ce que les appelants en font :
  *   - routes d'acceptation et de lecture (tâches 19 et 20) : réponse 500 avec un message
  *     explicite (quoi, cause probable, action), jamais la 404 `run_unknown`, et jamais
- *     « numéro neuf » à l'acceptation ;
+ *     « numéro neuf » à l'acceptation. Pour la prise du créneau, l'acceptation ne
+ *     rattrape pas d'exception : elle lit `reason` = ExecutionSlot::REASON_STORE_UNAVAILABLE
+ *     dans le retour d'acquire(), et répond de même 500, jamais la 409 `site_busy` ;
  *   - cycle de vie et ramassage (tâche 15) : ne jamais conclure qu'une exécution est
  *     absente, abandonnée ou interrompue sur cette seule lecture ; laisser remonter ou
  *     réessayer plus tard ;

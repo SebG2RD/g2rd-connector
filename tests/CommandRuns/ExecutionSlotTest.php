@@ -25,7 +25,14 @@ final class ExecutionSlotTest extends TestCase {
 	private const NOW   = 1789000000;
 	private const ID    = '0123456789abcdef0123456789abcdef';
 	private const AUTRE = 'fedcba9876543210fedcba9876543210';
+	private const TIERS = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 	private const SLOT  = 'g2rd_cmdrun_slot';
+
+	/** Prise refusée parce que la base a refusé : ni « occupé », ni « pris ». */
+	private const INDISPONIBLE = [
+		'acquired' => false,
+		'reason'   => ExecutionSlot::REASON_STORE_UNAVAILABLE,
+	];
 
 	private FakeOptionsTable $table;
 
@@ -169,6 +176,10 @@ final class ExecutionSlotTest extends TestCase {
 			'liste JSON'            => [ '[1,2]' ],
 			'sans signe de vie'     => [ '{"command_id":"' . self::AUTRE . '","command":"update_core","since":1}' ],
 			'signe de vie en texte' => [ '{"command_id":"' . self::AUTRE . '","command":"update_core","since":1,"alive_at":"1789000000"}' ],
+			// Vivant s'il était lisible (signe de vie à l'instant) : seul le numéro le rend
+			// illisible. La plateforme ne saurait le rapprocher d'aucune de ses exécutions.
+			'numéro mal formé'      => [ '{"command_id":"' . strtoupper( self::AUTRE ) . '","command":"update_core","since":1789000000,"alive_at":1789000000}' ],
+			'numéro vide'           => [ '{"command_id":"","command":"update_core","since":1789000000,"alive_at":1789000000}' ],
 		];
 	}
 
@@ -182,6 +193,67 @@ final class ExecutionSlotTest extends TestCase {
 
 		self::assertSame( [ 'acquired' => true ], ExecutionSlot::acquire( self::ID, 'update_core', self::NOW ) );
 		self::assertSame( self::ID, ExecutionSlot::holder()['command_id'] ?? null );
+	}
+
+	/**
+	 * Une prise ou un signe de vie daté de plus de 600 s dans le futur (horloge du
+	 * serveur qui a reculé, entier démesuré) ne retient pas le site sans limite : la
+	 * valeur est tenue pour abîmée et reprise, comme une valeur illisible.
+	 *
+	 * @return array<string, array{int, int}> [ since, alive_at ]
+	 */
+	public static function dates_du_futur(): array {
+		return [
+			'signe de vie dans une heure' => [ self::NOW - 300, self::NOW + 3600 ],
+			'signe de vie dans 601 s'     => [ self::NOW - 300, self::NOW + 601 ],
+			'prise dans une heure'        => [ self::NOW + 3600, self::NOW - 5 ],
+			'entier démesuré'             => [ self::NOW - 300, PHP_INT_MAX ],
+		];
+	}
+
+	#[DataProvider( 'dates_du_futur' )]
+	public function test_une_date_du_futur_au_dela_de_600_s_est_reprise( int $since, int $alive_at ): void {
+		$this->tenu_par( self::AUTRE, $since, $alive_at );
+
+		self::assertSame( [ 'acquired' => true ], ExecutionSlot::acquire( self::ID, 'update_core', self::NOW ) );
+		self::assertSame( self::ID, ExecutionSlot::holder()['command_id'] ?? null );
+	}
+
+	/**
+	 * Marge de 600 s : une heure courante lue un peu plus tôt par l'appelant, ou une
+	 * horloge qui recule de peu, ne fait pas reprendre le créneau d'une exécution vivante.
+	 */
+	public function test_une_date_du_futur_jusqu_a_600_s_reste_vivante(): void {
+		$this->tenu_par( self::AUTRE, self::NOW + 600, self::NOW + 600 );
+
+		$prise = ExecutionSlot::acquire( self::ID, 'update_core', self::NOW );
+
+		self::assertFalse( $prise['acquired'] );
+		self::assertSame( self::AUTRE, $prise['busy_with'] ?? null );
+		self::assertSame( self::AUTRE, ExecutionSlot::holder()['command_id'] ?? null );
+	}
+
+	/**
+	 * Un numéro mal formé ne vient que d'un appelant fautif (la route le contrôle avant).
+	 * Il n'est jamais écrit : relu, il serait illisible, donc repris par la prise suivante,
+	 * et le site aurait deux détenteurs. Rien n'est lu ni écrit.
+	 *
+	 * @return array<string, array{string}>
+	 */
+	public static function numeros_mal_formes(): array {
+		return [
+			'vide'                => [ '' ],
+			'majuscules'          => [ strtoupper( self::ID ) ],
+			'trop court'          => [ substr( self::ID, 1 ) ],
+			'saut de ligne final' => [ self::ID . "\n" ],
+		];
+	}
+
+	#[DataProvider( 'numeros_mal_formes' )]
+	public function test_numero_mal_forme_jamais_ecrit( string $command_id ): void {
+		self::assertSame( self::INDISPONIBLE, ExecutionSlot::acquire( $command_id, 'update_core', self::NOW ) );
+		self::assertSame( [], $this->table->queries );
+		self::assertSame( [], $this->table->rows );
 	}
 
 	/**
@@ -223,6 +295,125 @@ final class ExecutionSlotTest extends TestCase {
 			'Le second perd son écriture, relit et répond « occupé ».'
 		);
 		self::assertSame( self::AUTRE, ExecutionSlot::holder()['command_id'] ?? null );
+	}
+
+	/**
+	 * Le détenteur déclaré mort finit et rend le créneau juste avant qu'on le reprenne :
+	 * la reprise conditionnelle ne touche aucune ligne, la relecture trouve le créneau
+	 * libre, et la prise le crée (« INSERT IGNORE »).
+	 */
+	public function test_detenteur_mort_qui_rend_le_creneau_pendant_la_reprise_creneau_cree(): void {
+		$this->tenu_par( self::AUTRE, self::NOW - 3600, self::NOW - 700 );
+		$rendu                     = null;
+		$this->table->before_write = static function () use ( &$rendu ): void {
+			$rendu = ExecutionSlot::release( self::AUTRE );
+		};
+
+		$prise = ExecutionSlot::acquire( self::ID, 'update_core', self::NOW );
+
+		self::assertTrue( $rendu, 'Le détenteur mort a rendu son créneau entre la lecture et la reprise.' );
+		self::assertSame( [ 'acquired' => true ], $prise );
+		$ecritures = array_values(
+			array_filter( $this->table->queries, static fn ( string $sql ): bool => ! str_starts_with( $sql, 'SELECT' ) )
+		);
+		self::assertCount( 3, $ecritures, 'Reprise perdue, rendu, puis création.' );
+		self::assertStringStartsWith( 'UPDATE wp_options', $ecritures[0] );
+		self::assertStringStartsWith( 'DELETE FROM wp_options', $ecritures[1] );
+		self::assertStringStartsWith( 'INSERT IGNORE INTO wp_options', $ecritures[2] );
+		self::assertSame( self::ID, ExecutionSlot::holder()['command_id'] ?? null );
+	}
+
+	/**
+	 * Même course, et une troisième acceptation crée le créneau rendu juste avant nous :
+	 * notre création ne touche aucune ligne, et la troisième lecture répond « occupé »
+	 * avec le numéro de celle qui l'a pris. Jamais deux détenteurs.
+	 */
+	public function test_creneau_rendu_puis_pris_par_une_autre_acceptation_troisieme_lecture_occupe(): void {
+		$this->tenu_par( self::AUTRE, self::NOW - 3600, self::NOW - 700 );
+		$tierce_prise              = null;
+		$this->table->before_write = function () use ( &$tierce_prise ): void {
+			ExecutionSlot::release( self::AUTRE );
+			$this->table->before_write = static function () use ( &$tierce_prise ): void {
+				$tierce_prise = ExecutionSlot::acquire( self::TIERS, 'update_theme', self::NOW );
+			};
+		};
+
+		$prise = ExecutionSlot::acquire( self::ID, 'update_core', self::NOW );
+
+		self::assertSame( [ 'acquired' => true ], $tierce_prise );
+		self::assertSame(
+			[
+				'acquired'   => false,
+				'busy_with'  => self::TIERS,
+				'busy_since' => self::NOW,
+				'reason'     => ExecutionSlot::REASON_RUN_IN_PROGRESS,
+			],
+			$prise
+		);
+		self::assertSame( self::TIERS, ExecutionSlot::holder()['command_id'] ?? null );
+	}
+
+	/**
+	 * Trois écritures perdues de suite : la prise s'arrête (jamais de boucle sans fin) et
+	 * répond store_unavailable, ni « occupé » ni « pris ». Ici, « INSERT IGNORE » ne touche
+	 * aucune ligne alors que le créneau reste absent : MySQL a changé l'erreur en
+	 * avertissement, rien n'est écrit.
+	 */
+	public function test_creation_qui_n_ecrit_rien_trois_fois_store_unavailable(): void {
+		$this->table->insert_ignore_writes_nothing = true;
+
+		self::assertSame( self::INDISPONIBLE, ExecutionSlot::acquire( self::ID, 'update_core', self::NOW ) );
+		self::assertSame( [], $this->table->rows );
+		self::assertCount( 6, $this->table->queries, 'Trois lectures et trois créations au plus.' );
+	}
+
+	/**
+	 * Même borne quand un autre processus crée le créneau (valeur d'un détenteur mort)
+	 * juste avant notre création, puis le supprime juste avant notre reprise, et ainsi de
+	 * suite : trois écritures perdues, store_unavailable, et notre valeur n'est jamais
+	 * écrite.
+	 */
+	public function test_ecritures_concurrentes_qui_creent_puis_suppriment_store_unavailable(): void {
+		$morte = (string) json_encode(
+			[
+				'command_id' => self::AUTRE,
+				'command'    => 'update_core',
+				'since'      => self::NOW - 3600,
+				'alive_at'   => self::NOW - 900,
+			]
+		);
+		$autre = function () use ( &$autre, $morte ): void {
+			if ( isset( $this->table->rows[ self::SLOT ] ) ) {
+				unset( $this->table->rows[ self::SLOT ] );
+			} else {
+				$this->table->rows[ self::SLOT ] = [
+					'value'    => $morte,
+					'autoload' => 'no',
+				];
+			}
+			$this->table->before_write = $autre;
+		};
+		$this->table->before_write = $autre;
+
+		$prise                     = ExecutionSlot::acquire( self::ID, 'update_core', self::NOW );
+		$this->table->before_write = null;
+
+		self::assertSame( self::INDISPONIBLE, $prise );
+		self::assertCount( 6, $this->table->queries, 'Trois lectures et trois écritures au plus.' );
+		self::assertSame( $morte, $this->table->rows[ self::SLOT ]['value'] ?? null, 'Notre valeur n\'a jamais été écrite.' );
+	}
+
+	/**
+	 * Valeur impossible à encoder (wp_json_encode() rend false : commande non UTF-8),
+	 * jamais le cas après les contrôles de la route. Rien n'est lu ni écrit, et ce n'est
+	 * pas « occupé ».
+	 */
+	public function test_valeur_impossible_a_encoder_store_unavailable_sans_ecriture(): void {
+		Functions\when( 'wp_json_encode' )->justReturn( false );
+
+		self::assertSame( self::INDISPONIBLE, ExecutionSlot::acquire( self::ID, 'update_core', self::NOW ) );
+		self::assertSame( [], $this->table->queries );
+		self::assertSame( [], $this->table->rows );
 	}
 
 	/**
