@@ -938,6 +938,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 		Functions\when( 'wp_nonce_field' )->justReturn( '' );
 		Functions\when( 'checked' )->justReturn( '' );
 		Functions\when( 'get_site_option' )->justReturn( false );
+		Functions\when( 'get_bloginfo' )->justReturn( '7.1.3' );
 		ob_start();
 		( new Page() )->render_standalone_page();
 		return (string) ob_get_clean();
