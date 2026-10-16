@@ -108,7 +108,9 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
     The connector therefore notes the time of each 200 answer from api.wordpress.org to the
     three update checks (`http_api_debug` action, network option
     `g2rd_connector_wporg_answers`, not autoloaded, one write per successful check, removed on
-    uninstall). With no answer noted (connector just updated, WordPress.org blocked), the
+    uninstall), when its body is JSON carrying the data of that check (`offers`, `plugins` or
+    `themes`): after a 200 with an HTML body (a CDN challenge page), WordPress writes an empty
+    cached answer, which must not pass for fresh. With no answer noted (connector just updated, WordPress.org blocked), the
     inventory refreshes every time, as before. The platform's "Check updates" command
     (`check_updates`) still forces it. Updates announced by third-party updaters that do not
     run in REST requests are still reported. A failed core check now keeps the last known

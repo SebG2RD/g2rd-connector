@@ -75,6 +75,39 @@ final class WporgAnswersTest extends TestCase {
 		self::assertTrue( WporgAnswers::answered_within( 'core', time(), self::MAX_AGE ) );
 	}
 
+	/**
+	 * Un 200 dont le corps n'est pas du JSON (page de défi HTML d'un CDN devant
+	 * api.wordpress.org) : wp_update_plugins() et wp_update_themes() (WordPress 6.9.4)
+	 * écrivent quand même un transient neuf, mais vide (extensions : `response` et
+	 * `no_update` vides ; thèmes : `checked` sans `response` ni `no_update`). Noté, il
+	 * passerait pour frais pendant 3 h et cacherait une mise à jour publiée.
+	 */
+	public function test_un_200_au_corps_html_n_est_pas_note(): void {
+		$defi = '<!DOCTYPE html><html><head><title>Just a moment...</title></head><body>Vérification de votre navigateur</body></html>';
+
+		self::response( 200, 'https://api.wordpress.org/plugins/update-check/1.1/', $defi );
+		self::response( 200, 'https://api.wordpress.org/themes/update-check/1.1/', $defi );
+
+		self::assertSame( [], $this->writes );
+		self::assertFalse( WporgAnswers::answered_within( 'plugins', time(), self::MAX_AGE ) );
+		self::assertFalse( WporgAnswers::answered_within( 'themes', time(), self::MAX_AGE ) );
+	}
+
+	/** Un 200 au JSON vide ou sans la clé de sa vérification : même transient vide, rien n'est noté. */
+	public function test_un_200_sans_la_cle_de_sa_verification_n_est_pas_note(): void {
+		$extensions = 'https://api.wordpress.org/plugins/update-check/1.1/';
+		$themes     = 'https://api.wordpress.org/themes/update-check/1.1/';
+
+		foreach ( [ '', '{}', '[]', 'null', '"plugins"', '{"translations":[],"no_update":[]}' ] as $body ) {
+			self::response( 200, $extensions, $body );
+			self::response( 200, $themes, $body );
+		}
+		self::response( 200, $extensions, '{"themes":[],"translations":[],"no_update":[]}' );
+		self::response( 200, $themes, '{"plugins":[],"translations":[],"no_update":[]}' );
+
+		self::assertSame( [], $this->writes );
+	}
+
 	/** 403 du CDN, erreur réseau, délai dépassé : rien n'est noté. */
 	public function test_un_echec_n_est_pas_note(): void {
 		self::response( 403, 'https://api.wordpress.org/plugins/update-check/1.1/' );
@@ -133,12 +166,15 @@ final class WporgAnswersTest extends TestCase {
 		self::assertNotFalse( has_action( 'http_api_debug', [ WporgAnswers::class, 'record' ] ) );
 	}
 
-	/** Réponse telle que WP_Http::request() la passe à `http_api_debug`. */
-	private static function response( int $code, string $url, string $body = '{}' ): void {
+	/**
+	 * Réponse telle que WP_Http::request() la passe à `http_api_debug`. Sans corps donné :
+	 * celui qu'api.wordpress.org rend à la vérification visée par l'adresse.
+	 */
+	private static function response( int $code, string $url, ?string $body = null ): void {
 		WporgAnswers::record(
 			[
 				'headers'  => [],
-				'body'     => $body,
+				'body'     => $body ?? self::answer_body( $url ),
 				'response' => [
 					'code'    => $code,
 					'message' => '',
@@ -151,5 +187,17 @@ final class WporgAnswersTest extends TestCase {
 			[],
 			$url
 		);
+	}
+
+	/** Corps d'une vraie réponse d'api.wordpress.org, d'après l'adresse (wp-includes/update.php). */
+	private static function answer_body( string $url ): string {
+		if ( str_contains( $url, '/plugins/update-check/' ) ) {
+			return '{"plugins":[],"translations":[],"no_update":[]}';
+		}
+		if ( str_contains( $url, '/themes/update-check/' ) ) {
+			return '{"themes":[],"translations":[],"no_update":[]}';
+		}
+
+		return '{"offers":[{"response":"latest","current":"6.9.4"}],"translations":[]}';
 	}
 }

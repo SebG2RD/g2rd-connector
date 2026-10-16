@@ -505,7 +505,10 @@ chacun s'additionne.
     date toute neuve. Le connecteur note donc l'heure de chaque réponse 200 de api.wordpress.org
     aux trois vérifications (`Updates\WporgAnswers`, action `http_api_debug`, option de réseau
     non autochargée `g2rd_connector_wporg_answers`, une écriture par vérification réussie,
-    retirée à la désinstallation). Sans réponse notée (connecteur tout juste mis à jour,
+    retirée à la désinstallation), si son corps est du JSON qui porte les données de la
+    vérification (`offers`, `plugins` ou `themes`) : après un 200 au corps HTML (page de défi
+    d'un CDN), WordPress écrit un transient vide, qui ne doit pas passer pour frais. Sans
+    réponse notée (connecteur tout juste mis à jour,
     wordpress.org bloqué), l'inventaire rafraîchit à chaque fois, comme avant. La commande
     `check_updates` (« Vérifier les MAJ ») force toujours. Les mises à jour des updaters tiers
     absents du contexte REST restent annoncées (rejeu de la capture). Une vérification du cœur

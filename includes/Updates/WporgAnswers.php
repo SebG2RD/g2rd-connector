@@ -20,10 +20,14 @@
  * --------
  * L'action `http_api_debug` (WP_Http::request(), après chaque requête HTTP) reçoit la
  * réponse. Une réponse 200 de api.wordpress.org à l'une des trois adresses de
- * vérification est notée, par vérification : une écriture par vérification réussie,
- * aucune pour le reste du trafic HTTP du site. Pour le cœur, il faut en plus des offres
- * (`offers`) : sans elles, wp_version_check() s'arrête sans rien écrire. Pour les
- * extensions et les thèmes, tout 200 est suivi de l'écriture d'un transient neuf.
+ * vérification est notée, par vérification, si son corps est du JSON qui porte les
+ * données de cette vérification : une écriture par vérification réussie, aucune pour le
+ * reste du trafic HTTP du site. Pour le cœur, il faut des offres (`offers`) : sans elles,
+ * wp_version_check() s'arrête sans rien écrire. Pour les extensions et les thèmes, il faut
+ * `plugins` (resp. `themes`) : wp_update_plugins() et wp_update_themes() écrivent un
+ * transient neuf après tout 200, mais vide quand le corps n'est pas la réponse attendue
+ * (page de défi HTML d'un CDN, par exemple) — noté, il passerait pour frais pendant 3 h et
+ * cacherait une mise à jour publiée.
  *
  * L'inventaire (PremiumUpdatesBridge::is_fresh(), SnapshotController) ne tient un
  * transient pour frais que si `last_checked` ET cette heure ont moins de
@@ -65,6 +69,16 @@ final class WporgAnswers {
 		'themes'  => '/themes/update-check/',
 	];
 
+	/**
+	 * Clé que le corps JSON doit porter pour que la réponse compte, par vérification : les
+	 * données que WordPress range dans le transient (wp-includes/update.php).
+	 */
+	private const ANSWER_KEYS = [
+		'core'    => 'offers',
+		'plugins' => 'plugins',
+		'themes'  => 'themes',
+	];
+
 	public static function register(): void {
 		add_action( 'http_api_debug', [ self::class, 'record' ], 10, 5 );
 	}
@@ -93,7 +107,7 @@ final class WporgAnswers {
 		if ( null === $check || 200 !== self::status_of( $response ) ) {
 			return;
 		}
-		if ( 'core' === $check && ! self::has_offers( $response ) ) {
+		if ( ! self::carries( $response, self::ANSWER_KEYS[ $check ] ) ) {
 			return;
 		}
 
@@ -173,15 +187,18 @@ final class WporgAnswers {
 	}
 
 	/**
-	 * Le corps porte des offres : la condition de wp_version_check() pour écrire le
-	 * transient `update_core`.
+	 * Le corps est du JSON qui porte `$key` (ANSWER_KEYS) : pour le cœur, la condition de
+	 * wp_version_check() pour écrire le transient `update_core` ; pour les extensions et les
+	 * thèmes, ce qui distingue une vraie réponse d'un 200 au corps HTML ou vide, après lequel
+	 * WordPress écrit un transient vide (cf. en-tête de la classe).
 	 *
 	 * @param array<mixed> $response Réponse.
+	 * @param string       $key      Clé attendue.
 	 */
-	private static function has_offers( array $response ): bool {
+	private static function carries( array $response, string $key ): bool {
 		$body    = isset( $response['body'] ) && is_string( $response['body'] ) ? $response['body'] : '';
 		$decoded = json_decode( trim( $body ), true );
 
-		return is_array( $decoded ) && isset( $decoded['offers'] );
+		return is_array( $decoded ) && isset( $decoded[ $key ] );
 	}
 }
