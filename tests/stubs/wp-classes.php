@@ -37,7 +37,13 @@ if ( ! class_exists( 'WP_REST_Request' ) ) {
 		private array $headers = [];
 		/** @var array<string, mixed> */
 		private array $params = [];
-		private string $body  = '';
+		/**
+		 * Paramètres tirés de la route par le motif de son enregistrement.
+		 *
+		 * @var array<string, mixed>
+		 */
+		private array $url_params = [];
+		private string $body      = '';
 
 		public function __construct( private string $method = 'GET', private string $route = '' ) {}
 
@@ -62,9 +68,24 @@ if ( ! class_exists( 'WP_REST_Request' ) ) {
 			$this->params[ $key ] = $value;
 		}
 
-		/** @return mixed */
+		/**
+		 * Comme WordPress, les paramètres de l'adresse (set_param()) passent avant ceux de la
+		 * route (WP_REST_Request::get_parameter_order() : GET, puis URL).
+		 *
+		 * @return mixed
+		 */
 		public function get_param( string $key ) {
-			return $this->params[ $key ] ?? null;
+			return $this->params[ $key ] ?? $this->url_params[ $key ] ?? null;
+		}
+
+		/** @param array<string, mixed> $params */
+		public function set_url_params( array $params ): void {
+			$this->url_params = $params;
+		}
+
+		/** @return array<string, mixed> */
+		public function get_url_params(): array {
+			return $this->url_params;
 		}
 
 		public function get_method(): string {

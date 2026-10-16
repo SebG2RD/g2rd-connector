@@ -88,7 +88,8 @@ final class CommandRunsAcceptTest extends TestCase {
 		$controleur = $this->controleur();
 		$controleur->register();
 
-		self::assertCount( 1, $routes );
+		// Acceptation, puis lecture (CommandRunsReadTest).
+		self::assertCount( 2, $routes );
 		[ $espace, $route, $args ] = $routes[0];
 		self::assertSame( 'g2rd/v1', $espace );
 		self::assertSame( '/command-runs', $route );

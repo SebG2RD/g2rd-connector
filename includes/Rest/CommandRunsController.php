@@ -1,7 +1,9 @@
 <?php
 /**
- * POST /wp-json/g2rd/v1/command-runs — acceptation d'une commande exécutée en
- * arrière-plan (§ 3.3 et § 3.6 de la spécification).
+ * Les deux routes des commandes exécutées en arrière-plan (§ 3.3 et § 3.6 de la
+ * spécification) :
+ *   POST /wp-json/g2rd/v1/command-runs           — acceptation (accept()) ;
+ *   GET  /wp-json/g2rd/v1/command-runs/<numéro>  — lecture de l'état (read()).
  *
  * La plateforme confie au site une commande longue sous un numéro qu'elle a tiré
  * (`command_id`, 128 bits). Le site l'enregistre, répond « reçu » (202) en une à deux
@@ -19,8 +21,10 @@
  *   renvoi du CDN (nonce vu), numéro inconnu → 401 `signature_replayed`
  *
  * Accès : jeton ET signature valide, quelle que soit la politique du site
- * (Auth::require_signed_run_access()). Le résultat d'une commande ne sort jamais d'ici :
- * il se lit par l'interrogation signée de la route de lecture.
+ * (Auth::require_signed_run_access()). Le résultat d'une commande ne sort jamais de
+ * l'acceptation : il se lit par l'interrogation signée de la route de lecture, une fois
+ * l'exécution conclue (done, failed). La route signée de la lecture est la route REST,
+ * numéro compris, corps vide ; son renvoi est refusé (Auth).
  *
  * Taille : 16 Ko au plus, refusés par guard_body_size() sur `rest_pre_dispatch`, avant
  * que WordPress ne décode le JSON (WP_REST_Server::dispatch(), juste après ce filtre).
@@ -51,6 +55,14 @@ final class CommandRunsController {
 
 	/** Route d'acceptation, sous l'espace `g2rd/v1`. */
 	private const ROUTE = '/command-runs';
+
+	/**
+	 * Route de lecture, sous l'espace `g2rd/v1`. Motif large, volontairement : un numéro
+	 * mal formé reçoit le 400 `invalid_command_id` de read(), jamais la 404 `rest_no_route`
+	 * de WordPress, que la plateforme lit comme « connecteur sans la route » (elle
+	 * repasserait alors en synchrone une commande peut-être acceptée).
+	 */
+	private const READ_ROUTE = '/command-runs/(?P<command_id>[^/]+)';
 
 	/** Taille maximale du corps d'une acceptation (octets). */
 	public const MAX_BODY_BYTES = 16384;
@@ -90,8 +102,8 @@ final class CommandRunsController {
 	}
 
 	/**
-	 * Enregistre la route. Sans schéma `args` : la validation est faite par accept(), après
-	 * le contrôle de taille, avec les codes que la plateforme lit.
+	 * Enregistre les deux routes. Sans schéma `args` : la validation est faite par accept()
+	 * (après le contrôle de taille) et par read(), avec les codes que la plateforme lit.
 	 */
 	public function register(): void {
 		register_rest_route(
@@ -100,6 +112,15 @@ final class CommandRunsController {
 			[
 				'methods'             => WP_REST_Server::CREATABLE,
 				'callback'            => [ $this, 'accept' ],
+				'permission_callback' => [ Auth::class, 'require_signed_run_access' ],
+			]
+		);
+		register_rest_route(
+			G2RD_CONNECTOR_REST_NS,
+			self::READ_ROUTE,
+			[
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => [ $this, 'read' ],
 				'permission_callback' => [ Auth::class, 'require_signed_run_access' ],
 			]
 		);
@@ -247,6 +268,43 @@ final class CommandRunsController {
 	}
 
 	/**
+	 * Rend l'état de l'exécution `<numéro>` : ramassage léger (ce numéro, puis le détenteur
+	 * du créneau, pas le ramassage complet de l'acceptation), puis relecture. Rien d'autre :
+	 * ni inventaire, ni requête sortante, aucune autre écriture.
+	 *
+	 *   numéro mal formé              → 400 `invalid_command_id`, rien n'est lu ;
+	 *   numéro inconnu (ou illisible) → 404 `run_unknown`, distinct de `rest_no_route` ;
+	 *   lecture refusée par la base   → 500, jamais « inconnu » : la plateforme interroge
+	 *                                   de nouveau ;
+	 *   sinon                         → 200, cf. run_view().
+	 *
+	 * Le numéro est celui de la route (paramètre tiré du chemin par le motif), couverte par
+	 * la signature. Jamais get_param() : un `?command_id=…` ajouté à l'adresse, hors
+	 * signature, y passerait avant lui.
+	 */
+	public function read( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+		$now        = ( $this->clock )();
+		$command_id = $request->get_url_params()['command_id'] ?? null;
+		if ( ! is_string( $command_id ) || 1 !== preg_match( RunStore::ID_PATTERN, $command_id ) ) {
+			return Refusal::error( Refusal::INVALID_COMMAND_ID );
+		}
+
+		RunReaper::sweep_one( $command_id, $now );
+		self::sweep_slot_holder( $command_id, $now );
+
+		try {
+			$record = RunStore::read( $command_id );
+		} catch ( StoreUnavailable $e ) {
+			return self::read_unavailable();
+		}
+		if ( null === $record ) {
+			return Refusal::error( Refusal::RUN_UNKNOWN );
+		}
+
+		return new WP_REST_Response( self::run_view( $command_id, $record, $now ), 200 );
+	}
+
+	/**
 	 * Corps de l'acceptation → [ numéro, commande, charge ], ou le refus 400.
 	 *
 	 * La charge est celle de `/command` pour chaque commande, contrôlée par CommandExecutor
@@ -336,6 +394,62 @@ final class CommandRunsController {
 		);
 	}
 
+	/**
+	 * Ramasse le détenteur du créneau s'il en est un autre que `$command_id` (déjà ramassé) :
+	 * une exécution morte en route ne retient pas le site jusqu'à l'acceptation suivante.
+	 * Ménage seulement : une lecture refusée par la base n'empêche pas la lecture demandée.
+	 */
+	private static function sweep_slot_holder( string $command_id, int $now ): void {
+		try {
+			$holder = ExecutionSlot::holder();
+		} catch ( StoreUnavailable $e ) {
+			return;
+		}
+		if ( null !== $holder && $holder['command_id'] !== $command_id ) {
+			RunReaper::sweep_one( $holder['command_id'], $now );
+		}
+	}
+
+	/**
+	 * Réponse de lecture : {command_id, command, state, accepted_at, started_at, alive_at,
+	 * finished_at, step?, outcome?, interruption?, served_at}, dates en ISO 8601 UTC.
+	 *   - `step` : étape de la transaction d'une mise à jour protégée, quand elle est
+	 *     enregistrée (la dernière atteinte, pour une exécution conclue) ;
+	 *   - `outcome` : le résultat, de la forme de la réponse de `/command`, seulement pour
+	 *     une exécution conclue par lui (done, failed) : jamais avant la fin ;
+	 *   - `interruption` : cause d'une interruption (gardée après un résultat tardif) ;
+	 *   - `served_at` : heure de la réponse, pour que la plateforme écarte une réponse
+	 *     figée par un cache.
+	 * Ni l'empreinte du corps, ni rien d'autre de l'enregistrement. Bornée à 64 Ko par
+	 * RunStore::encode(), à l'écriture.
+	 *
+	 * @param array<string, mixed> $record Enregistrement relu (RunStore::read()).
+	 * @return array<string, mixed>
+	 */
+	private static function run_view( string $command_id, array $record, int $now ): array {
+		$view = [
+			'command_id'  => $command_id,
+			'command'     => is_string( $record['command'] ?? null ) ? $record['command'] : null,
+			'state'       => $record['state'],
+			'accepted_at' => self::iso( $record['accepted_at'] ?? null ),
+			'started_at'  => self::iso( $record['started_at'] ?? null ),
+			'alive_at'    => self::iso( $record['alive_at'] ?? null ),
+			'finished_at' => self::iso( $record['finished_at'] ?? null ),
+		];
+		if ( is_string( $record['step'] ?? null ) ) {
+			$view['step'] = $record['step'];
+		}
+		if ( in_array( $record['state'], [ RunState::DONE, RunState::FAILED ], true ) && is_array( $record['outcome'] ?? null ) ) {
+			$view['outcome'] = $record['outcome'];
+		}
+		if ( is_array( $record['interruption'] ?? null ) ) {
+			$view['interruption'] = $record['interruption'];
+		}
+		$view['served_at'] = gmdate( 'c', $now );
+
+		return $view;
+	}
+
 	/** Date d'un enregistrement (secondes Unix) en ISO 8601 UTC ; null si elle manque. */
 	private static function iso( mixed $timestamp ): ?string {
 		return is_int( $timestamp ) ? gmdate( 'c', $timestamp ) : null;
@@ -374,6 +488,18 @@ final class CommandRunsController {
 		return new WP_Error(
 			'g2rd_connector_store_unavailable',
 			__( 'L’opération n’a pas pu être enregistrée sur le site : la base de données a refusé la lecture ou l’écriture. Rien n’a été exécuté par cette demande. Cause probable : base de données momentanément indisponible ou surchargée (connexion perdue, trop de connexions). Action : aucune, la plateforme vérifie auprès du site si l’opération a été reçue ; si l’erreur se répète, vérifier l’état de la base de données auprès de l’hébergeur.', 'g2rd-connector' ),
+			[ 'status' => 500 ]
+		);
+	}
+
+	/**
+	 * La base a refusé de lire l'exécution : rien ne dit qu'elle est inconnue. L'exécution
+	 * elle-même n'est pas touchée par cette lecture.
+	 */
+	private static function read_unavailable(): WP_Error {
+		return new WP_Error(
+			'g2rd_connector_store_unavailable',
+			__( 'L’état de l’opération n’a pas pu être lu sur le site : la base de données a refusé la lecture. L’opération elle-même n’est pas touchée par cette demande. Cause probable : base de données momentanément indisponible ou surchargée (connexion perdue, trop de connexions). Action : aucune, la plateforme interroge de nouveau le site ; si l’erreur se répète, vérifier l’état de la base de données auprès de l’hébergeur.', 'g2rd-connector' ),
 			[ 'status' => 500 ]
 		);
 	}
