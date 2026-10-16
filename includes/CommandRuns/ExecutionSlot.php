@@ -42,7 +42,10 @@
  * suivis comme deux sites pourraient lancer update_core ou update_theme au même moment.
  * Ce n'est pas une régression (la transaction a la même portée), mais un créneau valable
  * pour tout le réseau demanderait de le ranger dans la table des métadonnées du réseau
- * ($wpdb->sitemeta) : choix à trancher avant la route d'acceptation (tâche 19).
+ * ($wpdb->sitemeta). État livré avec la route d'acceptation : un créneau par blog, limite
+ * écrite telle quelle dans le README (« Une exécution à la fois par site ») ; le choix d'un
+ * créneau de réseau n'est pas tranché, il est remonté au propriétaire à la relecture de la
+ * documentation (tâche 25).
  *
  * @package G2RD\Connector
  */

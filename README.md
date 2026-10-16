@@ -13,7 +13,7 @@
 | **Inventaire WP** | Expose `GET /wp-json/g2rd/v1/snapshot` (Bearer auth) — version WP, plugins installés/actifs/à jour, thèmes, serveur. Consommé par le manager pour la page Site détaillé. |
 | **Heartbeat** | WP-Cron horaire `POST {manager}/api/sites/{id}/heartbeat` — métriques légères (espace disque, utilisateurs, plugins actifs). |
 | **Webhook events** | Push temps réel au manager : `user.login`, `user.login_failed`, `plugin.activated/deactivated`, `core.updated`, `core.auto_update`. `user.login_failed` part avec une attente plafonnée à 2 s (au lieu de 15), réponse non lue, 30 fois par minute au plus (`Events\LoginFailedThrottle`) ; au-delà, ni envoi ni écriture, pas d'événement récapitulatif. |
-| **Commandes distantes** | `POST /wp-json/g2rd/v1/command` (Bearer auth) — `clear_cache`, `check_updates`, `update_core` déclenchables depuis le manager. |
+| **Commandes distantes** | `POST /wp-json/g2rd/v1/command` (Bearer auth) — `clear_cache`, `check_updates`, `update_core` déclenchables depuis le manager. Depuis la 1.14, les commandes longues peuvent aussi être exécutées en arrière-plan, après la réponse (`/command-runs`) : voir « Commandes en arrière-plan (1.14) ». |
 | **Connexion directe** | `admin-ajax.php?action=g2rd_login&ticket=…` — ouvre l'administration sans mot de passe depuis le manager (ticket signé, 60 s, usage unique). Case « Autoriser la connexion directe depuis G2RD », cochée par défaut. |
 | **Intégration thème** | Si le thème [`g2rd-theme`](https://github.com/SebG2RD/g2rd-theme) ≥ v1.19 est actif, le plugin s'enregistre comme **onglet dans Apparence → Options G2RD**. Sinon, menu top-level autonome. |
 
@@ -30,7 +30,8 @@ g2rd-connector/
 │   │   ├── Auth.php            Permission callback Bearer SiteToken
 │   │   ├── SnapshotController  /snapshot
 │   │   ├── HealthController    /health (public)
-│   │   └── CommandController   /command
+│   │   ├── CommandController   /command
+│   │   └── CommandRunsController   /command-runs (1.14)
 │   ├── Outbound/
 │   │   └── ManagerClient       enrollment, heartbeat, send_event
 │   ├── Cron/
@@ -38,6 +39,7 @@ g2rd-connector/
 │   ├── Events/
 │   │   └── Listener            wp_login, activated_plugin, etc.
 │   ├── DirectLogin/            connexion directe : point d'entrée, contrôles, snapshot
+│   ├── CommandRuns/            commandes en arrière-plan : stockage, créneau, cycle de vie, exécution après la réponse
 │   ├── Security/
 │   │   ├── RequestSignature    signature des requêtes du manager
 │   │   └── DirectLoginTicket   ticket de connexion directe (classe pure)
@@ -488,14 +490,28 @@ résultat par des requêtes signées courtes. Un renvoi du même numéro ne déc
 seconde exécution.
 
 Les deux routes sont enregistrées dans les mêmes conditions que `/command` (commandes à distance
-permises), sous l'en-tête anti-cache de tout l'espace `g2rd/v1`. Chaque refus porte un code
+permises), sous l'en-tête anti-cache de tout l'espace `g2rd/v1`. Commandes à distance décochées
+dans la page d'administration : les deux routes disparaissent, lecture comprise (404
+`rest_no_route`, comme `/command`) ; la plateforme ne doit pas en conclure qu'une exécution déjà
+acceptée n'a pas eu lieu (celle qui tourne déjà n'est pas arrêtée : elle vit dans le processus
+de son acceptation). La constante d'arrêt, elle, laisse la lecture possible (voir « Constantes
+de `wp-config.php` »). Chaque refus porte un code
 stable `g2rd_connector_<code>` et un message en français (quoi, cause probable, action) ; la
 plateforme rédige ses propres phrases FR/EN à partir du code.
 
 **Accès : jeton et signature, toujours.** Les deux routes exigent le SiteToken
 (`Authorization: Bearer` ou `X-G2RD-Token`) **et** une signature v1 valide, quelle que soit la
-politique du site (`report` ou `required`) : il n'existe aucun ancien appelant à ménager. Jeton
-absent ou faux, signature absente, fausse ou hors fenêtre : 401 ou 403, avec les codes existants.
+politique du site (`report` ou `required`) : il n'existe aucun ancien appelant à ménager. Les
+refus d'accès, par statut :
+
+- jeton absent : 401 `g2rd_connector_missing_token` ;
+- jeton faux : 403 `g2rd_connector_invalid_token` ;
+- toute erreur de signature : 401 `g2rd_connector_<code>`, avec les codes de la file du cron
+  (`signature_missing`, `signature_invalid`, `clock_skew`, `signature_replayed`,
+  `nonce_store_full`, `token_unavailable`, `signature_error`), rejeu d'une lecture compris
+  (`signature_replayed`) ; quand l'horloge est en cause (`clock_skew`), la réponse porte aussi
+  `server_time`, l'heure du site en secondes Unix.
+
 La signature lie la méthode, la route (numéro compris, pour la lecture) et le corps (numéro et
 commande compris, pour l'acceptation) : une acceptation signée pour un numéro ne sert ni pour un
 autre, ni pour une lecture. Seul écart : la copie à l'identique d'une acceptation (même nonce,
@@ -518,7 +534,7 @@ est celle de `/command` pour chaque commande.
 | --- | --- | --- |
 | Numéro inconnu, site libre | 202 `{command_id, state: "accepted", accepted_at, poll_after_seconds: 2, served_at}` | une fois, après la réponse |
 | Numéro inconnu, site occupé | 409 `g2rd_connector_site_busy` (`busy_with`, `busy_since`) ; rien n'est enregistré | non ; la plateforme réessaie plus tard, sous un nouveau numéro |
-| Numéro connu, même corps (empreinte SHA-256) | 200 : l'état et les dates, `duplicate: true`, jamais le résultat | non |
+| Numéro connu, même corps, octet pour octet (empreinte SHA-256 du corps brut) | 200 : l'état et les dates, `duplicate: true`, jamais le résultat | non |
 | Numéro connu, autre corps | 409 `g2rd_connector_command_id_conflict` | non |
 | Copie d'une acceptation déjà reçue (même nonce) | 200 `duplicate` si le numéro est connu, 401 `g2rd_connector_signature_replayed` sinon | non |
 | Constante d'arrêt posée, numéro inconnu | 503 `g2rd_connector_async_disabled` | non ; la plateforme repasse par `/command` |
@@ -529,6 +545,11 @@ est celle de `/command` pour chaque commande.
 Un numéro connu est traité avant la constante d'arrêt : le renvoi d'une commande déjà acceptée
 reçoit son état, jamais 503. Sinon, la plateforme croirait la commande jamais partie et la
 relancerait par `/command` : elle s'exécuterait deux fois.
+
+L'empreinte porte sur les octets bruts du corps, pas sur le JSON décodé : pour renvoyer un
+numéro, la plateforme renvoie le corps envoyé la première fois, sans le réencoder. Un corps
+réencodé autrement (ordre des clés, échappement de `/` ou des caractères non ASCII) reçoit 409
+`g2rd_connector_command_id_conflict`, pas `duplicate`.
 
 **`GET /wp-json/g2rd/v1/command-runs/<numéro>` : lecture.** Signée sur la route REST, numéro
 compris, corps vide. Réponse 200
@@ -588,8 +609,15 @@ quelle exécution tourne, depuis quand, et son dernier signe de vie. Le site est
 `site_busy`) si une exécution vivante le tient, ou, pour `update_plugin` et `rollback_plugin`, si
 une mise à jour protégée ou sa reprise par le cron est en cours (`busy_with` nul). Un créneau
 resté 600 s sans signe de vie est repris. `UpdateTransaction` garde, inchangé, son rôle de verrou
-des fichiers d'une extension. En multisite, le créneau est propre à chaque site du réseau, comme
-la transaction.
+des fichiers d'une extension.
+
+Limite connue, en multisite : le créneau est propre à chaque site du réseau (table des options du
+site), comme la transaction (`g2rd_update_txn`), alors que le cœur, les extensions, les thèmes et
+les traductions sont des fichiers partagés par tout le réseau. Deux sites d'un même réseau suivis
+séparément par la plateforme peuvent donc mettre à jour les mêmes fichiers en même temps
+(`update_core` ou `update_theme` lancés sur chacun). Ce n'est pas une régression : la transaction
+a la même portée. Un créneau valable pour tout le réseau (rangé dans les métadonnées du réseau)
+n'est pas fait ; ce choix reste à trancher.
 
 **Après la réponse.** Le filtre `rest_pre_serve_request` (priorité 1000 : les filtres qui posent
 des en-têtes, dont `rest_send_cors_headers()`, passent avant) écrit lui-même le JSON de la

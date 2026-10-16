@@ -38,6 +38,7 @@ This plugin relies on the **G2RD WP Manager** service operated by G2RD Agence We
 * On every webhook event (if enabled): event type (e.g. `user.login`, `plugin.activated`) and a small context payload (user id, plugin file name, IP for failed logins).
 * Since 1.13, the `/snapshot` answer also contains the login page address, the state of the "Allow direct login from G2RD" setting and the site's administrators (up to 50: user id, login, email, registration date), so the manager can offer direct login with the account chosen by the agency.
 * Since 1.13, a `direct_login` event (WordPress login and user id, manager user id) is sent after each direct login, if events are enabled.
+* Since 1.14, when the manager reads a command run in the background (signed `GET /command-runs/<id>`, if remote commands are enabled): its state, dates, current step of a protected update, the command result (same content as the `/command` answer) and, after an interruption, its cause (for a PHP fatal error: error message, file path on the server and line number) and the plugin recovery result already reported in the `/snapshot` answer. These records are only readable through that signed route.
 
 **Nothing is sent before enrollment.** Enrollment is a manual one-shot action that requires an invitation token obtained from your manager admin.
 
@@ -151,7 +152,8 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   (options `g2rd_cmdrun_*`, not autoloaded, removed on uninstall). A diagnostic command,
   `async_probe`, stays off unless `G2RD_CONNECTOR_ASYNC_PROBE` is set in `wp-config.php`.
   `/command` and the heartbeat queue are unchanged; nothing changes for a site until the
-  platform turns the mode on.
+  platform turns the mode on. What the manager reads through the new route is listed under
+  "What is sent, when" (External service section).
 
 = 1.13.0 =
 
