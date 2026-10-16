@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Tests\Rollback;
 
+use Brain\Monkey\Actions;
 use Brain\Monkey\Functions;
 use G2RD\Connector\Rollback\UpdateTransaction;
 use G2RD\Connector\Tests\TestCase;
@@ -553,6 +554,61 @@ final class UpdateTransactionTest extends TestCase {
 		self::assertFalse( UpdateTransaction::same_reservation( array_merge( $reserved, [ 'recovery_token' => 'r2' ] ), $reserved ), 'Même transaction, autre reprise.' );
 		self::assertFalse( UpdateTransaction::same_reservation( $dead, $reserved ), 'Pas réservée.' );
 		self::assertFalse( UpdateTransaction::same_reservation( $this->other_transaction(), $dead ) );
+	}
+
+	// ── Signe de vie d'une exécution en arrière-plan (action de progrès) ────────
+
+	/**
+	 * step() et touch() annoncent l'étape courante (action
+	 * `g2rd_connector_update_txn_progress`), après l'écriture de la transaction : le
+	 * signe de vie d'une exécution en arrière-plan suit la mise à jour protégée. Ni
+	 * l'ouverture ni la fermeture ne l'annoncent.
+	 */
+	public function test_step_et_touch_signalent_le_progres_de_la_transaction_tenue(): void {
+		$annonces = [];
+		Actions\expectDone( 'g2rd_connector_update_txn_progress' )->whenHappen(
+			function ( ...$args ) use ( &$annonces ): void {
+				$annonces[] = [ $args, $this->stored()['step'], $this->stored()['updated_at'] ];
+			}
+		);
+
+		self::assertTrue( UpdateTransaction::open( [ 'plugin_file' => 'a/a.php' ], self::NOW ) );
+		self::assertTrue( UpdateTransaction::step( UpdateTransaction::STEP_UPGRADING, [ 'restore_point_id' => 'p1' ], self::NOW + 10 ) );
+		UpdateTransaction::touch( self::NOW + 30 );
+		self::assertTrue( UpdateTransaction::step( UpdateTransaction::STEP_HEALTH, [], self::NOW + 40 ) );
+		self::assertTrue( UpdateTransaction::close() );
+
+		self::assertSame(
+			[
+				[ [ UpdateTransaction::STEP_UPGRADING ], UpdateTransaction::STEP_UPGRADING, self::NOW + 10 ],
+				[ [ UpdateTransaction::STEP_UPGRADING ], UpdateTransaction::STEP_UPGRADING, self::NOW + 30 ],
+				[ [ UpdateTransaction::STEP_HEALTH ], UpdateTransaction::STEP_HEALTH, self::NOW + 40 ],
+			],
+			$annonces,
+			'Une annonce par step() et touch(), avec l\'étape courante, une fois la transaction écrite.'
+		);
+	}
+
+	/**
+	 * Une transaction qui n'est plus celle du processus (réservée par une reprise, fermée
+	 * ou remplacée par un autre processus) n'est ni avancée ni rafraîchie : rien n'est
+	 * annoncé, l'exécution en arrière-plan ne passe pas pour vivante grâce à elle.
+	 */
+	public function test_rien_n_est_signale_pour_une_transaction_reprise_par_un_autre_processus(): void {
+		Actions\expectDone( 'g2rd_connector_update_txn_progress' )->never();
+
+		self::assertTrue( UpdateTransaction::open( [ 'plugin_file' => 'a/a.php' ], self::NOW ) );
+		$this->reserved_by_another_process( $this->stored(), self::NOW + 700 );
+		self::assertFalse( UpdateTransaction::step( UpdateTransaction::STEP_HEALTH, [], self::NOW + 701 ) );
+		UpdateTransaction::touch( self::NOW + 702 );
+
+		$this->options[ UpdateTransaction::OPTION_KEY ] = $this->other_transaction();
+		self::assertFalse( UpdateTransaction::step( UpdateTransaction::STEP_HEALTH, [], self::NOW + 703 ) );
+		UpdateTransaction::touch( self::NOW + 704 );
+
+		$this->closed_by_another_process();
+		self::assertFalse( UpdateTransaction::step( UpdateTransaction::STEP_HEALTH, [], self::NOW + 705 ) );
+		UpdateTransaction::touch( self::NOW + 706 );
 	}
 
 	// ── Outils ────────────────────────────────────────────────────────────────
