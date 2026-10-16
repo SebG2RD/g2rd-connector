@@ -21,7 +21,7 @@ Connects this WordPress site to the centralized G2RD WP Manager dashboard (https
 * **Optional event stream** — push real-time notifications (user logins, login failures, plugin activations, core/plugin/theme updates, auto-update failures) to the manager. Login failures are sent with a 2-second cap instead of 15, at most 30 per minute. Disabled until you opt in.
 * **Optional remote commands** — let the manager trigger cache clearing, update checks, core/plugin/theme updates and database maintenance (delete spam comments, delete post revisions, empty trash, delete expired transients, optimize database) remotely. Disabled until you opt in.
 * **Direct login from the manager** — the manager can open this site's dashboard without a password, through a signed one-time link valid for one minute, for staff whose manager account uses two-factor authentication. On by default; can be turned off in the plugin settings ("Allow direct login from G2RD").
-* **Theme integration** — when the optional companion theme `g2rd-theme` (>= 1.19) is active, the plugin registers itself as a tab in *Appearance → G2RD Options* instead of adding a top-level menu, for a tidy admin UX.
+* **Theme integration** — when the parent theme is the optional companion theme `g2rd-theme` (>= 1.19, child themes included), the plugin registers itself as a "Manager G2RD" tab of the theme's options console (*Appearance → G2RD Options* up to theme 1.40, top-level *G2RD* menu from theme 1.41) instead of adding a top-level menu, for a tidy admin UX. Its own settings page stays reachable outside the menu, as a fallback, at `wp-admin/admin.php?page=g2rd-connector`.
 
 = External service =
 
@@ -53,7 +53,7 @@ To provide update notifications, the plugin queries the **public GitHub Releases
 
 1. Upload the `g2rd-connector` folder to `/wp-content/plugins/`, or install the ZIP from this directory.
 2. Activate the plugin in WordPress *Plugins* page.
-3. Go to *Settings → G2RD Connector* (or *Appearance → G2RD Options → Manager G2RD* if you also run the `g2rd-theme` companion).
+3. Go to the top-level *G2RD Connector* menu (or, if the `g2rd-theme` companion is your theme or its parent theme, to the *Manager G2RD* tab of its console: *Appearance → G2RD Options* up to theme 1.40, top-level *G2RD* menu from theme 1.41).
 4. Paste your manager URL and invitation token, then click **Enroll site**.
 
 == Frequently Asked Questions ==
@@ -77,7 +77,7 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 == Screenshots ==
 
 1. Standalone settings page with manager URL, invitation token and feature toggles.
-2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
+2. Theme-integrated "Manager G2RD" tab in the G2RD theme console (requires `g2rd-theme` >= 1.19 as the theme or its parent theme).
 
 == Changelog ==
 
@@ -90,6 +90,22 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   restores the accent background of checked boxes (WordPress 6.x draws a colored mark on a
   white box and is left as is). The display bug itself never changed a setting; if a box that
   looked empty was clicked and the page saved, review the settings once.
+* **Fix: with a child theme, the connector appears as a tab of the G2RD theme console.** The
+  connector chose between the console tab and its own "G2RD Connector" menu from the version
+  of the active theme. With a child theme (such as `g2rd-child` 1.0.0 on top of `g2rd-theme`
+  1.39.0), it read the child's version, found it older than 1.19 and showed its own menu
+  instead of the tab. It now reads the version of the parent theme, the one that provides the
+  console: a G2RD parent theme (`g2rd-theme`, or its former folder name `g2rd`) 1.19 or later
+  gives the tab, child theme or not; an older G2RD theme, a missing parent theme or any other
+  theme keep the "G2RD Connector" menu.
+* **Feature: in tab mode, the connector settings page stays reachable as a fallback.** When
+  the connector is a tab of the G2RD theme console, its own settings page is no longer in the
+  admin menu but still opens at `wp-admin/admin.php?page=g2rd-connector` (WordPress used to
+  refuse that address in tab mode), with the same PHP form as on sites without the G2RD theme
+  and the checked-box fix above. It is there in case the console does not show the tab
+  (modified theme, JavaScript error). The page is attached to `options.php` (WordPress' "All
+  options" screen, which is not a top-level menu): this keeps it out of the menu without the
+  deprecation notices (PHP 8.1 and later) that an empty or null parent page would cause.
 * **Fix: the "Manager G2RD" tab of the G2RD theme console shows its cloud icon.** The tab
   declared its icon as a dashicons class (`dashicons-cloud`): the theme console 1.39 turned it
   into an unknown class (no icon at all) and 1.41 replaces any unknown name with its generic
@@ -106,7 +122,8 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   remote commands). The panel now starts from the last answer of the server, including one
   that arrived after the tab was left; if the tab was opened again before that answer
   arrived, the panel is refreshed with it. Reloading the page was not affected.
-* **Change: the connector panel is reorganised in four sections, with French labels.**
+* **Change: the connector panel is reorganised in four sections, with French labels.** The
+  connector has no translation yet: its labels show in French whatever the site language.
   "Connexion au manager": state badge (connected; no sign of life; enrolled; connection
   interrupted, with its cause when the connection token is unreadable or refused; not enrolled
   yet; see below), site number, last sign of
