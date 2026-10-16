@@ -194,6 +194,13 @@ final class AfterResponseRunner {
 	private \Closure $output;
 
 	/**
+	 * Attente de la sonde `async_probe` (secondes) : rend les secondes non attendues.
+	 *
+	 * @var \Closure(int): int
+	 */
+	private \Closure $sleep;
+
+	/**
 	 * Exécution programmée pour la requête en cours ; null : aucune.
 	 *
 	 * @var array{command_id: string, command: string, payload: array<mixed>|null}|null
@@ -216,17 +223,21 @@ final class AfterResponseRunner {
 	 *        litespeed_finish_request(), à défaut fastcgi_finish_request() (faux si aucune
 	 *        n'existe).
 	 * @param (\Closure(string, array<mixed>|null): (array<string, mixed>|null))|null $executor
-	 *        Exécute la commande ; par défaut, CommandExecutor::run().
+	 *        Exécute la commande ; par défaut, CommandExecutor::run(), et AsyncProbe::run()
+	 *        pour la sonde `async_probe`.
 	 * @param (\Closure(): int)|null    $clock  Heure courante ; time() par défaut.
 	 * @param (\Closure(string): void)|null $output Écrit le JSON ; par défaut, sur la sortie.
+	 * @param (\Closure(int): int)|null $sleep  Attente de la sonde, par l'exécuteur par
+	 *        défaut ; sleep() par défaut.
 	 */
-	public function __construct( ?\Closure $terminator = null, ?\Closure $executor = null, ?\Closure $clock = null, ?\Closure $output = null ) {
+	public function __construct( ?\Closure $terminator = null, ?\Closure $executor = null, ?\Closure $clock = null, ?\Closure $output = null, ?\Closure $sleep = null ) {
 		$this->terminator = $terminator ?? static fn (): bool => self::finish_request();
-		$this->executor   = $executor ?? static fn ( string $command, ?array $payload ): ?array => self::run_command( $command, $payload );
+		$this->executor   = $executor ?? fn ( string $command, ?array $payload ): ?array => $this->run_command( $command, $payload );
 		$this->clock      = $clock ?? static fn (): int => time();
 		$this->output     = $output ?? static function ( string $json ): void {
 			echo $json; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- corps JSON de la réponse REST, écrit comme WP_REST_Server::serve_request().
 		};
+		$this->sleep      = $sleep ?? static fn ( int $seconds ): int => sleep( $seconds );
 	}
 
 	/** Instance partagée, aux dépendances par défaut, pour le branchement au démarrage. */
@@ -879,16 +890,32 @@ final class AfterResponseRunner {
 	/**
 	 * Exécuteur par défaut : CommandExecutor::run(), tel quel.
 	 *
-	 * La sonde `async_probe` n'y est pas encore branchée : elle le sera sur AsyncProbe::run()
-	 * à la tâche 23, avec un test « par défaut, la sonde est exécutée par AsyncProbe ».
-	 * D'ici là, CommandExecutor ne la connaît pas : la route d'acceptation l'admet (constante
-	 * posée), et l'exécution est conclue en échec explicite (cf. outcome(), message générique
-	 * qui ne cite pas la sonde), rien n'étant modifié.
+	 * Sauf la sonde `async_probe`, que CommandExecutor ne connaît pas (ni `/command` ni la
+	 * file tirée par le battement de cœur ne l'exécutent) : AsyncProbe::run(), avec l'horloge
+	 * du coureur. La route d'acceptation ne l'admet qu'avec sa constante. Son signe de vie
+	 * est l'action `g2rd_connector_command_progress`, écoutée par RunHeartbeat, attaché à
+	 * l'exécution par perform() : chaque pas de 10 s rafraîchit `alive_at` de l'exécution et
+	 * du créneau. Son issue est toujours « done » : la sonde a mesuré, la plateforme compare
+	 * `slept` à la durée demandée.
 	 *
 	 * @param array<mixed>|null $payload
 	 * @return array<string, mixed>|null
 	 */
-	private static function run_command( string $command, ?array $payload ): ?array {
+	private function run_command( string $command, ?array $payload ): ?array {
+		if ( AsyncCommands::PROBE === $command ) {
+			return [
+				'status' => 'done',
+				'result' => AsyncProbe::run(
+					$payload ?? [],
+					$this->sleep,
+					static function (): void {
+						do_action( 'g2rd_connector_command_progress', AsyncCommands::PROBE );
+					},
+					$this->clock
+				),
+			];
+		}
+
 		return CommandExecutor::run( $command, $payload );
 	}
 

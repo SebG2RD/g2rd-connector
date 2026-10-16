@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Tests\CommandRuns;
 
+use Brain\Monkey\Actions;
 use Brain\Monkey\Filters;
 use Brain\Monkey\Functions;
 use G2RD\Connector\CommandRuns\AfterResponseRunner;
@@ -26,8 +27,9 @@ use WP_REST_Response;
  * Les quatre dépendances du coureur sont injectées et tiennent un journal d'appels :
  * l'écriture du JSON, la fin de la réponse (litespeed_finish_request(),
  * fastcgi_finish_request() : jamais déclarées dans un test, cf. SnapshotCapabilitiesTest),
- * l'exécution de la commande et l'horloge. L'enregistrement de l'exécution et le créneau
- * sont les vrais (RunStore, ExecutionSlot), sur la table des options en mémoire.
+ * l'exécution de la commande et l'horloge. Une cinquième, l'attente de la sonde
+ * `async_probe`, ne sert qu'à l'exécuteur par défaut. L'enregistrement de l'exécution et
+ * le créneau sont les vrais (RunStore, ExecutionSlot), sur la table des options en mémoire.
  */
 final class AfterResponseRunnerTest extends TestCase {
 
@@ -551,6 +553,53 @@ final class AfterResponseRunnerTest extends TestCase {
 			],
 			$execution['outcome']['result'] ?? null
 		);
+	}
+
+	/**
+	 * Par défaut, la sonde `async_probe` (que CommandExecutor ne connaît pas) est exécutée
+	 * par AsyncProbe::run(), avec l'horloge du coureur et l'attente injectée (sleep() par
+	 * défaut). Chacun de ses pas déclenche l'action `g2rd_connector_command_progress`,
+	 * écoutée par le signe de vie attaché à l'exécution : `alive_at` avance à chaque pas.
+	 * Son résultat est écrit comme celui d'une commande réussie.
+	 */
+	public function test_par_defaut_la_sonde_est_executee_par_async_probe(): void {
+		// WordPress appelle les écouteurs de l'action : ici, celui du signe de vie.
+		Actions\expectDone( 'g2rd_connector_command_progress' )->times( 3 )->with( 'async_probe' )->whenHappen(
+			static function (): void {
+				RunHeartbeat::on_progress();
+			}
+		);
+		$this->accepte( 'async_probe' );
+		$vie_avant_chaque_pas = [];
+		$runner               = new AfterResponseRunner(
+			terminator: static fn (): bool => true,
+			clock: fn (): int => $this->now,
+			output: static function (): void {},
+			sleep: function ( int $secondes ) use ( &$vie_avant_chaque_pas ): int {
+				$vie_avant_chaque_pas[] = ( RunStore::read( self::ID )['alive_at'] ?? 0 ) - self::NOW;
+				$this->now             += $secondes;
+				return 0;
+			}
+		);
+		$runner->queue( self::ID, 'async_probe', [ 'seconds' => 30 ] );
+
+		$runner->maybe_serve( false, $this->reponse(), $this->requete(), null );
+
+		$execution = $this->execution();
+		self::assertSame( RunState::DONE, $execution['state'] ?? null );
+		self::assertSame( 'done', $execution['outcome']['status'] ?? null );
+		self::assertSame(
+			[
+				'requested'   => 30,
+				'slept'       => 30,
+				'started_at'  => '2026-09-10T00:26:40+00:00',
+				'finished_at' => '2026-09-10T00:27:10+00:00',
+			],
+			$execution['outcome']['result'] ?? null
+		);
+		self::assertSame( [ 0, 10, 20 ], $vie_avant_chaque_pas, 'Signe de vie du démarrage, puis un par pas.' );
+		self::assertSame( self::NOW + 30, $execution['alive_at'] ?? null, 'Signe de vie du dernier pas.' );
+		self::assertNull( ExecutionSlot::holder(), 'Créneau rendu à la fin.' );
 	}
 
 	/**
