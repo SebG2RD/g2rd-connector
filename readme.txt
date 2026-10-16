@@ -118,7 +118,10 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
     before the call never notes anything. A request short-circuited by `pre_http_request` is
     never noted. With no answer noted (connector just updated, WordPress.org blocked), the
     inventory refreshes every time, as before. The platform's "Check updates" command
-    (`check_updates`) still forces it. Updates announced by third-party updaters that do not
+    (`check_updates`) still forces it. Trade-off: a version released on WordPress.org within
+    the 3 hours before a sync, after the last answered check, may only show up at the next
+    sync, up to one sync interval (about 7 hours) later than before; worst case, about 10 hours
+    after its release instead of about 7. "Check updates" still forces the refresh. Updates announced by third-party updaters that do not
     run in REST requests are still reported. A failed core check now keeps the last known
     answer instead of an empty one;
   * `db_health` is computed at most once a day (option `g2rd_connector_db_health`, not

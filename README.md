@@ -516,7 +516,12 @@ chacun s'additionne.
     note jamais rien. Une requête court-circuitée par `pre_http_request` n'est jamais notée. Sans
     réponse notée (connecteur tout juste mis à jour,
     wordpress.org bloqué), l'inventaire rafraîchit à chaque fois, comme avant. La commande
-    `check_updates` (« Vérifier les MAJ ») force toujours. Les mises à jour des updaters tiers
+    `check_updates` (« Vérifier les MAJ ») force toujours. Contrepartie : une version publiée
+    sur wordpress.org dans les 3 h qui précèdent une synchronisation, après la dernière
+    vérification répondue, peut n'apparaître qu'à la synchronisation suivante, jusqu'à un
+    intervalle de synchronisation (environ 7 h) plus tard qu'avant ; pire cas, environ 10 h
+    après sa publication au lieu d'environ 7 h. « Vérifier les MAJ » force toujours le
+    rafraîchissement. Les mises à jour des updaters tiers
     absents du contexte REST restent annoncées (rejeu de la capture). Une vérification du cœur
     en échec garde la dernière réponse connue au lieu d'un transient vide ;
   - `db_health` est calculé au plus une fois par jour (`Rest\DbHealth`, option non autochargée

@@ -111,8 +111,14 @@ final class PremiumUpdatesBridge {
 	 * themes() (SnapshotController) et du rejeu écarte l'entrée périmée, et la version
 	 * installée, différente de celle de `checked`, rend le transient périmé.
 	 *
-	 * Une version publiée entre-temps apparaît au plus 3 h plus tard qu'avant ;
-	 * « Vérifier les MAJ » (commande check_updates) force toujours.
+	 * Délai, vu du manager : une version publiée sur wordpress.org dans les 3 h qui
+	 * précèdent une synchronisation, après la dernière vérification répondue, n'apparaît
+	 * qu'à la synchronisation SUIVANTE — jusqu'à un intervalle de synchronisation
+	 * (environ 7 h) plus tard qu'avant la 1.14, où chaque synchronisation vérifiait. Pire
+	 * cas : environ 10 h après sa publication (3 h + environ 7 h), contre environ 7 h
+	 * avant. Une vérification de WordPress entre la publication et la synchronisation
+	 * (tâches planifiées, écrans d'administration) raccourcit ce délai. « Vérifier les
+	 * MAJ » (commande check_updates) force toujours le rafraîchissement.
 	 *
 	 * Écrit en secondes littérales : `HOUR_IN_SECONDS` n'est défini qu'à l'exécution.
 	 */
