@@ -19,6 +19,10 @@ namespace G2RD\Connector\Tests\CommandRuns;
  * exception : le test échoue au lieu de valider une requête que la vraie base lirait
  * autrement. Modèle : tests/DirectLogin/FakeWpdb.php.
  *
+ * Comme wpdb, chaque requête remet `last_error` à vide avant de s'exécuter (flush()),
+ * et une requête refusée la renseigne : une écriture refusée rend false, une lecture
+ * refusée rend null (get_var()) ou une liste vide (get_results()), comme une absence.
+ *
  * Écarts assumés avec MySQL :
  *   - comparaison exacte des valeurs (MySQL compare selon la collation de la colonne,
  *     souvent insensible à la casse) : les valeurs du connecteur sont du JSON en ASCII,
@@ -46,6 +50,15 @@ final class FakeOptionsTable {
 
 	/** Quand vrai, la base refuse toute écriture (query() rend false) ; les lectures marchent. */
 	public bool $fails = false;
+
+	/**
+	 * Quand vrai, la base refuse toute lecture (« MySQL server has gone away ») ; les
+	 * écritures marchent.
+	 */
+	public bool $read_fails = false;
+
+	/** Erreur de la dernière requête, vide si elle a réussi (wpdb::$last_error). */
+	public string $last_error = '';
 
 	/**
 	 * Appelée une fois, juste avant la prochaine écriture, puis oubliée : un autre
@@ -88,7 +101,9 @@ final class FakeOptionsTable {
 			$this->before_write = null;
 			$other();
 		}
+		$this->last_error = '';
 		if ( $this->fails ) {
+			$this->last_error = 'Lock wait timeout exceeded; try restarting transaction';
 			return false;
 		}
 
@@ -126,12 +141,16 @@ final class FakeOptionsTable {
 	}
 
 	/**
-	 * Lecture d'une valeur : null si l'option est absente.
+	 * Lecture d'une valeur : null si l'option est absente, ou si la base refuse la
+	 * lecture (`last_error` renseignée).
 	 */
 	public function get_var( string $sql ): ?string {
 		[ $template, $args ] = $this->receive( $sql );
 
 		if ( $this->is( 'SELECT option_value FROM {options} WHERE option_name = %s LIMIT 1', $template ) ) {
+			if ( $this->read_refused() ) {
+				return null;
+			}
 			return $this->rows[ $args[0] ]['value'] ?? null;
 		}
 
@@ -148,6 +167,10 @@ final class FakeOptionsTable {
 
 		if ( ARRAY_A !== $output || ! $this->is( 'SELECT option_name, option_value FROM {options} WHERE option_name LIKE %s LIMIT %d', $template ) ) {
 			throw new \LogicException( 'Recherche non prévue par le faux $wpdb : ' . $sql );
+		}
+
+		if ( $this->read_refused() ) {
+			return [];
 		}
 
 		[ $pattern, $limit ] = $args;
@@ -181,6 +204,19 @@ final class FakeOptionsTable {
 			throw new \LogicException( 'Requête non préparée : ' . $sql );
 		}
 		return $this->prepared[ $sql ];
+	}
+
+	/**
+	 * Remet `last_error` à vide, comme wpdb avant chaque requête ; si la base refuse les
+	 * lectures, la renseigne et rend vrai.
+	 */
+	private function read_refused(): bool {
+		$this->last_error = '';
+		if ( ! $this->read_fails ) {
+			return false;
+		}
+		$this->last_error = 'MySQL server has gone away';
+		return true;
 	}
 
 	private function is( string $expected, string $template ): bool {

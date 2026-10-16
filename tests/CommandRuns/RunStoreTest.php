@@ -7,6 +7,8 @@ namespace G2RD\Connector\Tests\CommandRuns;
 use Brain\Monkey\Functions;
 use G2RD\Connector\CommandRuns\RunState;
 use G2RD\Connector\CommandRuns\RunStore;
+use G2RD\Connector\CommandRuns\StoreUnavailable;
+use G2RD\Connector\Rollback\UpdateTransaction;
 use G2RD\Connector\Tests\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 
@@ -103,6 +105,54 @@ final class RunStoreTest extends TestCase {
 			"SELECT option_value FROM wp_options WHERE option_name = 'g2rd_cmdrun_" . self::ID . "' LIMIT 1",
 			$this->table->queries[1]
 		);
+	}
+
+	/**
+	 * get_var() rend null aussi quand la base refuse la lecture (« MySQL server has gone
+	 * away », trop de connexions). Pris pour un numéro inconnu, ce refus passager
+	 * deviendrait une 404 `run_unknown`, que la plateforme lit comme une exécution perdue
+	 * (état définitif) alors qu'elle tourne peut-être encore. Une lecture en échec lève
+	 * donc StoreUnavailable, pour un numéro connu comme pour un inconnu : jamais null.
+	 */
+	public function test_lecture_en_echec_distincte_d_un_numero_inconnu(): void {
+		$inconnu = 'ffffffffffffffffffffffffffffffff';
+		RunStore::create( self::record() );
+		$this->table->read_fails = true;
+
+		$lectures = [
+			'read_raw, numéro connu'   => static fn () => RunStore::read_raw( self::ID ),
+			'read, numéro connu'       => static fn () => RunStore::read( self::ID ),
+			'read_raw, numéro inconnu' => static fn () => RunStore::read_raw( $inconnu ),
+			'read, numéro inconnu'     => static fn () => RunStore::read( $inconnu ),
+		];
+		foreach ( $lectures as $cas => $lecture ) {
+			try {
+				$lu = $lecture();
+				self::fail( $cas . ' : la base a refusé la lecture, rien ne doit être rendu (rendu : ' . var_export( $lu, true ) . ').' );
+			} catch ( StoreUnavailable $e ) {
+				self::assertSame( 'MySQL server has gone away', $e->db_error(), $cas . ' : l\'erreur de la base est gardée pour le journal.' );
+				self::assertSame( StoreUnavailable::MESSAGE, $e->getMessage() );
+			}
+		}
+
+		$this->table->read_fails = false;
+		self::assertNull( RunStore::read_raw( $inconnu ), 'Base revenue : un numéro inconnu rend null, sans exception.' );
+		self::assertSame( self::record(), RunStore::read( self::ID ), 'Et l\'enregistrement est relu.' );
+	}
+
+	/**
+	 * Message explicite (quoi, cause probable, action), sans détail interne : il peut
+	 * être relayé tel quel par les routes.
+	 */
+	public function test_le_message_d_une_lecture_en_echec_est_explicite(): void {
+		$erreur = new StoreUnavailable( "Table 'wp_options' is marked as crashed" );
+
+		self::assertInstanceOf( \RuntimeException::class, $erreur );
+		self::assertStringContainsString( 'n\'a pas pu être lu', $erreur->getMessage() );
+		self::assertStringContainsString( 'Cause probable', $erreur->getMessage() );
+		self::assertStringContainsString( 'Action', $erreur->getMessage() );
+		self::assertStringNotContainsString( 'wp_options', $erreur->getMessage(), 'Le nom des tables reste au journal.' );
+		self::assertSame( "Table 'wp_options' is marked as crashed", $erreur->db_error() );
 	}
 
 	/**
@@ -346,13 +396,111 @@ final class RunStoreTest extends TestCase {
 	}
 
 	/**
-	 * Rien à retirer du résultat et toujours trop gros : l'enregistrement n'est pas
-	 * écrit (aucune requête), plutôt qu'écrit au-delà de ce que la plateforme lit.
+	 * Plus rien à retirer et toujours trop gros (un champ fixé par le connecteur, ici la
+	 * commande, démesuré : seul un appelant fautif le produit) : l'enregistrement n'est
+	 * pas écrit (aucune requête), plutôt qu'écrit au-delà de ce que la plateforme lit.
 	 */
 	public function test_un_enregistrement_impossible_a_borner_n_est_pas_ecrit(): void {
-		self::assertSame( '', RunStore::encode( self::record( [ 'step' => str_repeat( 's', 70000 ) ] ) ) );
-		self::assertFalse( RunStore::create( self::record( [ 'step' => str_repeat( 's', 70000 ) ] ) ) );
+		$record = self::record( [ 'command' => str_repeat( 'c', 70000 ) ] );
+
+		self::assertSame( '', RunStore::encode( $record ) );
+		self::assertFalse( RunStore::create( $record ) );
 		self::assertSame( [], $this->table->queries );
+	}
+
+	/**
+	 * L'étape est un libellé court, servi tel quel. Démesurée, elle ne doit pas rendre
+	 * l'enregistrement impossible à écrire : elle est coupée comme une erreur.
+	 */
+	public function test_etape_demesuree_coupee_comme_une_erreur(): void {
+		self::assertTrue( RunStore::create( self::record( [ 'step' => str_repeat( 'é', 40000 ) ] ) ) );
+
+		$etape = (string) ( RunStore::read( self::ID )['step'] ?? '' );
+		self::assertLessThanOrEqual( RunStore::MAX_ERROR_BYTES, strlen( $etape ) );
+		self::assertSame( 1, preg_match( '//u', $etape ), 'Coupée entre deux caractères.' );
+		self::assertStringEndsWith( '…', $etape );
+
+		$relue = (string) RunStore::read_raw( self::ID );
+		self::assertTrue( RunStore::swap( self::ID, $relue, self::record( [ 'step' => UpdateTransaction::STEP_UPGRADING ] ) ) );
+		self::assertSame( UpdateTransaction::STEP_UPGRADING, RunStore::read( self::ID )['step'] ?? null, 'Une étape ordinaire est gardée telle quelle.' );
+	}
+
+	/**
+	 * Le résultat de reprise rattaché à une interruption est réduit comme le résultat.
+	 * Sinon l'enregistrement ne pourrait plus être écrit, et le ramassage, qui le
+	 * réécrit, échouerait à chaque passage. La partie la plus volumineuse est réduite
+	 * d'abord : le résultat, plus petit, reste entier.
+	 */
+	public function test_resultat_de_reprise_demesure_reduit_le_resultat_reste_entier(): void {
+		$reprise                = [
+			'plugin_file'      => 'akismet/akismet.php',
+			'restore_point_id' => 'rp-1',
+			'step'             => UpdateTransaction::STEP_UPGRADING,
+			'outcome'          => 'auto_rolled_back',
+			'detail'           => str_repeat( 'd', 70000 ),
+			'at'               => self::NOW + 5,
+		];
+		$record                 = self::done_with(
+			[
+				'plugin' => 'akismet/akismet.php',
+				'liste'  => array_fill( 0, 100, 'xxxxxxxxxx' ),
+			]
+		);
+		$record['interruption'] = [
+			'reason'   => 'no_sign_of_life',
+			'error'    => 'Aucun signe de vie depuis plus de 10 minutes.',
+			'recovery' => $reprise,
+		];
+
+		self::assertTrue( RunStore::create( $record ) );
+
+		self::assertLessThanOrEqual( RunStore::MAX_RECORD_BYTES, strlen( (string) RunStore::read_raw( self::ID ) ) );
+		$lue = (array) RunStore::read( self::ID );
+		self::assertSame( $record['outcome']['result'], $lue['outcome']['result'], 'Le résultat n\'est pas touché.' );
+		self::assertArrayNotHasKey( 'result_truncated', $lue['outcome'] );
+		unset( $reprise['detail'] );
+		self::assertSame( $reprise, $lue['interruption']['recovery'], 'Seul le détail démesuré part.' );
+		self::assertTrue( $lue['interruption']['recovery_truncated'] );
+		self::assertSame( 'no_sign_of_life', $lue['interruption']['reason'] );
+	}
+
+	/**
+	 * Un résultat qui n'est pas un tableau (un long texte) n'a pas d'entrée à retirer :
+	 * il part entier, et le statut reste.
+	 */
+	public function test_un_resultat_simple_demesure_part_entier(): void {
+		$record                      = self::done_with( [] );
+		$record['outcome']['result'] = str_repeat( 'r', 70000 );
+
+		self::assertTrue( RunStore::create( $record ) );
+
+		$issue = (array) ( RunStore::read( self::ID )['outcome'] ?? [] );
+		self::assertArrayHasKey( 'result', $issue );
+		self::assertNull( $issue['result'] );
+		self::assertTrue( $issue['result_truncated'] );
+		self::assertSame( 'done', $issue['status'] );
+	}
+
+	/**
+	 * Un résultat en liste (clés 0..n) reste une liste après réduction : sinon il serait
+	 * servi en objet JSON (`{"0":…,"2":…}`), sous une autre forme que la réponse de
+	 * `/command`.
+	 */
+	public function test_un_resultat_en_liste_reste_une_liste_apres_reduction(): void {
+		$liste                       = [
+			array_fill( 0, 10, 'petit' ),
+			array_fill( 0, 7000, 'aaaaaaaaaa' ),
+			[ 'moyen', 'moyen' ],
+		];
+		$record                      = self::done_with( [] );
+		$record['outcome']['result'] = $liste;
+
+		self::assertTrue( RunStore::create( $record ) );
+
+		self::assertStringContainsString( '"result":[["petit"', (string) RunStore::read_raw( self::ID ), 'Servi en liste JSON, pas en objet.' );
+		$issue = (array) ( RunStore::read( self::ID )['outcome'] ?? [] );
+		self::assertSame( [ $liste[0], $liste[2] ], $issue['result'] );
+		self::assertTrue( $issue['result_truncated'] );
 	}
 
 	/**
@@ -381,6 +529,12 @@ final class RunStoreTest extends TestCase {
 		yield 'texte' => [ '"done"' ];
 		yield 'nombre' => [ '42' ];
 		yield 'vide' => [ '' ];
+		yield 'liste JSON vide' => [ '[]' ];
+		yield 'objet JSON vide' => [ '{}' ];
+		yield 'liste JSON' => [ '[1]' ];
+		yield 'objet sans numéro' => [ '{"state":"done"}' ];
+		yield 'numéro qui n\'est pas un texte' => [ '{"command_id":1,"state":"done"}' ];
+		yield 'objet sans état' => [ '{"command_id":"' . self::ID . '"}' ];
 	}
 
 	/**
@@ -407,6 +561,34 @@ final class RunStoreTest extends TestCase {
 		self::assertFalse( RunStore::create( self::record( [ 'command_id' => 'fedcba9876543210fedcba9876543210' ] ) ) );
 
 		$this->table->fails = false;
+		self::assertSame(
+			$relue,
+			RunStore::read_raw( self::ID ),
+			'Rien n\'a changé : la relecture rend la valeur attendue, ce n\'est pas une course perdue.'
+		);
+	}
+
+	/**
+	 * Un enregistrement est toujours écrit sous l'option de son propre numéro : sinon la
+	 * route de lecture servirait, pour le numéro demandé, celui d'une autre exécution.
+	 */
+	public function test_swap_refuse_l_enregistrement_d_un_autre_numero(): void {
+		RunStore::create( self::record() );
+		$relue    = (string) RunStore::read_raw( self::ID );
+		$requetes = count( $this->table->queries );
+
+		$autre = self::record(
+			[
+				'command_id' => 'fedcba9876543210fedcba9876543210',
+				'state'      => RunState::RUNNING,
+			]
+		);
+		self::assertFalse( RunStore::swap( self::ID, $relue, $autre ) );
+		$sans_numero = self::record( [ 'state' => RunState::RUNNING ] );
+		unset( $sans_numero['command_id'] );
+		self::assertFalse( RunStore::swap( self::ID, $relue, $sans_numero ) );
+
+		self::assertCount( $requetes, $this->table->queries, 'Refusé avant toute requête.' );
 		self::assertSame( $relue, RunStore::read_raw( self::ID ), 'Rien n\'a changé.' );
 	}
 
