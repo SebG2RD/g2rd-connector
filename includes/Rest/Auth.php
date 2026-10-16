@@ -13,6 +13,12 @@
  * CommandExecutor::SIGNED_ONLY exigent une signature valide quelle que soit la
  * politique.
  *
+ * Les deux routes d'exécution en arrière-plan (`POST /g2rd/v1/command-runs`,
+ * `GET /g2rd/v1/command-runs/<numéro>`) passent par require_signed_run_access() :
+ * jeton ET signature valide, quelle que soit la politique — aucun appelant
+ * historique à ménager. Seul écart toléré : le renvoi à l'identique d'une
+ * acceptation (cf. is_replayed_acceptance()).
+ *
  * @package G2RD\Connector
  */
 
@@ -130,6 +136,88 @@ final class Auth {
 			self::refusal_message( $code ),
 			$data
 		);
+	}
+
+	/**
+	 * Permission callback des deux routes d'exécution en arrière-plan.
+	 *
+	 * Même jeton et même vérification mémorisée par requête que
+	 * require_site_token(), mais la signature est exigée quelle que soit la
+	 * politique du site : une requête non signée, mal signée, hors de la fenêtre
+	 * d'horloge ou rejouée est refusée (401 `g2rd_connector_<code>`).
+	 *
+	 * Une seule exception : le renvoi à l'identique d'une ACCEPTATION (même nonce,
+	 * signature valide), typiquement le CDN de l'hébergeur qui rejoue un POST. Il
+	 * passe, et is_replayed_acceptance() le dit au contrôleur, qui ne peut alors
+	 * rendre que l'état d'une commande déjà reçue — jamais la relancer, jamais en
+	 * lire le résultat. Le renvoi d'une lecture, lui, est refusé.
+	 *
+	 * @return true|WP_Error
+	 */
+	public static function require_signed_run_access( WP_REST_Request $request ): bool|WP_Error {
+		self::$last_signature_check = null;
+
+		$token = self::presented_token( $request );
+		if ( null === $token ) {
+			return new WP_Error(
+				'g2rd_connector_missing_token',
+				__( 'Authorization Bearer token requis.', 'g2rd-connector' ),
+				[ 'status' => 401 ]
+			);
+		}
+		if ( ! Settings::token_matches( $token ) ) {
+			return new WP_Error(
+				'g2rd_connector_invalid_token',
+				__( 'Token site invalide.', 'g2rd-connector' ),
+				[ 'status' => 403 ]
+			);
+		}
+
+		self::$checked ??= new \WeakMap();
+		if ( ! isset( self::$checked[ $request ] ) ) {
+			self::$checked[ $request ] = self::check_signature( $request, $token );
+		}
+		$check = self::$checked[ $request ];
+		// Remonté comme pour `/command` (en-tête X-G2RD-Signature-Check), renvoi compris.
+		self::$last_signature_check = $check;
+
+		if ( RequestSignature::STATUS_OK === $check['status'] || self::is_replayed_acceptance( $request ) ) {
+			return true;
+		}
+
+		$code = $check['code'] ?? 'signature_missing';
+		$data = [ 'status' => 401 ];
+		if ( isset( $check['server_time'] ) ) {
+			$data['server_time'] = $check['server_time'];
+		}
+
+		return new WP_Error(
+			'g2rd_connector_' . $code,
+			self::refusal_message( $code ),
+			$data
+		);
+	}
+
+	/**
+	 * Cette requête est-elle le renvoi à l'identique d'une acceptation déjà reçue ?
+	 *
+	 * Vrai seulement pour un `POST /g2rd/v1/command-runs` dont le jeton est bon
+	 * (sans quoi aucune vérification n'est mémorisée) et dont la vérification a
+	 * rendu `signature_replayed`. Ce code n'existe qu'après une signature reconnue
+	 * valide : check_signature() ne consulte le registre des nonces que sur `ok`.
+	 * Le marquage est cette vérification mémorisée, lue dans le même WeakMap ; une
+	 * requête jamais contrôlée n'est pas marquée.
+	 */
+	public static function is_replayed_acceptance( WP_REST_Request $request ): bool {
+		if ( null === self::$checked || ! isset( self::$checked[ $request ] ) ) {
+			return false;
+		}
+		$check = self::$checked[ $request ];
+
+		return RequestSignature::STATUS_FAILED === $check['status']
+			&& RequestSignature::CODE_REPLAYED === ( $check['code'] ?? null )
+			&& 'POST' === strtoupper( (string) $request->get_method() )
+			&& '/' . G2RD_CONNECTOR_REST_NS . '/command-runs' === (string) $request->get_route();
 	}
 
 	/**
