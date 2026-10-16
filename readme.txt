@@ -120,13 +120,15 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   contract (`window.G2RDOptions.console.version` 2 or more, theme 1.41.0 and later), the
   panel uses the console's own classes and looks like the other tabs; with an older console
   (theme 1.19 to 1.40) it draws the same layout with its own styles, limited to the panel and
-  based on the WordPress admin colours. Settings, REST routes and stored data are unchanged.
-* **Fix: a switch changed but not saved no longer looks applied.** As long as a setting
-  differs from the last saved value, a bar stuck to the bottom of the screen says
-  "Modifications non enregistrées" and offers to save; the same bar shows the result of the
-  last action (save, enrolment, disconnection, test). Failure messages now give the probable
-  cause and what to do, and the test says what it checks: the connector answers on this
-  site from the browser, which does not prove that the manager reaches the site.
+  based on the WordPress admin colours, where each switch takes a click over 44 pixels of
+  height. Settings, REST routes and stored data are unchanged.
+* **Change: clearer action messages in the connector panel.** The result of the last action
+  (save, enrolment, disconnection, test) appears under the buttons of "Connexion au manager"
+  and is announced by screen readers. Failure messages now give the probable cause and what
+  to do, and the test says what it checks: the connector answers on this site from the
+  browser, which does not prove that the manager reaches the site. When the connection token
+  is unreadable or refused, the panel gives the same explanation as the admin notice,
+  probable cause included.
 
 = 1.14.0-rc.2 =
 

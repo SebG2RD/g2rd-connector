@@ -56,26 +56,32 @@
 }
 
 /*
- * Barre du résultat de la dernière action et des modifications non
- * enregistrées : collée en bas de l'écran tant que le bas du panneau n'est pas
- * visible, pour rester sous les yeux depuis n'importe quelle section.
+ * Résultat de la dernière action, sous les boutons de « Connexion au manager ».
+ * La zone (aria-live) reste dans la page même vide ; elle ne prend alors aucune
+ * place : sa marge négative annule l'écart de la pile, que la marge de son
+ * contenu rétablit quand un message s'affiche.
  */
-.g2rd-connector-bar {
+.g2rd-connector-message {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 8px 12px;
-    position: sticky;
-    bottom: 16px;
-    z-index: 10;
+    gap: 0 12px;
 }
 
-.g2rd-connector-bar__message {
+.g2rd-connector-stack > .g2rd-connector-message {
+    margin: -14px 0 0;
+}
+
+.g2rd-connector-message > :not(:empty) {
+    margin: 14px 0 0;
+}
+
+.g2rd-connector-message__text {
     flex: 1 1 320px;
     min-width: 0;
 }
 
-.g2rd-connector-panel .g2rd-connector-bar__message .notice {
+.g2rd-connector-panel .g2rd-connector-message__text .notice {
     margin: 0;
 }
 
@@ -223,6 +229,18 @@
 .g2rd-connector-panel--autonome .g2rd-connector-toggle.is-checked .components-form-toggle__thumb {
     background: #fff;
     transform: translateX(18px);
+}
+
+/*
+ * Cible d'au moins 44 px de haut. La case à cocher que WordPress pose,
+ * transparente, sur tout l'interrupteur est seule à recevoir le clic : elle
+ * déborde de 9 px en haut et en bas, centrée sur le dessin de 26 px, qui ne
+ * change pas (la ligne de réglage, plus haute, la contient). (0,4,1) : passe
+ * devant la règle de WordPress (0,3,1), qui la cale sur l'interrupteur.
+ */
+.g2rd-connector-panel--autonome .g2rd-connector-toggle input.components-form-toggle__input[type="checkbox"] {
+    top: -9px;
+    height: 44px;
 }
 
 /* ── Mode autonome : pastilles ────────────────────────────────── */

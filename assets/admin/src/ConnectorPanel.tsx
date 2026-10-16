@@ -59,14 +59,16 @@ function settingsPayload( d: ConnectorBootData ) {
 
 /**
  * Jeton stocké mais inutilisable (BootData::tokenState) : le site reste
- * « enrôlé », mais ne parle plus au manager. Mêmes explications que l'avis PHP
- * (Page::token_problem).
+ * « enrôlé », mais ne parle plus au manager. Texte identique à celui de l'avis
+ * PHP (Page::token_problem : quoi, cause probable, action), apostrophes
+ * typographiques mises à part ; tests/Admin/ConnectorPanelTest.php compare les
+ * deux.
  */
 const TOKEN_PROBLEMS: Record< string, string > = {
 	unreadable:
-		'Le jeton de connexion au manager ne peut pas être lu : il a été modifié dans la base de données, ou les clés de sécurité de wp-config.php (AUTH_KEY, SECURE_AUTH_KEY, LOGGED_IN_KEY, NONCE_KEY) ont changé. Le site ne communique plus avec le manager. Si les clés ont changé, restaurez celles d’origine ; sinon, cliquez sur « Déconnecter du manager », puis enrôlez le site avec une nouvelle invitation générée depuis sa fiche dans le manager.',
+		'Le jeton de connexion au manager G2RD ne peut pas être lu : il a été modifié dans la base de données, ou les clés de sécurité de wp-config.php (AUTH_KEY, SECURE_AUTH_KEY, LOGGED_IN_KEY, NONCE_KEY) ont changé. Le site ne communique plus avec le manager. Si les clés ont changé, restaurez celles d’origine. Sinon : Sur la page du connecteur G2RD, cliquez sur « Déconnecter du manager », puis enrôlez le site avec une nouvelle invitation générée depuis sa fiche dans le manager.',
 	refused:
-		'Le jeton de connexion au manager est stocké dans un ancien format non protégé contre la modification, que ce site refuse : la constante G2RD_CONNECTOR_REQUIRE_AUTHENTICATED_TOKEN est activée dans wp-config.php. Le site ne communique plus avec le manager. Cliquez sur « Déconnecter du manager », puis enrôlez le site avec une nouvelle invitation générée depuis sa fiche dans le manager.',
+		'Le jeton de connexion au manager G2RD est stocké dans un ancien format non protégé contre la modification (ou en clair), que ce site refuse : la constante G2RD_CONNECTOR_REQUIRE_AUTHENTICATED_TOKEN est activée dans wp-config.php. Cause probable : la valeur a été remplacée dans la base de données, ou le jeton n’avait pas encore été converti au nouveau format. Le site ne communique plus avec le manager. Sur la page du connecteur G2RD, cliquez sur « Déconnecter du manager », puis enrôlez le site avec une nouvelle invitation générée depuis sa fiche dans le manager.',
 };
 
 /**
@@ -140,8 +142,6 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 	const [ mode ] = useState( detectUiMode );
 	const cx = classesFor( mode );
 	const [ state, setState ] = useState( data );
-	// Derniers réglages connus du serveur : ce qui diffère est « non enregistré ».
-	const [ saved, setSaved ] = useState( data );
 	const [ token, setToken ] = useState( '' );
 	const [ busy, setBusy ] = useState< Busy >( null );
 	const [ notice, setNotice ] = useState< ActionNotice >( null );
@@ -149,13 +149,9 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 	const update = ( patch: Partial< ConnectorBootData > ): void =>
 		setState( ( current ) => ( { ...current, ...patch } ) );
 
-	const dirty =
-		JSON.stringify( settingsPayload( state ) ) !==
-		JSON.stringify( settingsPayload( saved ) );
-
 	/**
-	 * Action qui renvoie les données fraîches du serveur : état, réglages
-	 * enregistrés et copie de l'onglet sont mis à jour ensemble.
+	 * Action qui renvoie les données fraîches du serveur : état du panneau et
+	 * copie de l'onglet sont mis à jour ensemble.
 	 *
 	 * @param kind    Action en cours (boutons désactivés pendant ce temps).
 	 * @param request Appel REST.
@@ -173,7 +169,6 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 		try {
 			const fresh = await request();
 			setState( fresh );
-			setSaved( fresh );
 			onDataChange?.( fresh );
 			setNotice( { status: 'success', message: success( fresh ) } );
 		} catch ( e ) {
@@ -419,6 +414,35 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 							Enregistrer
 						</Button>
 					</div>
+
+					{ /* Résultat de la dernière action (enregistrement, enrôlement,
+					     déconnexion, test), sous les boutons qui la lancent. La zone
+					     reste dans la page même vide : les lecteurs d'écran
+					     annoncent ce qui y apparaît. */ }
+					<div className="g2rd-connector-message">
+						<div
+							className="g2rd-connector-message__text"
+							aria-live="polite"
+						>
+							{ null !== notice && (
+								<div
+									className={ `notice notice-${
+										notice.status
+									} inline ${ cx( 'notice-inline' ) }` }
+								>
+									<p>{ notice.message }</p>
+								</div>
+							) }
+						</div>
+						{ null !== notice && (
+							<Button
+								variant="tertiary"
+								onClick={ () => setNotice( null ) }
+							>
+								Masquer le message
+							</Button>
+						) }
+					</div>
 				</div>
 			</section>
 
@@ -615,52 +639,6 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 					</Fact>
 				</dl>
 			</section>
-
-			{ /* Barre collée en bas de l'écran : résultat de la dernière action, et
-			     rappel des modifications non enregistrées (un interrupteur basculé
-			     n'est appliqué qu'à l'enregistrement). */ }
-			<div
-				className={
-					null !== notice || dirty
-						? `g2rd-connector-bar ${ cx( 'section' ) }`
-						: 'g2rd-connector-bar'
-				}
-			>
-				<div className="g2rd-connector-bar__message" aria-live="polite">
-					{ null !== notice && (
-						<div
-							className={ `notice notice-${ notice.status } inline ${ cx(
-								'notice-inline'
-							) }` }
-						>
-							<p>{ notice.message }</p>
-						</div>
-					) }
-				</div>
-				{ null !== notice && (
-					<Button
-						variant="tertiary"
-						onClick={ () => setNotice( null ) }
-					>
-						Masquer le message
-					</Button>
-				) }
-				{ dirty && (
-					<>
-						<Status cx={ cx } tone="warn">
-							Modifications non enregistrées
-						</Status>
-						<Button
-							variant="primary"
-							onClick={ save }
-							isBusy={ busy === 'save' }
-							disabled={ anyBusy }
-						>
-							Enregistrer
-						</Button>
-					</>
-				) }
-			</div>
 		</div>
 	);
 }

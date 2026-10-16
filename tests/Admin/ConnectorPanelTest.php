@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Tests\Admin;
 
+use G2RD\Connector\Admin\Page;
 use G2RD\Connector\Security\QueueSignature;
 use G2RD\Connector\Security\RequestSignature;
-use PHPUnit\Framework\TestCase;
+use G2RD\Connector\Tests\TestCase;
 use ReflectionClass;
+use ReflectionMethod;
 
 /**
  * Panneau React du connecteur (assets/admin/src) : deux modes de dessin.
@@ -20,6 +22,8 @@ use ReflectionClass;
  *
  * Le dépôt n'a pas d'exécuteur de tests JavaScript (aucune dépendance npm n'est
  * ajoutée pour cela) : ces tests lisent les sources du panneau et de sa feuille.
+ * La base de test (Brain Monkey) fournit les fonctions de traduction dont a
+ * besoin l'explication PHP du jeton (Page::token_problem), comparée au panneau.
  */
 final class ConnectorPanelTest extends TestCase {
 
@@ -71,9 +75,6 @@ final class ConnectorPanelTest extends TestCase {
 		'min-width',
 		'max-width',
 		'margin',
-		'position',
-		'bottom',
-		'z-index',
 	];
 
 	public function test_le_panneau_suit_l_ordre_des_quatre_sections(): void {
@@ -221,6 +222,52 @@ final class ConnectorPanelTest extends TestCase {
 		}
 	}
 
+	/**
+	 * Jeton stocké mais inutilisable : le panneau donne exactement l'explication de
+	 * l'avis PHP (quoi, cause probable, action), apostrophes typographiques mises à
+	 * part ; aucun texte pour un jeton utilisable ou absent.
+	 */
+	public function test_l_explication_du_jeton_est_celle_de_l_avis_php(): void {
+		preg_match( '/const TOKEN_PROBLEMS\b[^=]*=\s*\{(.*?)\n\};/s', self::panneau(), $bloc );
+		self::assertArrayHasKey( 1, $bloc, 'Table TOKEN_PROBLEMS introuvable dans le panneau.' );
+		preg_match_all( "/^\s*(\w+):\s*'([^']*)'/m", $bloc[1], $entrees, PREG_SET_ORDER );
+		$panneau = [];
+		foreach ( $entrees as [ , $etat, $texte ] ) {
+			$panneau[ $etat ] = str_replace( '’', "'", $texte );
+		}
+
+		$avis = new ReflectionMethod( Page::class, 'token_problem' );
+		foreach ( [ 'none', 'ok', 'legacy', 'unreadable', 'refused' ] as $etat ) {
+			$texte_php = $avis->invoke( null, $etat );
+			if ( null === $texte_php ) {
+				self::assertArrayNotHasKey( $etat, $panneau, "Le panneau signale un problème de jeton pour l'état « {$etat} », que l'avis PHP ne signale pas." );
+				continue;
+			}
+			self::assertArrayHasKey( $etat, $panneau, "Explication du jeton « {$etat} » absente du panneau." );
+			self::assertSame( $texte_php, $panneau[ $etat ], "L'explication du jeton « {$etat} » diffère de celle de l'avis PHP (Page::token_problem)." );
+		}
+	}
+
+	/**
+	 * Mode autonome : l'interrupteur dessiné fait 26 px de haut, mais sa case à
+	 * cocher (transparente, posée sur lui par WordPress) offre une cible d'au moins
+	 * 44 px de haut, centrée sur le dessin. Le sélecteur passe devant celui de
+	 * WordPress (« .components-form-toggle input.components-form-toggle__input[type=checkbox] »).
+	 */
+	public function test_l_interrupteur_du_mode_autonome_offre_une_cible_de_44_px(): void {
+		$css = self::sans_commentaires( self::source( 'assets/admin/src/style.css' ) );
+
+		$hauteur_dessin = self::declaration( $css, '/\.g2rd-connector-panel--autonome \.g2rd-connector-toggle\.components-form-toggle$/', 'height' );
+		$selecteur_case = '/\.g2rd-connector-panel--autonome \.g2rd-connector-toggle input\.components-form-toggle__input\[type="checkbox"\]$/';
+		$hauteur_case   = self::declaration( $css, $selecteur_case, 'height' );
+		$haut_case      = self::declaration( $css, $selecteur_case, 'top' );
+
+		self::assertNotNull( $hauteur_dessin, 'Hauteur de l’interrupteur du mode autonome introuvable dans style.css.' );
+		self::assertNotNull( $hauteur_case, 'Aucune règle ne donne sa hauteur à la case de l’interrupteur du mode autonome : la cible reste à la taille du dessin.' );
+		self::assertGreaterThanOrEqual( 44, $hauteur_case, 'La cible de l’interrupteur du mode autonome fait moins de 44 px de haut.' );
+		self::assertSame( ( $hauteur_dessin - $hauteur_case ) / 2, $haut_case, 'La cible de l’interrupteur n’est pas centrée sur son dessin.' );
+	}
+
 	public function test_les_actions_et_messages_restent(): void {
 		$source = self::panneau();
 		foreach ( [ "'g2rd/v1/admin/save'", "'g2rd/v1/admin/enroll'", "'g2rd/v1/admin/unenroll'", "'g2rd/v1/health'", 'aria-live="polite"', 'window.confirm(' ] as $attendu ) {
@@ -245,6 +292,23 @@ final class ConnectorPanelTest extends TestCase {
 		$parties = array_values( array_unique( $parties[1] ) );
 		sort( $parties );
 		return $parties;
+	}
+
+	/**
+	 * Valeur en pixels d'une propriété, dans la règle dont le sélecteur (unique,
+	 * sans virgule) correspond au motif ; null si absente.
+	 */
+	private static function declaration( string $css, string $motif_selecteur, string $propriete ): ?float {
+		preg_match_all( '/([^{}]+)\{([^{}]*)\}/', $css, $regles, PREG_SET_ORDER );
+		foreach ( $regles as [ , $selecteur, $declarations ] ) {
+			if ( 1 !== preg_match( $motif_selecteur, trim( $selecteur ) ) ) {
+				continue;
+			}
+			if ( 1 === preg_match( '/(?<![\w-])' . preg_quote( $propriete, '/' ) . '\s*:\s*(-?[\d.]+)px\s*;/', $declarations, $valeur ) ) {
+				return (float) $valeur[1];
+			}
+		}
+		return null;
 	}
 
 	private static function panneau(): string {
