@@ -3,8 +3,11 @@
  * Page d'administration du plugin G2RD Connector.
  *
  * Comportement adaptatif :
- *  - Si le thème G2RD est actif ET expose le filtre `g2rd_options_external_tabs`
- *    (≥ v1.19) → on s'enregistre comme tab dans la page Options G2RD.
+ *  - Si le thème parent est un thème G2RD qui expose le filtre
+ *    `g2rd_options_external_tabs` (≥ v1.19, thème enfant compris) → on s'enregistre
+ *    comme tab dans la page Options G2RD. La page autonome reste alors enregistrée
+ *    HORS du menu, comme page de secours (admin.php?page=g2rd-connector) si la
+ *    console du thème ne charge pas l'onglet.
  *  - Sinon → menu top-level "G2RD Connector" avec dashicon dédié.
  *
  * @package G2RD\Connector
@@ -23,6 +26,25 @@ final class Page {
 	public const MENU_SLUG   = 'g2rd-connector';
 	private const CAPABILITY = 'manage_options';
 
+	/**
+	 * Parent de la page de secours. WordPress n'affiche que les sous-menus des
+	 * menus de premier niveau : « options.php » (écran « Toutes les options ») n'en
+	 * est pas un, la page reste donc hors du menu, mais WordPress la sert, titre
+	 * compris, par admin.php?page=g2rd-connector. Un parent null ou vide la
+	 * cacherait aussi, mais avec des avertissements de dépréciation sous PHP 8.1+
+	 * (sources de WordPress 6.9) : null passe par plugin_basename() puis
+	 * wp_normalize_path() (strpos() et str_replace() sur null) ; avec null comme
+	 * avec '', get_admin_page_parent() rend '' et get_admin_page_title() ne trouve
+	 * pas le titre, que admin-header.php passe alors à strip_tags( null ).
+	 */
+	private const FALLBACK_PARENT = 'options.php';
+
+	/**
+	 * Suffixe de hook de la page de secours, tel que rendu par add_submenu_page()
+	 * (vide tant qu'elle n'est pas enregistrée).
+	 */
+	private string $fallback_hook = '';
+
 	public function register(): void {
 		add_action( 'admin_init', [ $this, 'register_settings' ] );
 		// K4 : jeton de connexion illisible (altéré en base ou sels de wp-config.php
@@ -32,6 +54,11 @@ final class Page {
 		if ( $this->theme_supports_external_tabs() ) {
 			add_filter( 'g2rd_options_external_tabs', [ $this, 'register_as_theme_tab' ] );
 			add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_react_tab' ] );
+			// Page de secours hors du menu : si la console du thème ne charge pas
+			// l'onglet (thème modifié, erreur JavaScript), les réglages restent
+			// joignables par admin.php?page=g2rd-connector.
+			add_action( 'admin_menu', [ $this, 'register_fallback_page' ] );
+			add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_fallback_assets' ] );
 			return;
 		}
 
@@ -40,16 +67,19 @@ final class Page {
 	}
 
 	/**
-	 * Détecte si le thème actif est g2rd-theme ET en version ≥ 1.19 (filtre dispo).
+	 * Détecte si le thème parent est g2rd-theme ET en version ≥ 1.19 (filtre dispo).
+	 *
+	 * Thème parent (template) : celui du thème enfant actif, ou le thème actif
+	 * lui-même s'il n'a pas de parent. C'est lui qui fournit la console d'options ;
+	 * un thème enfant (g2rd-child 1.0.0 sur g2rd.fr) porte sa propre version, sans
+	 * rapport avec elle. Parent absent : aucune version, donc la page autonome.
 	 */
 	private function theme_supports_external_tabs(): bool {
-		$theme   = wp_get_theme();
-		$is_g2rd = in_array( $theme->get_template(), [ 'g2rd-theme', 'g2rd' ], true )
-			|| in_array( $theme->get_stylesheet(), [ 'g2rd-theme', 'g2rd' ], true );
-		if ( ! $is_g2rd ) {
+		$template = (string) get_template();
+		if ( ! in_array( $template, [ 'g2rd-theme', 'g2rd' ], true ) ) {
 			return false;
 		}
-		$version = (string) $theme->get( 'Version' );
+		$version = (string) wp_get_theme( $template )->get( 'Version' );
 		// Le filtre est introduit par le patch theme à partir de 1.19.0.
 		return version_compare( $version, '1.19.0', '>=' );
 	}
@@ -133,6 +163,23 @@ final class Page {
 			'dashicons-cloud',
 			81
 		);
+	}
+
+	/**
+	 * Page de secours du mode onglet : la page autonome, hors du menu (cf.
+	 * FALLBACK_PARENT), même formulaire et même correctif des cases cochées.
+	 */
+	public function register_fallback_page(): void {
+		$hook = add_submenu_page(
+			self::FALLBACK_PARENT,
+			__( 'G2RD Connector', 'g2rd-connector' ),
+			__( 'G2RD Connector', 'g2rd-connector' ),
+			self::CAPABILITY,
+			self::MENU_SLUG,
+			[ $this, 'render_standalone_page' ]
+		);
+		// false : l'utilisateur n'a pas la capacité requise, WordPress refuse la page.
+		$this->fallback_hook = is_string( $hook ) ? $hook : '';
 	}
 
 	/**
@@ -393,6 +440,18 @@ final class Page {
 
 	public function enqueue_standalone_assets( string $hook ): void {
 		if ( 'toplevel_page_' . self::MENU_SLUG !== $hook ) {
+			return;
+		}
+		$this->do_enqueue();
+	}
+
+	/**
+	 * Assets de la page de secours, sur le hook que WordPress lui a donné
+	 * (« admin_page_g2rd-connector ») : sa feuille porte le correctif des cases
+	 * cochées du formulaire.
+	 */
+	public function enqueue_fallback_assets( string $hook ): void {
+		if ( '' === $this->fallback_hook || $this->fallback_hook !== $hook ) {
 			return;
 		}
 		$this->do_enqueue();

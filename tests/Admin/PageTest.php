@@ -14,6 +14,10 @@ use G2RD\Connector\Tests\TestCase;
  * « Autoriser la connexion directe depuis G2RD » s'affiche, et le formulaire
  * l'enregistre cochée comme décochée. Un navigateur n'envoie pas une case
  * décochée : son absence dans $_POST vaut « non ».
+ *
+ * Choix de l'affichage : onglet de la console d'options du thème G2RD quand le
+ * thème parent est un thème G2RD 1.19.0 ou plus (thème enfant compris), page
+ * autonome sinon ; en mode onglet, la page reste joignable hors du menu.
  */
 final class PageTest extends TestCase {
 
@@ -98,6 +102,119 @@ final class PageTest extends TestCase {
 		$this->render();
 
 		self::assertTrue( $this->options[ Settings::OPTION_KEY ]['allow_direct_login'] );
+	}
+
+	/**
+	 * Cas de g2rd.fr : le thème actif est l'enfant « g2rd-child » (1.0.0) ; c'est la
+	 * version du thème parent, celui qui fournit la console, qui compte.
+	 */
+	public function test_un_theme_enfant_d_un_theme_g2rd_1_19_ou_plus_donne_l_onglet(): void {
+		$this->active_theme( 'g2rd-child', 'g2rd-theme', [ 'g2rd-child' => '1.0.0', 'g2rd-theme' => '1.39.0' ] );
+
+		self::assertSame( 'onglet', $this->display_mode() );
+	}
+
+	public function test_un_theme_enfant_d_un_theme_g2rd_plus_ancien_que_1_19_donne_la_page(): void {
+		$this->active_theme( 'g2rd-child', 'g2rd-theme', [ 'g2rd-child' => '1.0.0', 'g2rd-theme' => '1.18.9' ] );
+
+		self::assertSame( 'page', $this->display_mode() );
+	}
+
+	public function test_le_theme_g2rd_actif_sans_enfant_donne_l_onglet(): void {
+		$this->active_theme( 'g2rd-theme', 'g2rd-theme', [ 'g2rd-theme' => '1.40.1' ] );
+
+		self::assertSame( 'onglet', $this->display_mode() );
+	}
+
+	public function test_l_ancien_dossier_g2rd_du_theme_donne_aussi_l_onglet(): void {
+		$this->active_theme( 'g2rd', 'g2rd', [ 'g2rd' => '1.19.0' ] );
+
+		self::assertSame( 'onglet', $this->display_mode() );
+	}
+
+	public function test_un_autre_theme_donne_la_page(): void {
+		$this->active_theme( 'twentytwentyfive', 'twentytwentyfive', [ 'twentytwentyfive' => '1.3' ] );
+
+		self::assertSame( 'page', $this->display_mode() );
+	}
+
+	/**
+	 * Un thème enfant dont le parent G2RD manque (supprimé, renommé) : pas de
+	 * version lisible, donc pas de console à laquelle se fier.
+	 */
+	public function test_un_theme_parent_g2rd_absent_donne_la_page(): void {
+		$this->active_theme( 'g2rd-child', 'g2rd-theme', [ 'g2rd-child' => '1.0.0' ] );
+
+		self::assertSame( 'page', $this->display_mode() );
+	}
+
+	/**
+	 * En mode onglet, la page autonome reste enregistrée, hors du menu, comme page
+	 * de secours (admin.php?page=g2rd-connector) si la console du thème ne charge
+	 * pas l'onglet. WordPress n'affiche que les sous-menus des menus de premier
+	 * niveau : rattachée à « options.php », qui n'en est pas un, la page n'a pas
+	 * d'entrée de menu. Elle sert le formulaire PHP, avec ses assets sur son hook.
+	 */
+	public function test_en_mode_onglet_la_page_de_secours_est_enregistree_sans_entree_de_menu(): void {
+		$this->active_theme( 'g2rd-child', 'g2rd-theme', [ 'g2rd-child' => '1.0.0', 'g2rd-theme' => '1.39.0' ] );
+		$submenu_pages = [];
+		Functions\when( 'add_submenu_page' )->alias(
+			static function ( ...$args ) use ( &$submenu_pages ): string {
+				$submenu_pages[] = $args;
+				return 'admin_page_' . $args[4];
+			}
+		);
+		$page = new Page();
+		$page->register();
+
+		self::assertFalse( has_action( 'admin_menu', [ $page, 'register_top_level_menu' ] ) );
+		self::assertNotFalse( has_action( 'admin_menu', [ $page, 'register_fallback_page' ] ) );
+		self::assertNotFalse( has_action( 'admin_enqueue_scripts', [ $page, 'enqueue_fallback_assets' ] ) );
+		$page->register_fallback_page();
+
+		self::assertSame(
+			[ [ 'options.php', 'G2RD Connector', 'G2RD Connector', 'manage_options', Page::MENU_SLUG, [ $page, 'render_standalone_page' ] ] ],
+			$submenu_pages
+		);
+	}
+
+	/**
+	 * Thème actif simulé : $active est le dossier du thème actif, $template celui de
+	 * son thème parent (le même s'il n'en a pas), $versions l'en-tête « Version » de
+	 * chaque thème installé. wp_get_theme() sans argument rend le thème actif, comme
+	 * WordPress ; un thème absent n'a aucun en-tête.
+	 *
+	 * @param array<string, string> $versions
+	 */
+	private function active_theme( string $active, string $template, array $versions ): void {
+		$theme = static fn ( string $slug ): \WP_Theme => new \WP_Theme(
+			$slug,
+			isset( $versions[ $slug ] ) ? [ 'Version' => $versions[ $slug ] ] : [],
+			isset( $versions[ $slug ] ),
+			'',
+			$slug === $active ? $template : ''
+		);
+		Functions\when( 'get_template' )->justReturn( $template );
+		Functions\when( 'wp_get_theme' )->alias(
+			static fn ( ?string $stylesheet = null ): \WP_Theme => $theme( $stylesheet ?? $active )
+		);
+	}
+
+	/**
+	 * Affichage retenu par register() : « onglet » (filtre de la console du thème,
+	 * pas de menu de premier niveau) ou « page » (menu de premier niveau, pas
+	 * d'onglet).
+	 */
+	private function display_mode(): string {
+		$page = new Page();
+		$page->register();
+
+		$tab  = false !== has_filter( 'g2rd_options_external_tabs', [ $page, 'register_as_theme_tab' ] );
+		$menu = false !== has_action( 'admin_menu', [ $page, 'register_top_level_menu' ] );
+		if ( $tab === $menu ) {
+			self::fail( 'register() doit choisir l\'onglet OU la page autonome, pas les deux ni aucun.' );
+		}
+		return $tab ? 'onglet' : 'page';
 	}
 
 	/**
