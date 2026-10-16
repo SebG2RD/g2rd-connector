@@ -505,7 +505,8 @@ chacun s'additionne.
     date toute neuve. Le connecteur note donc l'heure de chaque réponse 200 de api.wordpress.org
     aux trois vérifications (`Updates\WporgAnswers`, action `http_api_debug`, option de réseau
     non autochargée `g2rd_connector_wporg_answers`, une écriture par vérification réussie,
-    retirée à la désinstallation), si son corps est du JSON qui porte les données de la
+    retirée à la désinstallation), si son code est exactement l'entier 200 (comme
+    `update.php`) et son corps du JSON qui porte les données de la
     vérification (`offers`, `plugins` ou `themes`) : après un 200 au corps HTML (page de défi
     d'un CDN), WordPress écrit un transient vide, qui ne doit pas passer pour frais. La
     réponse reste en attente en mémoire et n'est notée que si WordPress écrit ensuite, dans la
@@ -513,9 +514,18 @@ chacun s'additionne.
     puis action `set_site_transient_{$transient}`, ou réécriture identique) : un 200 que
     WordPress n'écrit pas (filtre `http_response` qui le transforme, appel d'update-check fait
     par une autre extension) ne compte pas, et l'écriture de `last_checked` d'avant l'appel ne
-    note jamais rien. Une requête court-circuitée par `pre_http_request` n'est jamais notée. Sans
+    note jamais rien. Une requête court-circuitée par un filtre `pre_http_request` compte aussi :
+    sur les sites hébergés chez Hostinger, le mu-plugin `hostinger-auto-updates.php` refait
+    chaque requête vers api.wordpress.org vers son proxy (wpapi.hostinger.io par défaut) et rend
+    la réponse du proxy à WordPress sans action `http_api_debug` pour l'adresse d'origine — en
+    1.14.0-rc.1, rien n'y était donc noté (pilote g2rd.fr, 16/10/2026). Le connecteur observe la
+    valeur finale de `pre_http_request` (filtre branché en dernier, valeur rendue telle quelle),
+    celle que WordPress utilise : quand l'adresse d'ORIGINE est exactement l'une des trois
+    vérifications, elle compte comme la réponse, quel que soit l'hôte qui l'a servie, avec les
+    mêmes règles (en attente jusqu'à l'écriture du transient qui la porte, une écriture par
+    vérification réussie) ; la requête imbriquée vers le proxy n'est pas comptée. Sans
     réponse notée (connecteur tout juste mis à jour,
-    wordpress.org bloqué), l'inventaire rafraîchit à chaque fois, comme avant. La commande
+    wordpress.org ou son proxy injoignable), l'inventaire rafraîchit à chaque fois, comme avant. La commande
     `check_updates` (« Vérifier les MAJ ») force toujours. Contrepartie : une version publiée
     sur wordpress.org dans les 3 h qui précèdent une synchronisation, après la dernière
     vérification répondue, peut n'apparaître qu'à la synchronisation suivante, jusqu'à un

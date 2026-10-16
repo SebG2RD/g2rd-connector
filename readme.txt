@@ -81,6 +81,23 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 
 == Changelog ==
 
+= Unreleased =
+
+* **Fix: update check answers served through a hosting proxy are now noted (Hostinger).** On
+  Hostinger, the `hostinger-auto-updates.php` must-use plugin re-sends every request to
+  api.wordpress.org to its own proxy (wpapi.hostinger.io by default) from the
+  `pre_http_request` filter, and returns the proxy's answer to WordPress. WordPress uses that
+  value as is, without the `http_api_debug` action for the original address, so 1.14.0-rc.1
+  never noted an answer on these sites and the inventory refreshed the three update checks at
+  every sync (as in 1.13: heavier, never wrong). The connector now also reads the final value
+  of `pre_http_request` (filter hooked last, value always returned unchanged), the one
+  WordPress uses: when the original address is exactly one of the three update checks, that
+  value counts as the answer, whatever host served it, with the same rules as before (a 200
+  whose JSON body carries the check's data, kept pending until WordPress writes the cached
+  answer that carries it, one write per successful check). The nested request to the proxy is
+  not counted. The status code must now be exactly the integer 200, as WordPress itself
+  requires: a "200" string returned by a filter makes WordPress stop without writing anything.
+
 = 1.14.0-rc.1 =
 
 * **Performance: the connector's scheduled tasks no longer all run at the same minute.** The
