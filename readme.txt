@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.13.0
+Stable tag: 1.14.0-rc.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -81,7 +81,7 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 
 == Changelog ==
 
-= Unreleased =
+= 1.14.0-rc.1 =
 
 * **Performance: the connector's scheduled tasks no longer all run at the same minute.** The
   update discovery and the restore point purge were scheduled at a fixed delay after the first
