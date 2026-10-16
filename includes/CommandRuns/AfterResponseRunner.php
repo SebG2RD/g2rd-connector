@@ -27,11 +27,27 @@
  *   3. fin de la réponse : tampons de sortie vidés, puis fonction de fin ;
  *   4. démarrage (RunLifecycle::start()) : perdu (exécution ramassée entre-temps, base
  *      qui refuse ou qui lève), rien ne s'exécute ;
- *   5. signe de vie attaché (RunHeartbeat ; s'il ne s'attache pas, la commande
- *      s'exécute quand même), commande exécutée, résultat écrit (RunLifecycle::finish()),
- *      de la forme de la réponse de `/command` ;
+ *   5. dernier filet armé (arm_last_net()), signe de vie attaché (RunHeartbeat ; s'il ne
+ *      s'attache pas, la commande s'exécute quand même), commande exécutée, résultat écrit
+ *      (RunLifecycle::finish()), de la forme de la réponse de `/command` ;
  *   6. signe de vie détaché, puis créneau rendu (ExecutionSlot::release()), chacun
- *      rattrapé à part.
+ *      rattrapé à part ; dernier filet désarmé (fin normale).
+ *
+ * Dernier filet (§ 3.5, mort du processus, cas 1) : si PHP s'arrête pendant la commande
+ * (erreur fatale, délai PHP dépassé, exit d'une extension), rien ne passe plus dans le
+ * filtre. Les filets existants passent d'abord, dans leur ordre d'enregistrement : la
+ * reprise de la transaction (ProtectedUpdate::recover_on_shutdown(), armée au début de
+ * ProtectedUpdate::run()), qui restaure l'extension et consigne son résultat dans
+ * PendingOutcomes, puis la réactivation (armée pendant CommandExecutor::
+ * perform_plugin_upgrade()), qui consulte la décision de la reprise. Le dernier filet passe
+ * après eux : armé juste avant la commande, il confie à PHP une fonction d'arrêt qui, à
+ * l'arrêt seulement, enregistre mark_interrupted_on_shutdown(), que PHP ajoute alors en fin
+ * de liste. Il déclare l'exécution interrompue, avec la cause, et y recopie le résultat de
+ * reprise de son extension : la plateforme l'apprend à l'interrogation suivante. Une erreur
+ * fatale levée dans un filet précédent l'empêche de passer (comme toutes les fonctions
+ * d'arrêt suivantes) : le ramassage déclare alors l'exécution interrompue 600 s après son
+ * dernier signe de vie (RunReaper). Le travail lui-même ne passe jamais par une fonction
+ * d'arrêt.
  *
  * Seule la réponse « reçue » de cette exécution la démarre : une WP_HTTP_Response de
  * statut 202 dont `command_id` est son numéro (étape 0). Une autre extension peut l'avoir
@@ -97,6 +113,7 @@ declare(strict_types=1);
 namespace G2RD\Connector\CommandRuns;
 
 use G2RD\Connector\Commands\CommandExecutor;
+use G2RD\Connector\Rollback\PendingOutcomes;
 use WP_REST_Request;
 
 final class AfterResponseRunner {
@@ -110,6 +127,26 @@ final class AfterResponseRunner {
 	 * l'appliquant avant le filtre (cf. l'en-tête de la classe).
 	 */
 	private const WRAPPING_PARAMS = [ '_envelope', '_jsonp' ];
+
+	/**
+	 * Cause d'une interruption déclarée par le dernier filet (`interruption.reason`) : erreur
+	 * fatale de PHP pendant la commande (délai ou mémoire dépassés compris).
+	 */
+	public const REASON_FATAL_ERROR = 'fatal_error';
+
+	/**
+	 * Cause d'une interruption déclarée par le dernier filet : script terminé pendant la
+	 * commande sans erreur fatale relevée (exit ou die, wp_die() d'une extension). Distincte
+	 * de REASON_FATAL_ERROR : error_get_last() rend alors une erreur antérieure sans gravité,
+	 * qui n'est pas la cause de l'arrêt.
+	 */
+	public const REASON_SCRIPT_EXIT = 'script_exit';
+
+	/**
+	 * Erreurs qui arrêtent le script : celles que WordPress traite comme fatales
+	 * (wp_should_handle_error()), plus E_CORE_ERROR.
+	 */
+	private const FATAL_ERROR_TYPES = [ E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR, E_RECOVERABLE_ERROR ];
 
 	/** Instance partagée par la route d'acceptation et le filtre. */
 	private static ?self $instance = null;
@@ -149,6 +186,14 @@ final class AfterResponseRunner {
 	 * @var array{command_id: string, command: string, payload: array<mixed>|null}|null
 	 */
 	private ?array $pending = null;
+
+	/**
+	 * Dernier filet armé : l'exécution en cours, son extension (résultat de reprise à
+	 * rattacher) et son démarrage. Null : aucune exécution en cours, ou fin normale.
+	 *
+	 * @var array{command_id: string, plugin_file: string|null, started_at: int}|null
+	 */
+	private ?array $last_net = null;
 
 	/**
 	 * @param (\Closure(): bool)|null $terminator Termine la réponse ; par défaut, vide les
@@ -264,6 +309,68 @@ final class AfterResponseRunner {
 		$this->execute( $run );
 
 		return $served;
+	}
+
+	/**
+	 * Arme le dernier filet de l'exécution `$command_id`, juste avant la commande (cf.
+	 * l'en-tête de la classe). La fonction d'arrêt enregistrée ici n'enregistre, à l'arrêt,
+	 * que mark_interrupted_on_shutdown() : PHP l'ajoute alors en fin de liste, après les
+	 * filets armés pendant la commande (reprise, puis réactivation). Désarmé par la fin
+	 * normale de l'exécution.
+	 *
+	 * @param string      $command_id  Numéro de l'exécution démarrée.
+	 * @param string|null $plugin_file Extension dont la commande remplace les fichiers, dont
+	 *                                 le résultat de reprise est à rattacher ; null pour une
+	 *                                 commande qui ne touche à aucune extension.
+	 * @param int         $started_at  Démarrage de l'exécution (secondes Unix) : seul un
+	 *                                 résultat de reprise consigné depuis est rattaché.
+	 */
+	public function arm_last_net( string $command_id, ?string $plugin_file, int $started_at ): void {
+		$this->last_net = [
+			'command_id'  => $command_id,
+			'plugin_file' => $plugin_file,
+			'started_at'  => $started_at,
+		];
+
+		register_shutdown_function(
+			function (): void {
+				if ( null !== $this->last_net ) {
+					register_shutdown_function( [ $this, 'mark_interrupted_on_shutdown' ] );
+				}
+			}
+		);
+	}
+
+	/**
+	 * Dernier filet, à l'arrêt de PHP, après les filets existants. Ne fait rien si
+	 * l'exécution a fini normalement (filet désarmé) : aucune lecture, aucune écriture.
+	 * Sinon, déclare l'exécution interrompue (RunLifecycle::interrupt(), seulement si elle
+	 * est encore en cours), avec la cause relevée par error_get_last() et le résultat de
+	 * reprise de son extension consigné depuis son démarrage, s'il existe ; puis détache le
+	 * signe de vie et rend le créneau. Ne lève jamais.
+	 *
+	 * Écriture impossible (base qui refuse ou qui lève) : l'exécution reste en cours, et le
+	 * ramassage la déclare interrompue 600 s après son dernier signe de vie. L'erreur fatale
+	 * elle-même est au journal PHP du site.
+	 */
+	public function mark_interrupted_on_shutdown(): void {
+		$net = $this->last_net;
+		if ( null === $net ) {
+			return;
+		}
+		// Une seule fois, même armé plusieurs fois.
+		$this->last_net = null;
+
+		try {
+			[ $reason, $error ] = self::interruption_cause( error_get_last() );
+			RunLifecycle::interrupt( $net['command_id'], $reason, $error, self::recovery_since( $net['plugin_file'], $net['started_at'] ), ( $this->clock )() );
+		} catch ( \Throwable $e ) {
+			// Base qui lève, fonction de WordPress filtrée par une extension qui lève : rien
+			// ne doit remonter dans l'arrêt de PHP.
+			unset( $e );
+		}
+
+		self::clean_up( $net['command_id'] );
 	}
 
 	/**
@@ -412,13 +519,20 @@ final class AfterResponseRunner {
 
 	/**
 	 * Démarre, exécute et conclut l'exécution, puis détache le signe de vie et rend le
-	 * créneau, quoi qu'il arrive. Ne lève jamais.
+	 * créneau, quoi qu'il arrive dans le déroulé normal ; le dernier filet est armé entre le
+	 * démarrage et la commande, puis désarmé. Ne lève jamais.
+	 *
+	 * Erreur fatale ou exit pendant ce temps : le `finally` ne passe pas (PHP ne l'exécute ni
+	 * sur une erreur fatale, ni sur exit), le filet reste armé, et c'est lui qui conclut à
+	 * l'arrêt.
 	 *
 	 * @param array{command_id: string, command: string, payload: array<mixed>|null} $run
 	 */
 	private function execute( array $run ): void {
 		try {
-			if ( $this->begin( $run ) ) {
+			$started_at = $this->begin( $run );
+			if ( null !== $started_at ) {
+				$this->arm_last_net( $run['command_id'], self::plugin_file_of( $run['command'], $run['payload'] ), $started_at );
 				$this->perform( $run );
 			}
 		} catch ( \Throwable $e ) {
@@ -429,31 +543,35 @@ final class AfterResponseRunner {
 			unset( $e );
 		} finally {
 			self::clean_up( $run['command_id'] );
+			// Fin normale : le dernier filet n'a plus rien à faire, même si le résultat n'a
+			// pas pu être écrit (aucune erreur fatale à déclarer : le ramassage la clôt).
+			$this->last_net = null;
 		}
 	}
 
 	/**
-	 * Démarre l'exécution (accepted → running). Faux si ce processus ne l'a pas démarrée :
+	 * Démarre l'exécution (accepted → running). Null si ce processus ne l'a pas démarrée :
 	 * rien ne doit alors s'exécuter, et une ligne au journal PHP du site dit pourquoi.
 	 *
 	 * @param array{command_id: string, command: string, payload: array<mixed>|null} $run
+	 * @return int|null Heure du démarrage (secondes Unix), écrite dans l'exécution.
 	 */
-	private function begin( array $run ): bool {
+	private function begin( array $run ): ?int {
 		try {
-			$started = RunLifecycle::start( $run['command_id'], ( $this->clock )() );
+			$now = ( $this->clock )();
+			if ( RunLifecycle::start( $run['command_id'], $now ) ) {
+				return $now;
+			}
 		} catch ( \Throwable $e ) {
 			// Base qui lève, horloge en panne : rien ne dit que le démarrage est écrit.
 			// Rien ne s'exécute : une exécution close par le ramassage (la plateforme
 			// vérifie l'état réel du site) vaut mieux qu'une commande lancée sans
 			// démarrage enregistré.
 			unset( $e );
-			$started = false;
 		}
-		if ( ! $started ) {
-			self::log( self::not_started_message( $run['command_id'], $run['command'] ) );
-		}
+		self::log( self::not_started_message( $run['command_id'], $run['command'] ) );
 
-		return $started;
+		return null;
 	}
 
 	/**
@@ -530,6 +648,86 @@ final class AfterResponseRunner {
 			ExecutionSlot::release( $command_id );
 		} catch ( \Throwable $e ) {
 			unset( $e );
+		}
+	}
+
+	/**
+	 * Extension dont la commande remplace les fichiers (AsyncCommands::TOUCHES_PLUGIN_FILES) :
+	 * `file` de sa charge, comme la lisent CommandExecutor et RestoreCommands. Null pour toute
+	 * autre commande, ou sans extension désignée.
+	 *
+	 * @param array<mixed>|null $payload
+	 */
+	private static function plugin_file_of( string $command, ?array $payload ): ?string {
+		if ( ! in_array( $command, AsyncCommands::TOUCHES_PLUGIN_FILES, true ) ) {
+			return null;
+		}
+		$file = $payload['file'] ?? null;
+
+		return is_string( $file ) && '' !== $file ? $file : null;
+	}
+
+	/**
+	 * Cause de l'arrêt du script pendant la commande, d'après error_get_last() :
+	 * [ cause, message ]. Le message dit quoi, la cause probable et l'action, au format des
+	 * messages du site ; il est coupé à 2 Ko à l'écriture (RunStore::encode()), le détail de
+	 * l'erreur, placé à la fin, étant coupé le premier.
+	 *
+	 * Une erreur fatale (délai ou mémoire dépassés compris) : REASON_FATAL_ERROR, avec son
+	 * message, son fichier et sa ligne. Aucune, ou une erreur sans gravité levée plus tôt :
+	 * le script a été terminé par exit ou die (wp_die() d'une extension), REASON_SCRIPT_EXIT,
+	 * sans cette erreur, qui n'est pas la cause.
+	 *
+	 * @param array{type: int, message: string, file: string, line: int}|null $last
+	 * @return array{0: string, 1: string}
+	 */
+	private static function interruption_cause( ?array $last ): array {
+		if ( null !== $last && in_array( $last['type'], self::FATAL_ERROR_TYPES, true ) ) {
+			return [
+				self::REASON_FATAL_ERROR,
+				sprintf(
+					/* translators: 1: message de l'erreur PHP ; 2: fichier où elle s'est produite ; 3: ligne. */
+					__( 'La commande s’est arrêtée sur une erreur fatale de PHP avant d’avoir rendu son résultat : son travail est peut-être partiel. Cause probable : erreur d’une extension, du thème ou du connecteur, ou limite de mémoire ou de durée de PHP atteinte (détail en fin de message). Action : aucune pour cette opération, la plateforme vérifie l’état réel du site ; si l’erreur se répète, corriger ou désactiver l’extension en cause. Erreur : %1$s (%2$s, ligne %3$d)', 'g2rd-connector' ),
+					$last['message'],
+					$last['file'],
+					$last['line']
+				),
+			];
+		}
+
+		return [
+			self::REASON_SCRIPT_EXIT,
+			__( 'La commande s’est arrêtée avant d’avoir rendu son résultat : le script PHP a été terminé pendant son exécution (exit ou die), sans erreur fatale relevée. Son travail est peut-être partiel. Cause probable : une extension a interrompu la requête pendant l’opération (par exemple par wp_die()). Action : aucune pour cette opération, la plateforme vérifie l’état réel du site ; si l’arrêt se répète, le signaler à l’équipe G2RD.', 'g2rd-connector' ),
+		];
+	}
+
+	/**
+	 * Résultat de reprise à rattacher à l'exécution interrompue : le dernier consigné dans
+	 * PendingOutcomes pour l'extension `$plugin_file` depuis le démarrage (celui que la
+	 * reprise de la transaction vient d'écrire, juste avant, à l'arrêt). Null sans extension,
+	 * sans résultat, ou si la lecture lève : l'exécution est alors déclarée interrompue sans
+	 * lui, et la plateforme le lira dans l'inventaire.
+	 *
+	 * @return array<string, mixed>|null
+	 */
+	private static function recovery_since( ?string $plugin_file, int $started_at ): ?array {
+		if ( null === $plugin_file ) {
+			return null;
+		}
+
+		try {
+			$found = null;
+			foreach ( PendingOutcomes::all() as $outcome ) {
+				if ( ( $outcome['plugin_file'] ?? null ) === $plugin_file && is_int( $outcome['at'] ?? null ) && $outcome['at'] >= $started_at ) {
+					$found = $outcome;
+				}
+			}
+
+			return $found;
+		} catch ( \Throwable $e ) {
+			unset( $e );
+
+			return null;
 		}
 	}
 
