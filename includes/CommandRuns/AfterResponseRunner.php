@@ -24,10 +24,21 @@
  *   2. écriture du JSON de la réponse, comme WP_REST_Server::serve_request() ;
  *   3. fin de la réponse : tampons de sortie vidés, puis fonction de fin ;
  *   4. démarrage (RunLifecycle::start()) : perdu (exécution ramassée entre-temps, base
- *      qui refuse), rien ne s'exécute ;
- *   5. signe de vie attaché (RunHeartbeat), commande exécutée, résultat écrit
- *      (RunLifecycle::finish()), de la forme de la réponse de `/command` ;
- *   6. signe de vie détaché, créneau rendu (ExecutionSlot::release()).
+ *      qui refuse ou qui lève), rien ne s'exécute ;
+ *   5. signe de vie attaché (RunHeartbeat ; s'il ne s'attache pas, la commande
+ *      s'exécute quand même), commande exécutée, résultat écrit (RunLifecycle::finish()),
+ *      de la forme de la réponse de `/command` ;
+ *   6. signe de vie détaché, puis créneau rendu (ExecutionSlot::release()), chacun
+ *      rattrapé à part.
+ *
+ * Base qui lève au lieu de refuser (mysqli remis en mode exception par une extension,
+ * dépôt de base tiers comme HyperDB ou LudicrousDB) : rien ne remonte hors du filtre. Un
+ * créneau qu'elle n'a pas laissé rendre est repris 600 s après son dernier signe de vie.
+ *
+ * Pertes écrites au journal PHP du site (une ligne : quoi, cause probable, action, sans
+ * donnée sensible), pour comprendre plus tard une exécution « abandonnée » ou
+ * « interrompue » : démarrage perdu (étape 4), signe de vie non attaché, résultat non
+ * enregistré (étape 5).
  *
  * Pas de set_time_limit() : la commande garde les mêmes conditions qu'aujourd'hui.
  *
@@ -105,8 +116,9 @@ final class AfterResponseRunner {
 
 	/**
 	 * @param (\Closure(): bool)|null $terminator Termine la réponse ; par défaut, vide les
-	 *        tampons de sortie puis appelle litespeed_finish_request(), à défaut
-	 *        fastcgi_finish_request() (faux si aucune n'existe).
+	 *        tampons de sortie (flush_output_buffers()) puis appelle
+	 *        litespeed_finish_request(), à défaut fastcgi_finish_request() (faux si aucune
+	 *        n'existe).
 	 * @param (\Closure(string, array<mixed>|null): (array<string, mixed>|null))|null $executor
 	 *        Exécute la commande ; par défaut, CommandExecutor::run().
 	 * @param (\Closure(): int)|null    $clock  Heure courante ; time() par défaut.
@@ -280,41 +292,150 @@ final class AfterResponseRunner {
 	 * @param array{command_id: string, command: string, payload: array<mixed>|null} $run
 	 */
 	private function execute( array $run ): void {
+		try {
+			if ( $this->begin( $run ) ) {
+				$this->perform( $run );
+			}
+		} catch ( \Throwable $e ) {
+			// Dernier rempart : chaque étape rattrape déjà ses erreurs, seule une fonction
+			// de WordPress filtrée par une extension qui lève (traduction…) arrive ici.
+			// Résultat perdu : le ramassage déclarera l'exécution interrompue 600 s après
+			// son dernier signe de vie, et la plateforme vérifiera l'état réel du site.
+			unset( $e );
+		} finally {
+			self::clean_up( $run['command_id'] );
+		}
+	}
+
+	/**
+	 * Démarre l'exécution (accepted → running). Faux si ce processus ne l'a pas démarrée :
+	 * rien ne doit alors s'exécuter, et une ligne au journal PHP du site dit pourquoi.
+	 *
+	 * @param array{command_id: string, command: string, payload: array<mixed>|null} $run
+	 */
+	private function begin( array $run ): bool {
+		try {
+			$started = RunLifecycle::start( $run['command_id'], ( $this->clock )() );
+		} catch ( \Throwable $e ) {
+			// Base qui lève, horloge en panne : rien ne dit que le démarrage est écrit.
+			// Rien ne s'exécute : une exécution close par le ramassage (la plateforme
+			// vérifie l'état réel du site) vaut mieux qu'une commande lancée sans
+			// démarrage enregistré.
+			unset( $e );
+			$started = false;
+		}
+		if ( ! $started ) {
+			self::log( self::not_started_message( $run['command_id'], $run['command'] ) );
+		}
+
+		return $started;
+	}
+
+	/**
+	 * Exécute la commande démarrée, puis écrit son résultat. Résultat non enregistré (base
+	 * qui refuse ou qui lève) : une ligne au journal PHP du site.
+	 *
+	 * @param array{command_id: string, command: string, payload: array<mixed>|null} $run
+	 */
+	private function perform( array $run ): void {
 		$command_id = $run['command_id'];
 		$command    = $run['command'];
 
 		try {
-			// Perdu : exécution ramassée entre la réponse et ce démarrage (abandonnée), ou
-			// base qui refuse. Rien ne s'exécute ; le ramassage dira la vérité.
-			if ( ! RunLifecycle::start( $command_id, ( $this->clock )() ) ) {
-				return;
-			}
-
-			try {
-				RunHeartbeat::attach( $command_id, $this->clock );
-				$outcome = $this->outcome( $command, ( $this->executor )( $command, $run['payload'] ) );
-			} catch ( \Throwable $e ) {
-				$outcome = $this->failure(
-					$command,
-					sprintf(
-						/* translators: 1: nom technique de la commande, par exemple update_plugin ; 2: message de l'erreur. */
-						__( 'La commande « %1$s » s’est arrêtée sur une erreur inattendue : %2$s. Elle a pu être appliquée en partie. Cause probable : erreur d’une extension ou du connecteur pendant l’exécution en arrière-plan. Action : vérifier l’état du site (versions installées, fonctionnement), puis relancer l’opération depuis la plateforme si besoin.', 'g2rd-connector' ),
-						$command,
-						$e->getMessage()
-					)
-				);
-			}
-
-			RunLifecycle::finish( $command_id, $outcome, ( $this->clock )() );
-		} catch ( \Throwable ) {
-			// Horloge ou base en panne : résultat perdu. Le ramassage déclarera l'exécution
-			// interrompue 600 s après son dernier signe de vie, et la plateforme vérifiera
-			// l'état réel du site.
-			return;
-		} finally {
-			RunHeartbeat::detach();
-			ExecutionSlot::release( $command_id );
+			RunHeartbeat::attach( $command_id, $this->clock );
+		} catch ( \Throwable $e ) {
+			// Écouteurs non branchés : la commande, qui n'a pas encore commencé, s'exécute
+			// quand même, et son résultat est le sien (jamais « appliquée en partie » pour
+			// cette erreur-ci).
+			unset( $e );
+			self::log(
+				sprintf(
+					'le signe de vie de l’opération %1$s (commande %2$s) n’a pas pu être branché. L’opération s’exécute quand même ; si l’une de ses étapes dure plus de 10 minutes, elle sera déclarée interrompue en pleine activité, puis son résultat sera écrit à la fin. Cause probable : extension qui lève une erreur à l’ajout d’un crochet WordPress. Action : aucune pour cette opération ; si le message se répète, le signaler à l’équipe G2RD.',
+					$command_id,
+					$command
+				)
+			);
 		}
+
+		$error = null;
+		try {
+			$executed = ( $this->executor )( $command, $run['payload'] );
+		} catch ( \Throwable $e ) {
+			$executed = null;
+			$error    = $e;
+		}
+
+		$status = null === $error && 'done' === ( $executed['status'] ?? null ) ? 'done' : 'failed';
+		try {
+			$outcome = null === $error ? $this->outcome( $command, $executed ) : $this->unexpected_error( $command, $error );
+			$written = RunLifecycle::finish( $command_id, $outcome, ( $this->clock )() );
+		} catch ( \Throwable $e ) {
+			unset( $e );
+			$written = false;
+		}
+		if ( ! $written ) {
+			self::log(
+				sprintf(
+					'le résultat de l’opération %1$s (commande %2$s) n’a pas été enregistré : la commande s’est terminée (issue : %3$s), mais l’écriture de son résultat a échoué. L’opération sera déclarée interrompue (si ce n’est déjà fait) 10 minutes après son dernier signe de vie. Cause probable : base de données du site indisponible, ou qui refuse l’écriture à cet instant. Action : vérifier l’état réel du site (versions installées) depuis la plateforme, et la base de données du site si le message se répète.',
+					$command_id,
+					$command,
+					$status
+				)
+			);
+		}
+	}
+
+	/**
+	 * Détache le signe de vie, puis rend le créneau, chacun rattrapé à part : le créneau
+	 * est rendu même si le détachement lève, et rien ne remonte hors du filtre. Une base
+	 * qui lève sur le rendu laisse le créneau pris : il est repris 600 s après son dernier
+	 * signe de vie (ExecutionSlot, limite connue « rendu perdu »).
+	 */
+	private static function clean_up( string $command_id ): void {
+		try {
+			RunHeartbeat::detach();
+		} catch ( \Throwable $e ) {
+			// Écouteurs peut-être restés branchés : sans effet sur une exécution conclue,
+			// un signe de vie n'écrit que sur une exécution en cours et sur un créneau
+			// tenu par elle.
+			unset( $e );
+		}
+
+		try {
+			ExecutionSlot::release( $command_id );
+		} catch ( \Throwable $e ) {
+			unset( $e );
+		}
+	}
+
+	/**
+	 * Ligne du journal pour un démarrage perdu. L'exécution est relue pour en dire la
+	 * cause : ramassée (abandonnée) entre la réponse et le démarrage, ou démarrage que la
+	 * base n'a pas pris.
+	 */
+	private static function not_started_message( string $command_id, string $command ): string {
+		try {
+			$record = RunStore::read( $command_id );
+			$state  = is_string( $record['state'] ?? null ) ? $record['state'] : null;
+		} catch ( \Throwable $e ) {
+			unset( $e );
+			$state = null;
+		}
+
+		if ( RunState::ABANDONED === $state ) {
+			return sprintf(
+				'l’opération %1$s (commande %2$s) n’a pas été exécutée : elle a été déclarée abandonnée avant son démarrage, et rien n’a été modifié. Cause probable : processus PHP du site suspendu plus de 2 minutes entre l’envoi de la réponse et le démarrage (serveur surchargé). Action : relancer l’opération depuis la plateforme si besoin ; si le message se répète, le signaler à l’équipe G2RD.',
+				$command_id,
+				$command
+			);
+		}
+
+		return sprintf(
+			'l’opération %1$s (commande %2$s) n’a pas été exécutée : son démarrage n’a pas pu être enregistré (état relu : %3$s), et rien n’a été modifié. Cause probable : base de données du site indisponible, ou qui refuse l’écriture à cet instant. Action : vérifier la base de données du site (journal d’erreurs, espace disque), puis relancer l’opération depuis la plateforme si besoin.',
+			$command_id,
+			$command,
+			null === $state ? 'illisible' : '« ' . $state . ' »'
+		);
 	}
 
 	/**
@@ -333,7 +454,7 @@ final class AfterResponseRunner {
 				$command,
 				sprintf(
 					/* translators: %s: nom technique de la commande, par exemple update_plugin. */
-					__( 'La commande « %s » n’a pas été exécutée : ce site ne sait pas l’exécuter. Rien n’a été modifié. Cause probable : la plateforme et le connecteur installé ne sont pas à la même version (commande nouvelle ou retirée). Action : mettre à jour le connecteur G2RD de ce site, puis relancer l’opération depuis la plateforme.', 'g2rd-connector' ),
+					__( 'La commande « %s » n’a pas été exécutée : ce site ne sait pas l’exécuter. Rien n’a été modifié. Cause probable : la plateforme et le connecteur installé ne sont pas à la même version (commande nouvelle ou retirée), ou cette version du connecteur admet la commande en arrière-plan sans savoir encore l’exécuter (cas de la sonde de diagnostic async_probe). Action : mettre à jour le connecteur G2RD de ce site, puis relancer l’opération depuis la plateforme ; si le connecteur est déjà à jour, le signaler à l’équipe G2RD.', 'g2rd-connector' ),
 					$command
 				)
 			);
@@ -371,10 +492,38 @@ final class AfterResponseRunner {
 	}
 
 	/**
-	 * Exécuteur par défaut : CommandExecutor::run(), tel quel. La sonde `async_probe` n'y
-	 * est pas encore branchée (AsyncProbe::run(), qui la complète) : d'ici là,
-	 * CommandExecutor ne la connaît pas, et l'exécution est conclue en échec explicite,
-	 * rien n'étant modifié.
+	 * Résultat d'échec d'une exception levée pendant l'exécution de la commande (hors de
+	 * CommandExecutor::run(), qui rattrape les siennes) : la commande a commencé, elle a
+	 * pu être appliquée en partie.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function unexpected_error( string $command, \Throwable $error ): array {
+		// Sans point final : la phrase en ajoute un. Message vide : le type de l'erreur.
+		$detail = rtrim( trim( $error->getMessage() ), '.' );
+		if ( '' === $detail ) {
+			$detail = get_class( $error );
+		}
+
+		return $this->failure(
+			$command,
+			sprintf(
+				/* translators: 1: nom technique de la commande, par exemple update_plugin ; 2: message de l'erreur. */
+				__( 'La commande « %1$s » s’est arrêtée sur une erreur inattendue : %2$s. Elle a pu être appliquée en partie. Cause probable : erreur d’une extension ou du connecteur pendant l’exécution en arrière-plan. Action : vérifier l’état du site (versions installées, fonctionnement), puis relancer l’opération depuis la plateforme si besoin.', 'g2rd-connector' ),
+				$command,
+				$detail
+			)
+		);
+	}
+
+	/**
+	 * Exécuteur par défaut : CommandExecutor::run(), tel quel.
+	 *
+	 * La sonde `async_probe` n'y est pas encore branchée : elle le sera sur AsyncProbe::run()
+	 * à la tâche 23, avec un test « par défaut, la sonde est exécutée par AsyncProbe ».
+	 * D'ici là, CommandExecutor ne la connaît pas : la route d'acceptation l'admet (constante
+	 * posée), et l'exécution est conclue en échec explicite (cf. outcome()), rien n'étant
+	 * modifié.
 	 *
 	 * @param array<mixed>|null $payload
 	 * @return array<string, mixed>|null
@@ -384,22 +533,15 @@ final class AfterResponseRunner {
 	}
 
 	/**
-	 * Termine la réponse : tampons de sortie vidés (ceux qu'on ne peut pas retirer restent,
-	 * la fonction de fin les vide de force), puis litespeed_finish_request(), à défaut
-	 * fastcgi_finish_request(). Appelées seulement si elles existent : PHP ne les définit
-	 * que sous LiteSpeed (lsphp) et PHP-FPM.
+	 * Termine la réponse : tampons de sortie vidés (flush_output_buffers()), puis
+	 * litespeed_finish_request(), à défaut fastcgi_finish_request(). Appelées seulement si
+	 * elles existent : PHP ne les définit que sous LiteSpeed (lsphp) et PHP-FPM.
 	 *
 	 * @return bool Vrai si la réponse est partie ; faux si aucune fonction n'existe, ou si
 	 *              elle a échoué.
 	 */
 	private static function finish_request(): bool {
-		while ( ob_get_level() > 0 ) {
-			$status = ob_get_status();
-			$flags  = is_int( $status['flags'] ?? null ) ? $status['flags'] : 0;
-			if ( 0 === ( $flags & PHP_OUTPUT_HANDLER_REMOVABLE ) || ! ob_end_flush() ) {
-				break;
-			}
-		}
+		self::flush_output_buffers();
 		flush();
 
 		if ( function_exists( 'litespeed_finish_request' ) ) {
@@ -412,8 +554,33 @@ final class AfterResponseRunner {
 		return false;
 	}
 
+	/**
+	 * Vide et ferme les tampons de sortie au-dessus du niveau `$floor`, du plus haut au plus
+	 * bas : leur contenu descend d'un niveau à chaque fermeture, jusqu'à la sortie. La
+	 * boucle s'arrête, sans notice, au premier tampon qu'on ne peut pas retirer (ouvert
+	 * sans PHP_OUTPUT_HANDLER_REMOVABLE) ou que PHP refuse de fermer : la fonction de fin
+	 * vide de force ce qui reste.
+	 *
+	 * Publique pour les tests, qui ouvrent leurs propres tampons au-dessus de ceux de
+	 * PHPUnit ; seule la fin de réponse par défaut l'appelle.
+	 *
+	 * @param int $floor Niveau à ne pas franchir : 0 (tous les tampons) pour la réponse.
+	 * @return int Niveau atteint (ob_get_level()).
+	 */
+	public static function flush_output_buffers( int $floor = 0 ): int {
+		while ( ob_get_level() > $floor ) {
+			$status = ob_get_status();
+			$flags  = is_int( $status['flags'] ?? null ) ? $status['flags'] : 0;
+			if ( 0 === ( $flags & PHP_OUTPUT_HANDLER_REMOVABLE ) || ! ob_end_flush() ) {
+				break;
+			}
+		}
+
+		return ob_get_level();
+	}
+
 	/** Une ligne au journal PHP du site, pour le diagnostic. */
 	private static function log( string $message ): void {
-		error_log( 'G2RD Connector : ' . $message ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- diagnostic d'exploitation voulu (fin de réponse impossible), sans donnée sensible.
+		error_log( 'G2RD Connector : ' . $message ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- diagnostic d'exploitation voulu (fin de réponse impossible, démarrage perdu, signe de vie non branché, résultat non enregistré), sans donnée sensible.
 	}
 }

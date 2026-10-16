@@ -68,6 +68,14 @@ final class FakeOptionsTable {
 	 */
 	public bool $insert_ignore_writes_nothing = false;
 
+	/**
+	 * Quand renseigné (« INSERT », « UPDATE » ou « DELETE »), la base LÈVE une exception sur
+	 * ce type d'écriture au lieu de rendre false : mysqli remis en mode exception par une
+	 * extension (MYSQLI_REPORT_STRICT), ou dépôt de base tiers (HyperDB, LudicrousDB). Les
+	 * lectures marchent. Null par défaut : aucune exception.
+	 */
+	public ?string $throws_on = null;
+
 	/** Erreur de la dernière requête, vide si elle a réussi (wpdb::$last_error). */
 	public string $last_error = '';
 
@@ -113,6 +121,9 @@ final class FakeOptionsTable {
 			$other();
 		}
 		$this->last_error = '';
+		if ( null !== $this->throws_on && str_starts_with( $template, $this->throws_on . ' ' ) ) {
+			throw new \RuntimeException( 'Deadlock found when trying to get lock; try restarting transaction' );
+		}
 		if ( $this->fails ) {
 			$this->last_error = 'Lock wait timeout exceeded; try restarting transaction';
 			return false;

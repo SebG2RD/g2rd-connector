@@ -220,7 +220,7 @@ final class RunLifecycleTest extends TestCase {
 		RunLifecycle::start( self::ID, self::NOW );
 		RunLifecycle::alive( self::ID, self::NOW + 40, 'upgrading' );
 
-		RunLifecycle::finish( self::ID, $outcome, self::NOW + 90 );
+		self::assertTrue( RunLifecycle::finish( self::ID, $outcome, self::NOW + 90 ), 'Résultat écrit.' );
 
 		$record = RunStore::read( self::ID );
 		self::assertSame( $state, $record['state'] ?? null );
@@ -245,7 +245,7 @@ final class RunLifecycleTest extends TestCase {
 		$interruption = RunStore::read( self::ID )['interruption'] ?? null;
 		self::assertSame( RunReaper::REASON_NO_SIGN_OF_LIFE, $interruption['reason'] ?? null );
 
-		RunLifecycle::finish( self::ID, self::DONE, self::NOW + 700 );
+		self::assertTrue( RunLifecycle::finish( self::ID, self::DONE, self::NOW + 700 ), 'Résultat tardif écrit.' );
 
 		$record = RunStore::read( self::ID );
 		self::assertSame( RunState::DONE, $record['state'] ?? null );
@@ -266,7 +266,7 @@ final class RunLifecycleTest extends TestCase {
 			RunReaper::sweep_one( self::ID, self::NOW + 601 );
 		};
 
-		RunLifecycle::finish( self::ID, self::FAILED, self::NOW + 601 );
+		self::assertTrue( RunLifecycle::finish( self::ID, self::FAILED, self::NOW + 601 ), 'Résultat écrit au second essai.' );
 
 		$record = RunStore::read( self::ID );
 		self::assertSame( RunState::FAILED, $record['state'] ?? null );
@@ -295,9 +295,10 @@ final class RunLifecycleTest extends TestCase {
 		$this->table->before_write = $autre;
 		$ecritures_avant           = count( $this->ecritures() );
 
-		RunLifecycle::finish( self::ID, self::DONE, self::NOW + 90 );
+		$ecrit                     = RunLifecycle::finish( self::ID, self::DONE, self::NOW + 90 );
 		$this->table->before_write = null;
 
+		self::assertFalse( $ecrit, 'Essais épuisés : résultat non écrit.' );
 		self::assertCount( $ecritures_avant + 3, $this->ecritures(), 'Trois écritures au plus.' );
 		self::assertSame( RunState::RUNNING, $this->etat() );
 	}
@@ -322,7 +323,7 @@ final class RunLifecycleTest extends TestCase {
 		$this->pose( $state );
 		$avant = $this->table->rows;
 
-		RunLifecycle::finish( self::ID, self::DONE, self::NOW + 90 );
+		self::assertFalse( RunLifecycle::finish( self::ID, self::DONE, self::NOW + 90 ) );
 
 		self::assertSame( $avant, $this->table->rows );
 		self::assertSame( [], $this->ecritures() );
@@ -379,7 +380,7 @@ final class RunLifecycleTest extends TestCase {
 
 			self::assertFalse( RunLifecycle::start( self::ID, self::NOW + 1 ), $panne . ' : pas de démarrage, rien ne s\'exécute.' );
 			RunLifecycle::alive( self::ID, self::NOW + 2, 'upgrading' );
-			RunLifecycle::finish( self::ID, self::DONE, self::NOW + 3 );
+			self::assertFalse( RunLifecycle::finish( self::ID, self::DONE, self::NOW + 3 ), $panne );
 			self::assertFalse( RunLifecycle::interrupt( self::ID, 'fatal_error', 'Erreur', null, self::NOW + 4 ) );
 			self::assertSame( $acceptee, $this->table->rows, $panne );
 
@@ -392,7 +393,7 @@ final class RunLifecycleTest extends TestCase {
 		$demarree           = $this->table->rows;
 		$this->table->fails = true;
 		$ecritures_avant    = count( $this->ecritures() );
-		RunLifecycle::finish( self::ID, self::DONE, self::NOW + 90 );
+		self::assertFalse( RunLifecycle::finish( self::ID, self::DONE, self::NOW + 90 ) );
 		self::assertCount( $ecritures_avant + 1, $this->ecritures() );
 		self::assertSame( $demarree, $this->table->rows );
 	}

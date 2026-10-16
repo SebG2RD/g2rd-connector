@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Tests\CommandRuns;
 
+use Brain\Monkey\Filters;
 use Brain\Monkey\Functions;
 use G2RD\Connector\CommandRuns\AfterResponseRunner;
 use G2RD\Connector\CommandRuns\ExecutionSlot;
@@ -31,8 +32,9 @@ use WP_REST_Response;
 final class AfterResponseRunnerTest extends TestCase {
 
 	/** 03/09/2026 00:26:40 UTC. */
-	private const NOW = 1789000000;
-	private const ID  = '0123456789abcdef0123456789abcdef';
+	private const NOW   = 1789000000;
+	private const ID    = '0123456789abcdef0123456789abcdef';
+	private const AUTRE = 'fedcba9876543210fedcba9876543210';
 
 	/** Réponse 202 de l'acceptation (CommandRunsController::accept()). */
 	private const ACCEPTEE = [
@@ -145,7 +147,7 @@ final class AfterResponseRunnerTest extends TestCase {
 
 	#[DataProvider( 'valeurs_recues' )]
 	public function test_sans_execution_en_attente_le_filtre_ne_fait_rien( mixed $valeur ): void {
-		$runner  = $this->coureur();
+		$runner    = $this->coureur();
 		$illisible = new class() extends WP_REST_Response {
 			public function get_data(): mixed {
 				throw new \LogicException( 'La réponse d\'une autre requête ne doit pas être lue.' );
@@ -194,29 +196,193 @@ final class AfterResponseRunnerTest extends TestCase {
 	/**
 	 * Le ramassage (autre processus) déclare l'exécution abandonnée entre la réponse et le
 	 * démarrage : le démarrage est perdu, rien ne s'exécute. Une exécution est soit
-	 * démarrée, soit abandonnée, jamais les deux.
+	 * démarrée, soit abandonnée, jamais les deux : la plateforme peut la relancer sous un
+	 * nouveau numéro sans double exécution. Une ligne au journal PHP du site en dit la
+	 * cause.
 	 */
 	public function test_execution_ramassee_avant_le_demarrage_n_est_pas_lancee(): void {
+		$this->capture_le_journal_php();
 		$this->accepte();
-		$runner = $this->coureur(
+		$executions = 0;
+		$runner     = $this->coureur(
 			terminator: function (): bool {
 				$this->journal[] = 'fin de réponse';
 				// Le processus a été suspendu plus de 120 s : le ramassage est passé.
 				RunReaper::sweep_one( self::ID, self::NOW + RunReaper::ACCEPTED_TIMEOUT_SECONDS + 1 );
 				$this->now = self::NOW + RunReaper::ACCEPTED_TIMEOUT_SECONDS + 2;
 				return true;
+			},
+			executor: static function () use ( &$executions ): array {
+				++$executions;
+				return [
+					'status' => 'done',
+					'result' => [],
+				];
 			}
 		);
 		$runner->queue( self::ID, 'update_core', null );
 
 		self::assertTrue( $runner->maybe_serve( false, $this->reponse(), $this->requete(), null ), 'La réponse est déjà partie.' );
 
-		self::assertNotContains( 'commande', $this->journal, 'Rien n\'est exécuté.' );
+		self::assertSame( 0, $executions, 'Rien n\'est exécuté.' );
+		self::assertSame( [ 'réponse', 'fin de réponse' ], $this->journal );
 		$execution = $this->execution();
 		self::assertSame( RunState::ABANDONED, $execution['state'] ?? null );
 		self::assertNull( $execution['started_at'] ?? null );
 		self::assertArrayNotHasKey( 'outcome', $execution );
 		self::assertNull( ExecutionSlot::holder(), 'Le site est libre.' );
+		$ligne = $this->ligne_du_journal_php();
+		self::assertStringContainsString( self::ID, $ligne );
+		self::assertStringContainsString( 'update_core', $ligne );
+		self::assertStringContainsString( 'n’a pas été exécutée', $ligne );
+		self::assertStringContainsString( 'abandonnée', $ligne );
+		self::assertStringContainsString( 'Cause probable', $ligne );
+		self::assertStringContainsString( 'Action', $ligne );
+	}
+
+	/**
+	 * Base qui refuse, ou qui lève (mysqli remis en mode exception, dépôt de base tiers),
+	 * sur l'écriture du démarrage : rien ne s'exécute, rien ne remonte hors du filtre, et
+	 * une ligne au journal PHP du site dit pourquoi.
+	 *
+	 * @return array<string, array{string}>
+	 */
+	public static function pannes_d_ecriture(): array {
+		return [
+			'base qui refuse' => [ 'refuse' ],
+			'base qui lève'   => [ 'lève' ],
+		];
+	}
+
+	#[DataProvider( 'pannes_d_ecriture' )]
+	public function test_demarrage_que_la_base_ne_prend_pas_rien_ne_s_execute_une_ligne_au_journal( string $panne ): void {
+		$this->capture_le_journal_php();
+		$this->accepte();
+		$runner = $this->coureur(
+			terminator: function () use ( $panne ): bool {
+				$this->journal[] = 'fin de réponse';
+				$this->en_panne( $panne, 'UPDATE' );
+				return true;
+			}
+		);
+		$runner->queue( self::ID, 'update_core', null );
+
+		self::assertTrue( $runner->maybe_serve( false, $this->reponse(), $this->requete(), null ), 'Rien ne remonte : la réponse est servie.' );
+
+		self::assertSame( [ 'réponse', 'fin de réponse' ], $this->journal, 'Rien n\'est exécuté.' );
+		self::assertSame( RunState::ACCEPTED, $this->execution()['state'] ?? null );
+		$ligne = $this->ligne_du_journal_php();
+		self::assertStringContainsString( self::ID, $ligne );
+		self::assertStringContainsString( 'update_core', $ligne );
+		self::assertStringContainsString( 'n’a pas été exécutée', $ligne );
+		self::assertStringContainsString( 'état relu : « accepted »', $ligne );
+		self::assertStringContainsString( 'Cause probable', $ligne );
+		self::assertStringContainsString( 'Action', $ligne );
+	}
+
+	/**
+	 * La commande a réussi, mais la base refuse, ou lève, sur l'écriture du résultat :
+	 * rien ne remonte hors du filtre, le signe de vie est détaché, et une ligne au journal
+	 * PHP du site dit que la commande s'est terminée. Sans résultat, le ramassage déclare
+	 * l'exécution interrompue 600 s après son dernier signe de vie.
+	 */
+	#[DataProvider( 'pannes_d_ecriture' )]
+	public function test_resultat_que_la_base_ne_prend_pas_rien_ne_remonte_une_ligne_au_journal( string $panne ): void {
+		$this->capture_le_journal_php();
+		$this->accepte();
+		$runner = $this->coureur(
+			executor: function ( string $command ) use ( $panne ): array {
+				$this->journal[] = 'commande ' . $command;
+				$this->en_panne( $panne, 'UPDATE' );
+				return [
+					'status' => 'done',
+					'result' => [],
+				];
+			}
+		);
+		$runner->queue( self::ID, 'update_core', null );
+
+		self::assertTrue( $runner->maybe_serve( false, $this->reponse(), $this->requete(), null ), 'Rien ne remonte : la réponse est servie.' );
+
+		self::assertSame( [ 'réponse', 'fin de réponse', 'commande update_core' ], $this->journal );
+		$execution = $this->execution();
+		self::assertSame( RunState::RUNNING, $execution['state'] ?? null, 'Résultat non enregistré.' );
+		self::assertArrayNotHasKey( 'outcome', $execution );
+		self::assertSame( [ false, false, false ], self::crochets_du_signe_de_vie(), 'Signe de vie détaché.' );
+		$ligne = $this->ligne_du_journal_php();
+		self::assertStringContainsString( self::ID, $ligne );
+		self::assertStringContainsString( 'update_core', $ligne );
+		self::assertStringContainsString( 'n’a pas été enregistré', $ligne );
+		self::assertStringContainsString( 'issue : done', $ligne );
+		self::assertStringContainsString( 'Cause probable', $ligne );
+		self::assertStringContainsString( 'Action', $ligne );
+
+		$this->table->fails     = false;
+		$this->table->throws_on = null;
+		RunReaper::sweep_one( self::ID, self::NOW + RunReaper::SILENCE_TIMEOUT_SECONDS + 1 );
+		self::assertSame( RunState::INTERRUPTED, $this->execution()['state'] ?? null );
+	}
+
+	/**
+	 * La base lève sur la suppression qui rend le créneau : rien ne remonte hors du filtre,
+	 * la réponse reste servie et le résultat écrit. Le créneau, resté pris, est repris par
+	 * la prise suivante 600 s après son dernier signe de vie.
+	 */
+	public function test_base_qui_leve_au_rendu_du_creneau_rien_ne_remonte(): void {
+		$this->accepte();
+		$runner = $this->coureur(
+			executor: function ( string $command ): array {
+				$this->journal[]        = 'commande ' . $command;
+				$this->table->throws_on = 'DELETE';
+				return [
+					'status' => 'done',
+					'result' => [],
+				];
+			}
+		);
+		$runner->queue( self::ID, 'update_core', null );
+
+		self::assertTrue( $runner->maybe_serve( false, $this->reponse(), $this->requete(), null ), 'Rien ne remonte : la réponse est servie.' );
+
+		self::assertSame( [ 'réponse', 'fin de réponse', 'commande update_core' ], $this->journal );
+		self::assertSame( RunState::DONE, $this->execution()['state'] ?? null );
+		self::assertSame( [ false, false, false ], self::crochets_du_signe_de_vie(), 'Signe de vie détaché avant le rendu.' );
+		self::assertSame( self::ID, ExecutionSlot::holder()['command_id'] ?? null, 'Créneau resté pris.' );
+
+		$this->table->throws_on = null;
+		self::assertFalse( ExecutionSlot::acquire( self::AUTRE, 'update_core', self::NOW + ExecutionSlot::STALE_AFTER_SECONDS )['acquired'] );
+		self::assertTrue( ExecutionSlot::acquire( self::AUTRE, 'update_core', self::NOW + ExecutionSlot::STALE_AFTER_SECONDS + 1 )['acquired'], 'Repris après 600 s de silence.' );
+	}
+
+	/**
+	 * Le signe de vie ne s'attache pas (une extension lève à l'ajout d'un crochet) : la
+	 * commande, qui n'a pas commencé, s'exécute quand même, et son résultat est le sien.
+	 * Une ligne au journal PHP du site le signale.
+	 */
+	public function test_signe_de_vie_non_branche_la_commande_s_execute_quand_meme(): void {
+		$this->capture_le_journal_php();
+		Filters\expectAdded( 'upgrader_pre_download' )->once()->whenHappen(
+			static function (): never {
+				throw new \RuntimeException( 'Crochet refusé' );
+			}
+		);
+		$this->accepte();
+		$runner = $this->coureur();
+		$runner->queue( self::ID, 'update_core', null );
+
+		self::assertTrue( $runner->maybe_serve( false, $this->reponse(), $this->requete(), null ) );
+
+		self::assertSame( [ 'réponse', 'fin de réponse', 'commande update_core' ], $this->journal );
+		$execution = $this->execution();
+		self::assertSame( RunState::DONE, $execution['state'] ?? null, 'Réussie : jamais « appliquée en partie » pour cette erreur.' );
+		self::assertNull( $execution['outcome']['error'] ?? null );
+		self::assertNull( ExecutionSlot::holder() );
+		self::assertSame( [ false, false, false ], self::crochets_du_signe_de_vie() );
+		$ligne = $this->ligne_du_journal_php();
+		self::assertStringContainsString( self::ID, $ligne );
+		self::assertStringContainsString( 'signe de vie', $ligne );
+		self::assertStringContainsString( 'Cause probable', $ligne );
+		self::assertStringContainsString( 'Action', $ligne );
 	}
 
 	/**
@@ -314,19 +480,36 @@ final class AfterResponseRunnerTest extends TestCase {
 		self::assertStringContainsString( '« update_plugin » n’a pas été exécutée', $erreur );
 		self::assertStringContainsString( 'Rien n’a été modifié', $erreur );
 		self::assertStringContainsString( 'Cause probable', $erreur );
+		// Seul cas réel aujourd'hui : la sonde, admise par la route mais pas encore
+		// branchée sur l'exécuteur par défaut (tâche 23).
+		self::assertStringContainsString( 'async_probe', $erreur );
 		self::assertStringContainsString( 'Action', $erreur );
+		self::assertStringContainsString( 'le signaler à l’équipe G2RD', $erreur );
 	}
 
 	/**
 	 * CommandExecutor::run() rattrape lui-même toute exception de la commande. Une
-	 * exception d'une autre étape (exécuteur, signe de vie) est rattrapée ici : `failed`,
-	 * message explicite, créneau rendu, signe de vie détaché, et rien ne remonte.
+	 * exception levée pendant l'exécution, hors de lui, est rattrapée ici : `failed`,
+	 * message explicite (la commande a commencé : elle a pu être appliquée en partie),
+	 * créneau rendu, signe de vie détaché, et rien ne remonte. Le message de l'erreur est
+	 * repris sans son point final ; vide, c'est le type de l'erreur.
+	 *
+	 * @return array<string, array{string, string}>
 	 */
-	public function test_une_exception_hors_de_la_commande_ecrit_failed(): void {
+	public static function erreurs_inattendues(): array {
+		return [
+			'sans point final' => [ 'Disque plein', 'Disque plein. Elle a pu être appliquée en partie.' ],
+			'avec point final' => [ 'Disque plein.', 'Disque plein. Elle a pu être appliquée en partie.' ],
+			'message vide'     => [ '', 'RuntimeException. Elle a pu être appliquée en partie.' ],
+		];
+	}
+
+	#[DataProvider( 'erreurs_inattendues' )]
+	public function test_une_exception_hors_de_la_commande_ecrit_failed( string $message, string $attendu ): void {
 		$this->accepte();
 		$runner = $this->coureur(
-			executor: static function (): never {
-				throw new \RuntimeException( 'Disque plein' );
+			executor: static function () use ( $message ): never {
+				throw new \RuntimeException( $message );
 			}
 		);
 		$runner->queue( self::ID, 'update_theme', [ 'stylesheet' => 'twentytwentyfour' ] );
@@ -337,7 +520,8 @@ final class AfterResponseRunnerTest extends TestCase {
 		self::assertSame( RunState::FAILED, $execution['state'] ?? null );
 		$erreur = (string) ( $execution['outcome']['error'] ?? '' );
 		self::assertStringContainsString( '« update_theme »', $erreur );
-		self::assertStringContainsString( 'Disque plein', $erreur );
+		self::assertStringContainsString( 'erreur inattendue : ' . $attendu, $erreur );
+		self::assertStringNotContainsString( '..', $erreur, 'Jamais de double ponctuation.' );
 		self::assertStringContainsString( 'Cause probable', $erreur );
 		self::assertStringContainsString( 'Action', $erreur );
 		self::assertNull( ExecutionSlot::holder() );
@@ -570,13 +754,11 @@ final class AfterResponseRunnerTest extends TestCase {
 
 		self::assertSame( [ 'réponse', 'commande update_core' ], $this->journal );
 		self::assertSame( RunState::DONE, $this->execution()['state'] ?? null );
-		$lignes = array_values( array_filter( explode( "\n", (string) file_get_contents( $this->journal_php ) ) ) );
-		self::assertCount( 1, $lignes, 'Une ligne au journal PHP.' );
-		self::assertStringContainsString( 'G2RD Connector', $lignes[0] );
-		self::assertStringContainsString( self::ID, $lignes[0] );
-		self::assertStringContainsString( 'update_core', $lignes[0] );
-		self::assertStringContainsString( 'Cause probable', $lignes[0] );
-		self::assertStringContainsString( 'Action', $lignes[0] );
+		$ligne = $this->ligne_du_journal_php();
+		self::assertStringContainsString( self::ID, $ligne );
+		self::assertStringContainsString( 'update_core', $ligne );
+		self::assertStringContainsString( 'Cause probable', $ligne );
+		self::assertStringContainsString( 'Action', $ligne );
 	}
 
 	/**
@@ -616,6 +798,58 @@ final class AfterResponseRunnerTest extends TestCase {
 	}
 
 	/**
+	 * Vidage des tampons de la fin de réponse par défaut : chaque tampon au-dessus du
+	 * niveau donné est fermé, et son contenu descend d'un niveau, dans l'ordre, sans perte.
+	 * Le test ouvre ses propres tampons au-dessus de ceux de PHPUnit, qu'il ne touche pas.
+	 */
+	public function test_vidage_des_tampons_jusqu_au_niveau_donne(): void {
+		$plancher = ob_get_level();
+		ob_start();
+		echo 'A';
+		ob_start();
+		echo 'B';
+		ob_start();
+		echo 'C';
+
+		$atteint = AfterResponseRunner::flush_output_buffers( $plancher + 1 );
+		$contenu = ob_get_clean();
+
+		self::assertSame( $plancher + 1, $atteint, 'Arrêt au niveau donné.' );
+		self::assertSame( 'ABC', $contenu, 'Contenus descendus dans l\'ordre, sans perte.' );
+		self::assertSame( $plancher, ob_get_level() );
+	}
+
+	/**
+	 * Un tampon qu'on ne peut pas retirer (ouvert sans PHP_OUTPUT_HANDLER_REMOVABLE) arrête
+	 * le vidage, sans notice ; ceux du dessus sont vidés dedans. PHP ne ferme un tel tampon
+	 * qu'à la fin du script, et PHPUnit ne saurait pas le refermer après le test : le
+	 * vidage tourne dans un processus PHP à part, sans php.ini, au niveau par défaut (0).
+	 */
+	public function test_un_tampon_non_supprimable_arrete_le_vidage_sans_notice(): void {
+		if ( ! function_exists( 'exec' ) ) {
+			self::markTestSkipped( 'exec() est désactivée : impossible de lancer un processus PHP à part.' );
+		}
+		$script = dirname( __DIR__ ) . '/fixtures/command-runs/non-removable-buffer.php';
+		$sortie = [];
+		$code   = 0;
+
+		exec( escapeshellarg( PHP_BINARY ) . ' -n ' . escapeshellarg( $script ) . ' 2>&1', $sortie, $code );
+
+		$texte = implode( "\n", $sortie );
+		self::assertSame( 0, $code, $texte );
+		self::assertCount( 2, $sortie, $texte );
+		self::assertSame( 'ABC', $sortie[0], 'Les tampons du dessus sont vidés dans le tampon non supprimable.' );
+		$releve = json_decode( $sortie[1], true );
+		self::assertIsArray( $releve, $texte );
+		self::assertSame( 3, $releve['avant'] ?? null );
+		self::assertSame( 1, $releve['atteint'] ?? null, 'Arrêt au tampon non supprimable.' );
+		self::assertSame( [], $releve['notices_du_vidage'] ?? null, 'Aucune notice pendant le vidage.' );
+		// Témoin : sans le contrôle, PHP refuse de fermer ce tampon et lève une notice.
+		self::assertFalse( $releve['temoin_ferme'] ?? null );
+		self::assertNotEmpty( $releve['temoin_notices'] ?? null, 'Le relevé des notices du processus à part fonctionne.' );
+	}
+
+	/**
 	 * Coureur aux dépendances injectées, qui notent leurs appels au journal.
 	 *
 	 * @param (\Closure(): bool)|null                                        $terminator
@@ -642,7 +876,6 @@ final class AfterResponseRunnerTest extends TestCase {
 			}
 		);
 	}
-
 
 	/** Exécution acceptée, créneau pris : l'état laissé par la route d'acceptation. */
 	private function accepte( string $command = 'update_plugin' ): void {
@@ -700,5 +933,26 @@ final class AfterResponseRunnerTest extends TestCase {
 		$this->journal_php     = (string) tempnam( sys_get_temp_dir(), 'g2rd-journal-' );
 		$this->error_log_avant = (string) ini_get( 'error_log' );
 		ini_set( 'error_log', $this->journal_php );
+	}
+
+	/** La seule ligne écrite au journal PHP du test (capture_le_journal_php()). */
+	private function ligne_du_journal_php(): string {
+		$lignes = array_values( array_filter( explode( "\n", (string) file_get_contents( $this->journal_php ) ) ) );
+		self::assertCount( 1, $lignes, 'Une ligne au journal PHP.' );
+		self::assertStringContainsString( 'G2RD Connector', $lignes[0] );
+
+		return $lignes[0];
+	}
+
+	/**
+	 * Met la base en panne pour les écritures : `refuse` (wpdb rend false) ou `lève`
+	 * (exception sur le type d'écriture `$ecriture`).
+	 */
+	private function en_panne( string $panne, string $ecriture ): void {
+		if ( 'refuse' === $panne ) {
+			$this->table->fails = true;
+			return;
+		}
+		$this->table->throws_on = $ecriture;
 	}
 }

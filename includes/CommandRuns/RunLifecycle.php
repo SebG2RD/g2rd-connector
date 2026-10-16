@@ -118,11 +118,16 @@ final class RunLifecycle {
 	 *
 	 * @param array<string, mixed> $outcome Résultat, de la forme de la réponse de `/command`
 	 *                                      ({status, result, error, stray_output}).
+	 * @return bool Vrai si le résultat est écrit. Faux sinon : exécution qui n'accepte pas
+	 *              de résultat (non démarrée, déjà conclue), écritures concurrentes
+	 *              épuisées, ou base qui refuse. Une exécution en cours restée sans
+	 *              résultat est déclarée interrompue par le ramassage 600 s après son
+	 *              dernier signe de vie.
 	 */
-	public static function finish( string $command_id, array $outcome, int $now ): void {
+	public static function finish( string $command_id, array $outcome, int $now ): bool {
 		$state = 'done' === ( $outcome['status'] ?? null ) ? RunState::DONE : RunState::FAILED;
 
-		self::transition(
+		return self::transition(
 			$command_id,
 			static function ( array $record ) use ( $state, $outcome, $now ): ?array {
 				if ( ! RunState::accepts_late_result( $record['state'] ) ) {
