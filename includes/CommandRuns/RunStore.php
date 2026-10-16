@@ -26,6 +26,11 @@
  * {reason, error, recovery}). Un enregistrement réduit pour tenir dans la borne porte
  * `outcome.result_truncated` ou `interruption.recovery_truncated` (encode()).
  *
+ * Durée de vie (décision n° 7) : une exécution terminée est gardée 7 jours, 200
+ * enregistrements au plus ; une exécution non terminée n'est jamais purgée (purge(),
+ * branchée sur la tâche biquotidienne). Tout part à la désinstallation, créneau
+ * compris (delete_all()).
+ *
  * @package G2RD\Connector
  */
 
@@ -56,8 +61,35 @@ final class RunStore {
 	 */
 	public const ID_PATTERN = '/^[a-f0-9]{32}$/D';
 
+	/**
+	 * Conservation d'une exécution terminée : 7 jours après sa fin (décision n° 7), comme
+	 * les résultats de reprise (PendingOutcomes::TTL). Le temps de relire un site resté
+	 * injoignable plusieurs jours.
+	 */
+	public const RETENTION_SECONDS = 7 * 86400;
+
+	/**
+	 * Enregistrements gardés au plus. Au-delà, les plus anciennes exécutions terminées
+	 * partent d'abord ; une exécution non terminée compte, mais ne part jamais.
+	 */
+	public const MAX_RECORDS = 200;
+
 	/** Valeur « non autochargée » comprise par toutes les versions de WordPress prises en charge. */
 	private const AUTOLOAD_OFF = 'no';
+
+	/** Suppressions au plus par passage de la tâche biquotidienne (purge_now()). */
+	private const CRON_MAX_DELETIONS = 500;
+
+	/**
+	 * Options lues au plus par recherche (une purge, un lot de delete_all()). D'ordinaire :
+	 * 200 enregistrements et une ou deux exécutions en cours. La marge couvre une purge
+	 * longtemps empêchée ; au-delà, le passage suivant traite la suite. Borne aussi la
+	 * mémoire : un enregistrement fait 64 Ko au plus.
+	 */
+	private const SCAN_LIMIT = 500;
+
+	/** Garde-fou de delete_all() : 100 lots de 500, très au-delà de ce qu'un site peut accumuler. */
+	private const DELETE_ALL_MAX_BATCHES = 100;
 
 	/** Marque d'un message d'erreur coupé. */
 	private const ELLIPSIS = '…';
@@ -240,6 +272,115 @@ final class RunStore {
 	}
 
 	/**
+	 * Supprime les exécutions terminées depuis plus de 7 jours ; puis, s'il reste plus de
+	 * 200 enregistrements, les plus anciennes terminées jusqu'à revenir à 200. Au plus
+	 * `$max_deletions` suppressions, les plus anciennes d'abord.
+	 *
+	 * Âge d'une exécution terminée : depuis sa fin (`finished_at`) ; à défaut, depuis la
+	 * plus récente de ses dates connues (signe de vie, démarrage, acceptation).
+	 *
+	 * Jamais supprimés :
+	 *   - une exécution non terminée (acceptée, en cours, ou d'un état inconnu), quel que
+	 *     soit son âge : seul le ramassage la clôt ;
+	 *   - le créneau (`g2rd_cmdrun_slot`), et toute option du préfixe dont le nom n'est pas
+	 *     un numéro d'exécution ;
+	 *   - une valeur illisible : rien ne dit qu'elle est terminée, ni depuis quand (elle
+	 *     part à la désinstallation) ;
+	 *   - un enregistrement réécrit entre la lecture et la suppression (résultat tardif
+	 *     d'une exécution interrompue) : la suppression est conditionnelle, sur la valeur lue.
+	 *
+	 * Ménage seulement : si la base refuse la lecture ou une suppression, le passage
+	 * s'arrête sans erreur, et le suivant reprend.
+	 *
+	 * @param int $now           Heure courante (secondes Unix).
+	 * @param int $max_deletions Suppressions au plus : 500 pour la tâche biquotidienne ;
+	 *                           20 prévues à chaque acceptation (§ 3.2 de la spécification).
+	 * @return int Nombre d'enregistrements supprimés.
+	 */
+	public static function purge( int $now, int $max_deletions ): int {
+		if ( $max_deletions <= 0 ) {
+			return 0;
+		}
+
+		$records  = 0;
+		$finished = [];
+		foreach ( self::scan() as [ $name, $raw ] ) {
+			if ( ! self::is_valid_id( substr( $name, strlen( self::OPTION_PREFIX ) ) ) ) {
+				continue;
+			}
+			$record = self::decode( $raw );
+			if ( null === $record ) {
+				continue;
+			}
+			++$records;
+			if ( RunState::is_terminal( $record['state'] ) ) {
+				$finished[] = [ self::finished_at( $record ), $name, $raw ];
+			}
+		}
+		// Les plus anciennes d'abord ; à date égale, par nom (ordre stable).
+		usort( $finished, static fn ( array $a, array $b ): int => [ $a[0], $a[1] ] <=> [ $b[0], $b[1] ] );
+
+		$deleted = 0;
+		foreach ( $finished as [ $finished_at, $name, $raw ] ) {
+			$expired = $now - $finished_at > self::RETENTION_SECONDS;
+			// Triées par âge : si celle-ci n'a ni 7 jours ni de place à libérer, les
+			// suivantes, plus récentes, non plus.
+			if ( $deleted >= $max_deletions || ( ! $expired && $records <= self::MAX_RECORDS ) ) {
+				break;
+			}
+			$result = self::delete_if_unchanged( $name, $raw );
+			if ( false === $result ) {
+				break;
+			}
+			$deleted += $result;
+			// Supprimée ici, ou réécrite ou supprimée entre-temps par un autre processus
+			// (purge simultanée) : elle ne compte plus pour la place à libérer. Une purge
+			// simultanée ne fait ainsi pas partir plus que l'excédent.
+			--$records;
+		}
+
+		return $deleted;
+	}
+
+	/**
+	 * Cible de la tâche biquotidienne (RestorePointPurgeJob::HOOK), branchée comme la purge
+	 * des tickets de connexion directe : 500 suppressions au plus par passage.
+	 */
+	public static function purge_now(): void {
+		self::purge( time(), self::CRON_MAX_DELETIONS );
+	}
+
+	/**
+	 * Supprime toutes les options du préfixe du site courant, lot après lot
+	 * (désinstallation) : les enregistrements, terminés ou non, lisibles ou non, et le
+	 * créneau. S'arrête quand une recherche ne laisse plus rien à retirer, ou dès que la
+	 * base refuse une suppression (pas de boucle sans fin).
+	 *
+	 * @return int Nombre d'options supprimées.
+	 */
+	public static function delete_all(): int {
+		$total = 0;
+		for ( $batch = 0; $batch < self::DELETE_ALL_MAX_BATCHES; $batch++ ) {
+			$deleted = 0;
+			foreach ( self::scan() as [ $name, $raw ] ) {
+				$result = self::delete_if_unchanged( $name, $raw );
+				if ( false === $result ) {
+					return $total + $deleted;
+				}
+				$deleted += $result;
+			}
+			$total += $deleted;
+			// Recherche vide, ou options toutes réécrites entre-temps : rien n'a bougé,
+			// une recherche de plus ne ferait pas mieux.
+			if ( 0 === $deleted ) {
+				break;
+			}
+		}
+
+		return $total;
+	}
+
+	/**
 	 * Encode un enregistrement en JSON, borné.
 	 *
 	 * Les messages d'erreur et l'étape sont coupés à 2 Ko. Si l'ensemble dépasse 64 Ko, la
@@ -405,6 +546,77 @@ final class RunStore {
 		}
 
 		return substr( $error, 0, $cut ) . self::ELLIPSIS;
+	}
+
+	/**
+	 * Options dont le nom commence par le préfixe (enregistrements, créneau…), SCAN_LIMIT
+	 * au plus, avec leur valeur brute. Vide si la base refuse la lecture.
+	 *
+	 * Le « _ » du préfixe est échappé : non échappé, il vaudrait n'importe quel caractère
+	 * dans LIKE, et la recherche attraperait les options d'une autre extension.
+	 *
+	 * @return list<array{0: string, 1: string}> [ nom, valeur brute ].
+	 */
+	private static function scan(): array {
+		global $wpdb;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- recherche par préfixe d'options non autochargées, jamais lues par get_option() : aucun cache pertinent.
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE %s LIMIT %d",
+				$wpdb->esc_like( self::OPTION_PREFIX ) . '%',
+				self::SCAN_LIMIT
+			),
+			ARRAY_A
+		);
+
+		$found = [];
+		foreach ( (array) $rows as $row ) {
+			if ( is_array( $row ) && is_string( $row['option_name'] ?? null ) && is_string( $row['option_value'] ?? null ) ) {
+				$found[] = [ $row['option_name'], $row['option_value'] ];
+			}
+		}
+
+		return $found;
+	}
+
+	/**
+	 * Supprime une option seulement si elle vaut encore `$raw` (la valeur lue).
+	 *
+	 * @return int|false 1 si elle est supprimée ; 0 si elle a été réécrite ou supprimée
+	 *                   entre-temps ; false si la base refuse.
+	 */
+	private static function delete_if_unchanged( string $name, string $raw ): int|false {
+		global $wpdb;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- suppression conditionnelle voulue (delete_option ne compare pas la valeur) : un enregistrement réécrit entre la lecture et la suppression est gardé ; cache vidé juste après.
+		$deleted = $wpdb->query(
+			$wpdb->prepare(
+				"DELETE FROM {$wpdb->options} WHERE option_name = %s AND option_value = %s",
+				$name,
+				$raw
+			)
+		);
+		wp_cache_delete( $name, 'options' );
+
+		return false === $deleted ? false : (int) $deleted;
+	}
+
+	/**
+	 * Date à partir de laquelle compte l'âge d'une exécution terminée : sa fin ; à défaut,
+	 * la plus récente de ses dates connues (le dernier signe de vie suit le démarrage, qui
+	 * suit l'acceptation). Sans aucune date, 0 : la plus ancienne possible.
+	 *
+	 * @param array<string, mixed> $record
+	 */
+	private static function finished_at( array $record ): int {
+		foreach ( [ 'finished_at', 'alive_at', 'started_at', 'accepted_at' ] as $key ) {
+			if ( is_int( $record[ $key ] ?? null ) ) {
+				return $record[ $key ];
+			}
+		}
+
+		return 0;
 	}
 
 	private static function is_valid_id( string $command_id ): bool {

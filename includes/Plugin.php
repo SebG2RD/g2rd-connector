@@ -10,6 +10,7 @@ declare(strict_types=1);
 namespace G2RD\Connector;
 
 use G2RD\Connector\Admin\Page;
+use G2RD\Connector\CommandRuns\RunStore;
 use G2RD\Connector\Cron\HeartbeatJob;
 use G2RD\Connector\Cron\Phase;
 use G2RD\Connector\Cron\RestorePointPurgeJob;
@@ -154,6 +155,12 @@ final class Plugin {
 		// n'en dépend pas : expiration contrôlée avant l'usage unique).
 		( new Endpoint() )->register();
 		add_action( RestorePointPurgeJob::HOOK, [ UsedTickets::class, 'purge_now' ] );
+		// Comptes rendus des commandes exécutées en arrière-plan (1.14) : gardés 7 jours,
+		// 200 au plus, purgés sur la même tâche biquotidienne. Branchement à part plutôt
+		// qu'une étape de RestorePointPurgeJob::purge(), qui ne fait rien pendant une mise
+		// à jour protégée vivante. Branché même si les commandes à distance sont coupées :
+		// ce qui a été reçu avant part quand même.
+		add_action( RestorePointPurgeJob::HOOK, [ RunStore::class, 'purge_now' ] );
 
 		// Endpoints REST sécurisés Bearer SiteToken (consommés par le manager).
 		add_action( 'rest_api_init', [ new SnapshotController(), 'register' ] );

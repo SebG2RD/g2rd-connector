@@ -5,13 +5,16 @@ declare(strict_types=1);
 namespace G2RD\Connector\Tests;
 
 use Brain\Monkey\Functions;
+use G2RD\Connector\CommandRuns\RunStore;
 use G2RD\Connector\Cron\Phase;
 use G2RD\Connector\Cron\RestorePointPurgeJob;
 use G2RD\Connector\Events\LoginFailedThrottle;
 use G2RD\Connector\Rest\DbHealth;
 use G2RD\Connector\Rollback\UpdateTransaction;
+use G2RD\Connector\Tests\CommandRuns\FakeOptionsTable;
 use G2RD\Connector\Tests\DirectLogin\FakeWpdb;
 use G2RD\Connector\Updates\WporgAnswers;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Désinstallation (uninstall.php) : ce que l'allègement du connecteur a ajouté est
@@ -167,6 +170,77 @@ final class UninstallTest extends TestCase {
 		$this->uninstall();
 
 		self::assertContains( WporgAnswers::OPTION, $deleted );
+	}
+
+	/**
+	 * Site simple, puis multisite de deux blogs.
+	 *
+	 * @return array<string, array{0: bool}>
+	 */
+	public static function sites(): array {
+		return [
+			'site simple' => [ false ],
+			'multisite'   => [ true ],
+		];
+	}
+
+	/**
+	 * Exécutions en arrière-plan (cf. CommandRuns\RunStore) : les enregistrements, terminés
+	 * ou non, et le créneau sont retirés de la table d'options du site, et de celle de
+	 * chaque blog en multisite (chaque blog a la sienne). Les options des autres
+	 * extensions restent.
+	 */
+	#[DataProvider( 'sites' )]
+	public function test_les_executions_et_le_creneau_sont_supprimes( bool $multisite ): void {
+		Functions\when( 'is_multisite' )->justReturn( $multisite );
+		$avant = [
+			RunStore::option_name( str_repeat( 'a', 32 ) ) => [
+				'value'    => '{"command_id":"' . str_repeat( 'a', 32 ) . '","state":"done"}',
+				'autoload' => 'no',
+			],
+			RunStore::option_name( str_repeat( 'b', 32 ) ) => [
+				'value'    => '{"command_id":"' . str_repeat( 'b', 32 ) . '","state":"running"}',
+				'autoload' => 'no',
+			],
+			'g2rd_cmdrun_slot'                             => [
+				'value'    => '{"command_id":"' . str_repeat( 'b', 32 ) . '"}',
+				'autoload' => 'no',
+			],
+			'option_d_une_autre_extension'                 => [
+				'value'    => 'gardée',
+				'autoload' => 'yes',
+			],
+		];
+		$tables = [];
+		foreach ( [ 1, 2 ] as $blog_id ) {
+			$tables[ $blog_id ]       = new FakeOptionsTable();
+			$tables[ $blog_id ]->rows = $avant;
+		}
+		// Chaque blog a sa table d'options : changer de blog, c'est changer de table.
+		$GLOBALS['wpdb'] = $tables[1];
+		Functions\when( 'switch_to_blog' )->alias(
+			function ( int $blog_id ) use ( $tables ): bool {
+				$this->blog      = $blog_id;
+				$GLOBALS['wpdb'] = $tables[ $blog_id ];
+				return true;
+			}
+		);
+		Functions\when( 'restore_current_blog' )->alias(
+			function () use ( $tables ): bool {
+				$this->blog      = 1;
+				$GLOBALS['wpdb'] = $tables[1];
+				return true;
+			}
+		);
+
+		$this->uninstall();
+
+		self::assertSame( [ 'option_d_une_autre_extension' ], array_keys( $tables[1]->rows ), 'Blog courant.' );
+		self::assertSame(
+			$multisite ? [ 'option_d_une_autre_extension' ] : array_keys( $avant ),
+			array_keys( $tables[2]->rows ),
+			$multisite ? 'Second blog du réseau.' : 'Hors multisite, aucune autre table n\'est touchée.'
+		);
 	}
 
 	private function uninstall(): void {

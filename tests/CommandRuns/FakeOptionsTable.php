@@ -14,6 +14,8 @@ namespace G2RD\Connector\Tests\CommandRuns;
  *     seulement si la valeur en base est encore celle attendue ;
  *   - « DELETE … WHERE option_name = %s AND option_value = %s », sur le même principe ;
  *   - « SELECT option_name, option_value … WHERE option_name LIKE %s LIMIT %d ».
+ * Plus la recherche de noms des tickets consommés (« SELECT option_name … LIKE »), que
+ * uninstall.php lance avant de retirer les exécutions.
  *
  * Toute autre requête, ou une requête qui n'est pas passée par prepare(), lève une
  * exception : le test échoue au lieu de valider une requête que la vraie base lirait
@@ -174,15 +176,47 @@ final class FakeOptionsTable {
 		}
 
 		[ $pattern, $limit ] = $args;
-		$names               = array_keys( $this->rows );
+		return $this->find( (string) $pattern, (int) $limit );
+	}
+
+	/**
+	 * Recherche de noms par préfixe (« SELECT option_name … WHERE option_name LIKE %s
+	 * LIMIT %d ») : celle des tickets de connexion directe consommés
+	 * (DirectLogin\UsedTickets::purge()), que uninstall.php lance avant de retirer les
+	 * exécutions (cf. UninstallTest).
+	 *
+	 * @return list<string>
+	 */
+	public function get_col( string $sql ): array {
+		[ $template, $args ] = $this->receive( $sql );
+
+		if ( ! $this->is( 'SELECT option_name FROM {options} WHERE option_name LIKE %s LIMIT %d', $template ) ) {
+			throw new \LogicException( 'Recherche non prévue par le faux $wpdb : ' . $sql );
+		}
+
+		if ( $this->read_refused() ) {
+			return [];
+		}
+
+		[ $pattern, $limit ] = $args;
+		return array_column( $this->find( (string) $pattern, (int) $limit ), 'option_name' );
+	}
+
+	/**
+	 * Lignes dont le nom suit le motif LIKE, `$limit` au plus, dans l'ordre des noms.
+	 *
+	 * @return list<array{option_name: string, option_value: string}>
+	 */
+	private function find( string $pattern, int $limit ): array {
+		$names = array_keys( $this->rows );
 		sort( $names, SORT_STRING );
 
 		$found = [];
 		foreach ( $names as $name ) {
-			if ( count( $found ) >= (int) $limit ) {
+			if ( count( $found ) >= $limit ) {
 				break;
 			}
-			if ( 1 === preg_match( self::like_to_regex( (string) $pattern ), $name ) ) {
+			if ( 1 === preg_match( self::like_to_regex( $pattern ), $name ) ) {
 				$found[] = [
 					'option_name'  => $name,
 					'option_value' => $this->rows[ $name ]['value'],

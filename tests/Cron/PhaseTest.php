@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace G2RD\Connector\Tests\Cron;
 
 use Brain\Monkey\Functions;
+use G2RD\Connector\CommandRuns\RunStore;
 use G2RD\Connector\Cron\HeartbeatJob;
 use G2RD\Connector\Cron\Phase;
 use G2RD\Connector\Cron\RestorePointPurgeJob;
@@ -334,6 +335,24 @@ final class PhaseTest extends TestCase {
 		Plugin::instance()->boot();
 
 		self::assertNotFalse( has_action( 'http_api_debug', [ WporgAnswers::class, 'record' ] ) );
+	}
+
+	/**
+	 * Même démarrage d'un site enrôlé : la purge des exécutions en arrière-plan (cf.
+	 * CommandRuns\RunStore) part avec la tâche biquotidienne, comme celle des tickets de
+	 * connexion directe, sans toucher à RestorePointPurgeJob::purge().
+	 */
+	public function test_le_demarrage_d_un_site_enrole_branche_la_purge_des_executions(): void {
+		Functions\when( 'is_admin' )->justReturn( false );
+		Functions\when( 'wp_load_alloptions' )->justReturn( [ Settings::OPTION_KEY => 'autochargée' ] );
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => Settings::encrypt_token( 'jeton-du-site', 'v1' ),
+		];
+
+		Plugin::instance()->boot();
+
+		self::assertNotFalse( has_action( RestorePointPurgeJob::HOOK, [ RunStore::class, 'purge_now' ] ) );
 	}
 
 	/** Site pas encore enrôlé : rien n'est écrit, donc rien n'est écouté (guideline 7). */

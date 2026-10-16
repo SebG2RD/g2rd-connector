@@ -71,4 +71,16 @@ final class FakeWpdb {
 			$limit
 		);
 	}
+
+	/**
+	 * Recherche des exécutions en arrière-plan (CommandRuns\RunStore::delete_all()), que
+	 * uninstall.php lance après la purge des tickets : ce faux n'en garde aucune
+	 * (cf. tests/CommandRuns/FakeOptionsTable.php pour une table qui en garde).
+	 *
+	 * @return list<array{option_name: string, option_value: string}>
+	 */
+	public function get_results( string $query, string $output = 'OBJECT' ): array {
+		$this->queries[] = $query;
+		return [];
+	}
 }
