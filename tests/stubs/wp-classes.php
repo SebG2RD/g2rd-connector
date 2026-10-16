@@ -82,6 +82,14 @@ if ( ! class_exists( 'WP_REST_Request' ) ) {
 	}
 }
 
+if ( ! class_exists( 'WP_REST_Server' ) ) {
+	/** Doublure : les méthodes HTTP des routes, rien d'autre. */
+	class WP_REST_Server {
+		public const READABLE  = 'GET';
+		public const CREATABLE = 'POST';
+	}
+}
+
 if ( ! class_exists( 'WP_User' ) ) {
 	/** Doublure : seules les propriétés lues par le connecteur. */
 	class WP_User {
