@@ -25,6 +25,7 @@ final class PageTest extends TestCase {
 		Functions\when( 'wp_unslash' )->returnArg();
 		Functions\when( 'sanitize_key' )->alias( static fn ( string $key ): string => strtolower( $key ) );
 		Functions\when( 'settings_errors' )->justReturn( null );
+		Functions\when( 'get_bloginfo' )->justReturn( '7.1.3' );
 		Functions\when( 'checked' )->alias(
 			static function ( $checked, $current = true, bool $display = true ): string {
 				$result = (string) $checked === (string) $current ? " checked='checked'" : '';
@@ -55,6 +56,31 @@ final class PageTest extends TestCase {
 
 		self::assertStringContainsString( 'name="g2rd_allow_direct_login"', $html );
 		self::assertDoesNotMatchRegularExpression( '/name="g2rd_allow_direct_login" value="1"\s+checked/', $html );
+	}
+
+	/**
+	 * WordPress 7 dessine la coche en blanc sur la couleur d'accent : la feuille du
+	 * connecteur ne redonne ce fond aux cases cochées que sous la classe « --wp7 ».
+	 * Sous WordPress 6, la coche est colorée sur fond blanc : peindre le fond la
+	 * cacherait, d'où l'absence de la classe.
+	 */
+	public function test_la_page_porte_la_classe_wp7_sous_wordpress_7(): void {
+		foreach ( [ '7.0-alpha-61234', '7.0-beta1', '7.0', '7.1.3' ] as $version ) {
+			Functions\when( 'get_bloginfo' )->justReturn( $version );
+
+			self::assertStringContainsString( 'class="wrap g2rd-connector-wrap g2rd-connector-wrap--wp7"', $this->render(), $version );
+		}
+	}
+
+	public function test_la_page_ne_porte_pas_la_classe_wp7_sous_wordpress_6(): void {
+		foreach ( [ '6.4', '6.9.4', '6.9.9' ] as $version ) {
+			Functions\when( 'get_bloginfo' )->justReturn( $version );
+
+			$html = $this->render();
+
+			self::assertStringContainsString( 'class="wrap g2rd-connector-wrap"', $html, $version );
+			self::assertStringNotContainsString( 'g2rd-connector-wrap--wp7', $html, $version );
+		}
 	}
 
 	public function test_enregistrer_sans_la_case_la_decoche(): void {

@@ -135,6 +135,23 @@ final class Page {
 		);
 	}
 
+	/**
+	 * Classes du conteneur de la page autonome.
+	 *
+	 * « --wp7 » sous WordPress 7 et plus : WordPress y dessine la coche en blanc sur
+	 * la couleur d'accent, et un thème qui donne un fond blanc à toutes les cases de
+	 * l'administration la rend invisible ; la feuille du connecteur redonne ce fond
+	 * sous cette classe seulement (assets/admin/src/style.css). Sous WordPress 6, la
+	 * coche est colorée sur fond blanc : peindre le fond la cacherait.
+	 */
+	private static function wrap_class(): string {
+		$classes = 'wrap g2rd-connector-wrap';
+		if ( version_compare( (string) get_bloginfo( 'version' ), '7.0-alpha', '>=' ) ) {
+			$classes .= ' g2rd-connector-wrap--wp7';
+		}
+		return $classes;
+	}
+
 	public function render_standalone_page(): void {
 		if ( ! current_user_can( self::CAPABILITY ) ) {
 			return;
@@ -146,7 +163,7 @@ final class Page {
 		// Déconnecter), mais ne parle plus au manager. On montre l'état réel.
 		$problem = $enrolled ? self::token_problem( Settings::token_state() ) : null;
 		?>
-		<div class="wrap g2rd-connector-wrap">
+		<div class="<?php echo esc_attr( self::wrap_class() ); ?>">
 			<h1><?php echo esc_html__( 'G2RD Connector', 'g2rd-connector' ); ?></h1>
 			<p class="description">
 				<?php echo esc_html__( 'Lie ce site WordPress au tableau de bord centralisé G2RD WP Manager.', 'g2rd-connector' ); ?>

@@ -83,11 +83,13 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 
 = Unreleased =
 
-* **Fix: checked boxes are visible again on the settings page.** WordPress 7.x draws the check mark
-  in white on the admin accent color; an admin stylesheet that gives every checkbox a white
-  background (seen with the G2RD theme) made the mark invisible, so enabled settings looked
-  unchecked. The settings page now restores the accent background of checked boxes, on that page
-  only. Settings were never changed: only their display was wrong.
+* **Fix: checked boxes are visible again on the standalone settings page (WordPress 7.x).**
+  WordPress 7.x draws the check mark in white on the admin accent color; an admin stylesheet
+  that gives every checkbox a white background (seen with the G2RD theme) made the mark
+  invisible, so enabled settings looked unchecked. On WordPress 7.x only, the settings page now
+  restores the accent background of checked boxes (WordPress 6.x draws a colored mark on a
+  white box and is left as is). The display bug itself never changed a setting; if a box that
+  looked empty was clicked and the page saved, review the settings once.
 
 = 1.14.0-rc.2 =
 
