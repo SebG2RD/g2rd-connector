@@ -480,9 +480,6 @@ final class AfterResponseRunnerTest extends TestCase {
 		self::assertStringContainsString( '« update_plugin » n’a pas été exécutée', $erreur );
 		self::assertStringContainsString( 'Rien n’a été modifié', $erreur );
 		self::assertStringContainsString( 'Cause probable', $erreur );
-		// Seul cas réel aujourd'hui : la sonde, admise par la route mais pas encore
-		// branchée sur l'exécuteur par défaut (tâche 23).
-		self::assertStringContainsString( 'async_probe', $erreur );
 		self::assertStringContainsString( 'Action', $erreur );
 		self::assertStringContainsString( 'le signaler à l’équipe G2RD', $erreur );
 	}
@@ -762,11 +759,13 @@ final class AfterResponseRunnerTest extends TestCase {
 	}
 
 	/**
-	 * `_envelope` ou `_jsonp` dans l'adresse (jamais envoyés par la plateforme) :
-	 * WordPress écrit lui-même la réponse, sous une autre forme, après le filtre. Le
-	 * connecteur ne prend pas la main : rien d'écrit, réponse non terminée (elle serait
-	 * perdue), et la commande s'exécute dans le filtre, par le même chemin, jamais dans une
-	 * fonction d'arrêt.
+	 * `_jsonp` dans l'adresse (jamais envoyé par la plateforme) : WordPress écrit lui-même
+	 * la réponse, en appel de fonction, après le filtre. `_envelope` avec une réponse non
+	 * enveloppée : exclusion par prudence seulement (WordPress applique l'enveloppe avant le
+	 * filtre, cf. test_reponse_enveloppee_par_wordpress_rien_n_est_execute). Le connecteur
+	 * ne prend pas la main : rien d'écrit, réponse non terminée (elle serait perdue), et la
+	 * commande s'exécute dans le filtre, par le même chemin, jamais dans une fonction
+	 * d'arrêt.
 	 *
 	 * @return array<string, array{array<string, string>}>
 	 */
@@ -791,6 +790,216 @@ final class AfterResponseRunnerTest extends TestCase {
 		self::assertSame( [ 'commande update_core' ], $this->journal );
 		self::assertSame( RunState::DONE, $this->execution()['state'] ?? null );
 		self::assertNull( ExecutionSlot::holder() );
+	}
+
+	/**
+	 * `_envelope` dans l'adresse (jamais envoyé par la plateforme) : WordPress applique
+	 * l'enveloppe AVANT le filtre (WP_REST_Server::serve_request(), envelope_response()).
+	 * La réponse reçue est enveloppée : statut 200, numéro dans `body`. Ce n'est pas la
+	 * réponse « reçue » de l'exécution : rien ne s'exécute, le créneau est rendu, et une
+	 * ligne au journal PHP du site dit pourquoi (choix documenté dans l'en-tête de
+	 * AfterResponseRunner).
+	 */
+	public function test_reponse_enveloppee_par_wordpress_rien_n_est_execute(): void {
+		$this->capture_le_journal_php();
+		$this->accepte();
+		$runner     = $this->coureur();
+		$enveloppee = new WP_REST_Response(
+			[
+				'body'    => self::ACCEPTEE,
+				'status'  => 202,
+				'headers' => [],
+			],
+			200
+		);
+		$runner->queue( self::ID, 'update_core', null );
+
+		self::assertFalse( $runner->maybe_serve( false, $enveloppee, $this->requete( [ '_envelope' => '1' ] ), null ), 'WordPress sert la réponse enveloppée.' );
+
+		self::assertSame( [], $this->journal, 'Ni écriture, ni fin de réponse, ni commande.' );
+		self::assertSame( '', $this->ecrit );
+		self::assertNull( ExecutionSlot::holder(), 'Créneau rendu.' );
+		self::assertSame( RunState::ACCEPTED, $this->execution()['state'] ?? null );
+		$ligne = $this->ligne_du_journal_php();
+		self::assertStringContainsString( self::ID, $ligne );
+		self::assertStringContainsString( '(réponse de statut 200)', $ligne );
+		self::assertStringContainsString( '_envelope', $ligne );
+	}
+
+	/**
+	 * Une autre extension a remplacé la réponse après la route (pare-feu, extension de
+	 * sécurité : filtres `rest_request_after_callbacks`, `rest_post_dispatch`), ou la réponse
+	 * est un 202 qui n'est pas celui de cette exécution. La plateforme ne reçoit pas
+	 * « reçue » et conclut que rien n'a été lancé : elle relance, ou repasse par `/command`.
+	 * Rien ne démarre donc (sinon : double exécution, ou statut faux) : ni écriture, ni fin
+	 * de réponse, ni commande. WordPress sert la réponse telle quelle, le créneau est rendu,
+	 * une ligne au journal PHP du site dit pourquoi, sans le contenu de la réponse. Le
+	 * ramassage déclare l'exécution abandonnée 120 s après son acceptation : « rien n'a été
+	 * modifié » est vrai.
+	 *
+	 * @return array<string, array{mixed, string}>
+	 */
+	public static function reponses_qui_ne_sont_pas_la_sienne(): array {
+		return [
+			'403 d\'un pare-feu'               => [
+				new WP_REST_Response(
+					[
+						'code'    => 'forbidden',
+						'message' => 'Accès refusé par le pare-feu.',
+						'data'    => [ 'status' => 403 ],
+					],
+					403
+				),
+				'réponse de statut 403',
+			],
+			'401 d\'une extension de sécurité' => [
+				new WP_REST_Response(
+					[
+						'code'    => 'rest_not_logged_in',
+						'message' => 'Vous n’êtes pas connecté.',
+						'data'    => [ 'status' => 401 ],
+					],
+					401
+				),
+				'réponse de statut 401',
+			],
+			'202 d\'une autre opération'       => [
+				new WP_REST_Response( [ 'command_id' => self::AUTRE ] + self::ACCEPTEE, 202 ),
+				'réponse 202 d’une autre opération',
+			],
+			'202 sans numéro'                  => [
+				new WP_REST_Response( [ 'state' => 'accepted' ], 202 ),
+				'réponse 202 sans le numéro de l’opération',
+			],
+			'réponse illisible'                => [
+				new class( self::ACCEPTEE, 202 ) extends WP_REST_Response {
+					public function get_data(): mixed {
+						throw new \LogicException( 'Données illisibles.' );
+					}
+				},
+				'réponse illisible',
+			],
+			'réponse d\'un autre type'         => [ null, 'réponse d’un autre type : null' ],
+		];
+	}
+
+	#[DataProvider( 'reponses_qui_ne_sont_pas_la_sienne' )]
+	public function test_reponse_qui_n_est_pas_la_sienne_rien_n_est_execute( mixed $reponse, string $decrite ): void {
+		$this->capture_le_journal_php();
+		$this->accepte();
+		$executions = 0;
+		$runner     = $this->coureur(
+			executor: static function () use ( &$executions ): array {
+				++$executions;
+				return [
+					'status' => 'done',
+					'result' => [],
+				];
+			}
+		);
+		$runner->queue( self::ID, 'update_core', null );
+
+		self::assertFalse( $runner->maybe_serve( false, $reponse, $this->requete(), null ), 'WordPress sert la réponse telle quelle.' );
+
+		self::assertSame( 0, $executions, 'Rien n\'est exécuté.' );
+		self::assertSame( [], $this->journal, 'Ni écriture, ni fin de réponse.' );
+		self::assertSame( 0, ignore_user_abort() );
+		self::assertNull( ExecutionSlot::holder(), 'Créneau rendu.' );
+		self::assertSame( [ false, false, false ], self::crochets_du_signe_de_vie() );
+		$execution = $this->execution();
+		self::assertSame( RunState::ACCEPTED, $execution['state'] ?? null );
+		self::assertNull( $execution['started_at'] ?? null );
+		$ligne = $this->ligne_du_journal_php();
+		self::assertStringContainsString( self::ID . ' (commande update_core) n’a pas été exécutée', $ligne );
+		self::assertStringContainsString( '(' . $decrite . ')', $ligne );
+		self::assertStringContainsString( 'rien n’a été modifié', $ligne );
+		self::assertStringContainsString( 'Cause probable', $ligne );
+		self::assertStringContainsString( 'Action', $ligne );
+		self::assertStringNotContainsString( 'Accès refusé', $ligne, 'Jamais le contenu de la réponse.' );
+
+		RunReaper::sweep_one( self::ID, self::NOW + RunReaper::ACCEPTED_TIMEOUT_SECONDS + 1 );
+		self::assertSame( RunState::ABANDONED, $this->execution()['state'] ?? null, 'Abandonnée 120 s après son acceptation.' );
+		self::assertSame( 0, $executions );
+	}
+
+	/**
+	 * Un filtre précédent a servi la réponse (`$served` vrai), mais la réponse qu'il a reçue
+	 * n'est pas celle de cette exécution : rien ne démarre non plus, et la valeur reçue est
+	 * rendue telle quelle.
+	 */
+	public function test_reponse_deja_servie_qui_n_est_pas_la_sienne_rien_n_est_execute(): void {
+		$this->capture_le_journal_php();
+		$this->accepte();
+		$runner = $this->coureur();
+		$runner->queue( self::ID, 'update_core', null );
+
+		self::assertTrue( $runner->maybe_serve( true, new WP_REST_Response( [ 'code' => 'forbidden' ], 403 ), $this->requete(), null ) );
+
+		self::assertSame( [], $this->journal, 'Ni fin de réponse, ni commande.' );
+		self::assertNull( ExecutionSlot::holder(), 'Créneau rendu.' );
+		self::assertSame( RunState::ACCEPTED, $this->execution()['state'] ?? null );
+		self::assertStringContainsString( '(réponse de statut 403)', $this->ligne_du_journal_php() );
+	}
+
+	/**
+	 * Un second appel à queue() avant la réponse (appelant fautif) ne remplace pas la
+	 * première exécution : elle s'exécute, seule, et rend son créneau. La seconde est
+	 * écartée avec une ligne au journal PHP du site, jamais sans trace.
+	 */
+	public function test_une_seconde_programmation_dans_la_meme_requete_est_ecartee(): void {
+		$this->capture_le_journal_php();
+		$this->accepte();
+		$runner = $this->coureur();
+		$runner->queue( self::ID, 'update_core', null );
+		$runner->queue( self::AUTRE, 'update_plugin', [ 'file' => 'akismet/akismet.php' ] );
+
+		self::assertTrue( $runner->maybe_serve( false, $this->reponse(), $this->requete(), null ) );
+
+		self::assertSame( [ 'réponse', 'fin de réponse', 'commande update_core' ], $this->journal, 'La première s\'exécute, seule.' );
+		self::assertSame( RunState::DONE, $this->execution()['state'] ?? null );
+		self::assertNull( ExecutionSlot::holder(), 'Créneau rendu.' );
+		$ligne = $this->ligne_du_journal_php();
+		self::assertStringContainsString( self::AUTRE . ' (commande update_plugin) n’a pas été programmée', $ligne );
+		self::assertStringContainsString( 'l’opération ' . self::ID . ' l’est déjà', $ligne );
+		self::assertStringContainsString( 'Cause probable', $ligne );
+		self::assertStringContainsString( 'Action', $ligne );
+	}
+
+	/**
+	 * Fin de réponse PAR DÉFAUT, en ligne de commande, où ni litespeed_finish_request() ni
+	 * fastcgi_finish_request() n'existent : les tampons de sortie sont vidés (la réponse
+	 * part sur la sortie), la fin rend faux, une ligne au journal PHP du site le dit, puis
+	 * la commande s'exécute quand même, une fois, et son résultat est écrit. Cette fin ferme
+	 * tous les tampons, ceux de PHPUnit compris : elle tourne dans un processus PHP à part,
+	 * sans php.ini (tests/fixtures/command-runs/default-finish.php).
+	 */
+	public function test_fin_de_reponse_par_defaut_en_ligne_de_commande(): void {
+		if ( ! function_exists( 'exec' ) ) {
+			self::markTestSkipped( 'exec() est désactivée : impossible de lancer un processus PHP à part.' );
+		}
+		$script = dirname( __DIR__ ) . '/fixtures/command-runs/default-finish.php';
+		$sortie = [];
+		$code   = 0;
+
+		exec( escapeshellarg( PHP_BINARY ) . ' -n ' . escapeshellarg( $script ) . ' 2>&1', $sortie, $code );
+
+		$texte = implode( "\n", $sortie );
+		self::assertSame( 0, $code, $texte );
+		self::assertCount( 2, $sortie, $texte );
+		self::assertSame( self::ID, json_decode( $sortie[0], true )['command_id'] ?? null, 'Réponse écrite sur la sortie, avant le relevé : ' . $texte );
+		$releve = json_decode( $sortie[1], true );
+		self::assertIsArray( $releve, $texte );
+		self::assertSame( [], $releve['notices'] ?? null, 'Aucune notice dans le processus à part.' );
+		self::assertTrue( $releve['servie'] ?? null, 'Réponse servie par le connecteur.' );
+		self::assertSame( 1, $releve['niveau_avant'] ?? null );
+		self::assertSame( 0, $releve['niveau_pendant_la_commande'] ?? null, 'Tous les tampons vidés avant la commande.' );
+		self::assertSame( 1, $releve['executions'] ?? null, 'Commande exécutée une fois, malgré la fin impossible.' );
+		self::assertSame( RunState::DONE, $releve['etat'] ?? null );
+		self::assertArrayHasKey( 'creneau', $releve );
+		self::assertNull( $releve['creneau'], 'Créneau rendu.' );
+		self::assertCount( 1, $releve['journal'] ?? [], $texte );
+		self::assertStringContainsString( 'G2RD Connector', $releve['journal'][0] );
+		self::assertStringContainsString( self::ID . ' (commande optimize_database) n’a pas pu être terminée', $releve['journal'][0] );
 	}
 
 	public function test_une_instance_partagee_pour_le_branchement(): void {
