@@ -95,6 +95,53 @@ final class WporgAnswersTest extends TestCase {
 		self::assertTrue( WporgAnswers::answered_within( 'themes', time(), self::MAX_AGE ) );
 	}
 
+	/**
+	 * Erreur réseau sur l'adresse en http:// : c'est le dernier essai de WordPress (repli
+	 * après un échec en https://, ou essai unique sans SSL), qui s'arrête ensuite sans rien
+	 * écrire (wp-includes/update.php, WordPress 6.9.4). L'amorce tombe : un 200 qu'une
+	 * autre extension obtient ensuite d'update-check, dans la même requête PHP, ne reste pas
+	 * en attente et n'est pas emporté par l'écriture suivante du transient.
+	 *
+	 * @param list<string> $failed Adresses en échec, dans l'ordre des essais de WordPress.
+	 */
+	#[DataProvider( 'last_attempt_failures' )]
+	public function test_un_echec_du_dernier_essai_en_http_retire_l_amorce( string $transient, array $failed, string $other_url ): void {
+		self::write( $transient );
+		foreach ( $failed as $url ) {
+			self::failure( $url );
+		}
+		self::response( 200, $other_url );
+		self::write( $transient );
+
+		self::assertSame( [], $this->writes );
+	}
+
+	/** @return array<string, array{string, list<string>, string}> */
+	public static function last_attempt_failures(): array {
+		return [
+			'extensions, https puis http' => [
+				'update_plugins',
+				[ self::PLUGINS_URL, 'http://api.wordpress.org/plugins/update-check/1.1/' ],
+				self::PLUGINS_URL,
+			],
+			'thèmes, https puis http'     => [
+				'update_themes',
+				[ self::THEMES_URL, 'http://api.wordpress.org/themes/update-check/1.1/' ],
+				self::THEMES_URL,
+			],
+			'cœur, https puis http'       => [
+				'update_core',
+				[ self::CORE_URL, 'http://api.wordpress.org/core/version-check/1.7/?version=6.9.4&php=8.3' ],
+				self::CORE_URL,
+			],
+			'extensions, http seul'       => [
+				'update_plugins',
+				[ 'http://api.wordpress.org/plugins/update-check/1.1/' ],
+				'http://api.wordpress.org/plugins/update-check/1.1/',
+			],
+		];
+	}
+
 	public function test_le_coeur_compte_seulement_avec_des_offres(): void {
 		// Sans `offers`, wp_version_check() s'arrête sans rien écrire.
 		self::check( 200, self::CORE_URL, '{"translations":[]}' );

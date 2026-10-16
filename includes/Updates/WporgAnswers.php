@@ -41,9 +41,10 @@
  *  2. réponse (`http_api_debug`) : mise en attente seulement si la vérification est
  *     amorcée. Une réponse sans écriture du transient avant elle dans cette requête n'est
  *     pas celle d'une vérification de WordPress (autre extension) : ignorée. Une erreur
- *     réseau garde l'amorce (WordPress retente en http:// après un échec en https://) ;
- *     un code autre que 200 ou un 200 sans les données la retire (WordPress s'arrête, ou
- *     écrit un transient vide). Juste après, le filtre `http_response`, branché en
+ *     réseau en https:// garde l'amorce (WordPress retente en http://) ; en http://,
+ *     dernier essai de WordPress (repli, ou essai unique sans SSL), elle la retire, comme
+ *     un code autre que 200 ou un 200 sans les données (WordPress s'arrête, ou écrit un
+ *     transient vide). Juste après, le filtre `http_response`, branché en
  *     dernier, voit la réponse que WordPress lira : transformée par un autre filtre en
  *     autre chose qu'un 200 porteur des données, elle n'est plus en attente — WordPress
  *     n'écrira pas le transient, et elle ne doit pas être emportée par l'écriture d'avant
@@ -189,8 +190,16 @@ final class WporgAnswers {
 			return;
 		}
 		$check = self::check_of( $url );
-		if ( null === $check || ! is_array( $response ) ) {
-			// Erreur réseau (WP_Error) : l'amorce reste, WordPress retente en http://.
+		if ( null === $check ) {
+			return;
+		}
+		if ( ! is_array( $response ) ) {
+			// Erreur réseau (WP_Error). En https://, l'amorce reste : WordPress retente en
+			// http://. En http://, c'était son dernier essai (repli, ou essai unique sans
+			// SSL) : il s'arrête sans rien écrire, l'amorce tombe.
+			if ( 'http' === strtolower( (string) wp_parse_url( $url, PHP_URL_SCHEME ) ) ) {
+				unset( self::$primed[ $check ] );
+			}
 			return;
 		}
 		if ( 200 !== self::status_of( $response ) || ! self::carries( $response, self::ANSWER_KEYS[ $check ] ) ) {
