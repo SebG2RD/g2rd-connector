@@ -6,6 +6,7 @@ namespace G2RD\Connector\Tests\Admin;
 
 use Brain\Monkey\Functions;
 use G2RD\Connector\Admin\Page;
+use G2RD\Connector\BootData;
 use G2RD\Connector\Settings;
 use G2RD\Connector\Tests\TestCase;
 
@@ -176,6 +177,38 @@ final class PageTest extends TestCase {
 			[ [ 'options.php', 'G2RD Connector', 'G2RD Connector', 'manage_options', Page::MENU_SLUG, [ $page, 'render_standalone_page' ] ] ],
 			$submenu_pages
 		);
+	}
+
+	/**
+	 * Métadonnées de l'onglet lues par la console du thème dans le filtre. L'icône
+	 * est un nom du jeu de la console, « cloud » : le thème 1.39 en fait la classe
+	 * « dashicons-cloud », le thème 1.41 la prend dans son jeu interne (toute autre
+	 * valeur y devient « plug »). Les onglets d'autres extensions sont conservés.
+	 */
+	public function test_l_onglet_de_la_console_porte_ses_metadonnees(): void {
+		Functions\when( 'get_site_option' )->justReturn( false );
+		Functions\when( 'rest_url' )->alias( static fn ( string $path = '' ): string => 'https://site.test/wp-json/' . $path );
+		Functions\when( 'wp_create_nonce' )->justReturn( 'nonce' );
+		$autre = [
+			'key'   => 'facturation',
+			'label' => 'Facturation',
+		];
+
+		$tabs = ( new Page() )->register_as_theme_tab( [ $autre ] );
+
+		self::assertCount( 2, $tabs );
+		self::assertSame( $autre, $tabs[0] );
+		self::assertSame(
+			[
+				'key'         => 'connector',
+				'label'       => 'Manager G2RD',
+				'description' => 'Connexion au tableau de bord centralisé G2RD WP Manager.',
+				'icon'        => 'cloud',
+				'mount_id'    => 'g2rd-connector-tab-root',
+			],
+			array_diff_key( $tabs[1], [ 'data' => true ] )
+		);
+		self::assertSame( BootData::build(), $tabs[1]['data'] );
 	}
 
 	/**

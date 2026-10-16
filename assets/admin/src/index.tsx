@@ -2,9 +2,15 @@
  * G2RD Connector — Admin React app
  *
  * Deux modes de montage :
- *  1. Tab dans Options G2RD (thème g2rd-theme ≥ v1.19) → s'enregistre via
- *     window.G2RDOptions.registerTab() exposé par le patch thème.
- *  2. Page standalone (menu top-level) → monte sur #g2rd-connector-root.
+ *  1. Tab dans Options G2RD (thème parent g2rd-theme ≥ v1.19) → s'enregistre via
+ *     window.G2RDOptions.registerTab() exposé par le patch thème. La console lit
+ *     libellé, description et icône dans le filtre PHP (Page::register_as_theme_tab) ;
+ *     ceux passés ici n'en sont que le double.
+ *  2. Page standalone (menu top-level, ou page de secours hors menu du mode
+ *     onglet) → monte sur #g2rd-connector-root si la page porte ce conteneur.
+ *     Aujourd'hui elle n'en porte pas : ces pages gardent le formulaire PHP
+ *     (Page::render_standalone_page), et ce script n'y apporte que la feuille de
+ *     style (correctif des cases cochées).
  */
 
 import { createRoot, StrictMode } from '@wordpress/element';
@@ -78,7 +84,8 @@ interface ExternalTab {
 	label: string;
 	description?: string;
 	icon?: string;
-	mount: ( container: HTMLElement, data: ConnectorBootData ) => void;
+	/** Rend la fonction de nettoyage, appelée par la console quand on quitte l'onglet. */
+	mount: ( container: HTMLElement, data: ConnectorBootData ) => () => void;
 }
 
 const STANDALONE_ROOT_ID = 'g2rd-connector-root';
@@ -96,6 +103,51 @@ function mountStandalone(): void {
 	);
 }
 
+/**
+ * Racine React de chaque conteneur d'onglet, et démontage en attente.
+ *
+ * La console du thème appelle le nettoyage depuis un effet React, pendant son
+ * propre rendu : un root.unmount() immédiat y est refusé par React (« Attempted
+ * to synchronously unmount a root while React was already rendering »). Le
+ * démontage est donc remis à la tâche suivante ; si la console remonte l'onglet
+ * dans le même conteneur avant (StrictMode), la racine est reprise au lieu d'en
+ * créer une seconde sur ce conteneur.
+ */
+const tabRoots = new WeakMap<
+	HTMLElement,
+	{ root: ReturnType< typeof createRoot >; unmountTimer?: number }
+>();
+
+/** Numéro de montage : clé du panneau, pour qu'un remontage reparte d'un état neuf. */
+let tabMounts = 0;
+
+function mountThemeTab(
+	container: HTMLElement,
+	data: ConnectorBootData
+): () => void {
+	let entry = tabRoots.get( container );
+	if ( entry ) {
+		window.clearTimeout( entry.unmountTimer );
+	} else {
+		entry = { root: createRoot( container ) };
+		tabRoots.set( container, entry );
+	}
+	const mounted = entry;
+	tabMounts++;
+	mounted.root.render(
+		<StrictMode>
+			<ConnectorPanel key={ tabMounts } data={ data } />
+		</StrictMode>
+	);
+	return () => {
+		window.clearTimeout( mounted.unmountTimer );
+		mounted.unmountTimer = window.setTimeout( () => {
+			tabRoots.delete( container );
+			mounted.root.unmount();
+		} );
+	};
+}
+
 function registerAsThemeTab(): void {
 	if ( ! window.G2RDOptions?.registerTab ) {
 		return;
@@ -103,15 +155,9 @@ function registerAsThemeTab(): void {
 	window.G2RDOptions.registerTab( {
 		key: 'connector',
 		label: 'Manager G2RD',
-		description: 'Connexion au tableau de bord centralisé.',
+		description: 'Connexion au tableau de bord centralisé G2RD WP Manager.',
 		icon: 'cloud',
-		mount: ( container, data ) => {
-			createRoot( container ).render(
-				<StrictMode>
-					<ConnectorPanel data={ data } />
-				</StrictMode>
-			);
-		},
+		mount: mountThemeTab,
 	} );
 }
 

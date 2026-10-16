@@ -90,6 +90,15 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   restores the accent background of checked boxes (WordPress 6.x draws a colored mark on a
   white box and is left as is). The display bug itself never changed a setting; if a box that
   looked empty was clicked and the page saved, review the settings once.
+* **Fix: the "Manager G2RD" tab of the G2RD theme console shows its cloud icon.** The tab
+  declared its icon as a dashicons class (`dashicons-cloud`): the theme console 1.39 turned it
+  into an unknown class (no icon at all) and 1.41 replaces any unknown name with its generic
+  plug icon. It now declares `cloud`, a name of the console's icon set. Its description now
+  reads "Connexion au tableau de bord centralisé G2RD WP Manager.".
+* **Fix: leaving the tab no longer leaves an orphaned copy of the connector panel in memory.**
+  The `mount` function given to the theme console now returns its cleanup function: the
+  panel's React root is unmounted when another tab is opened, and coming back mounts a fresh
+  panel.
 
 = 1.14.0-rc.2 =
 

@@ -138,6 +138,12 @@ final class Page {
 	/**
 	 * Hook thème : enregistre un tab dans la page Options G2RD.
 	 *
+	 * La console lit ici le libellé, la description et l'icône de l'onglet ; le
+	 * script (assets/admin/src/index.tsx) n'en fournit que le rendu (mount).
+	 * `icon` est un nom du jeu d'icônes de la console, pas une classe dashicons :
+	 * le thème 1.39 en fait « dashicons-cloud », le thème 1.41 la prend dans son
+	 * jeu interne (toute autre valeur y devient l'icône « plug »).
+	 *
 	 * @param array<int, array<string, mixed>> $tabs
 	 * @return array<int, array<string, mixed>>
 	 */
@@ -145,8 +151,8 @@ final class Page {
 		$tabs[] = [
 			'key'         => 'connector',
 			'label'       => __( 'Manager G2RD', 'g2rd-connector' ),
-			'description' => __( 'Connexion au tableau de bord centralisé.', 'g2rd-connector' ),
-			'icon'        => 'dashicons-cloud',
+			'description' => __( 'Connexion au tableau de bord centralisé G2RD WP Manager.', 'g2rd-connector' ),
+			'icon'        => 'cloud',
 			'mount_id'    => 'g2rd-connector-tab-root',
 			'data'        => $this->initial_data(),
 		];
