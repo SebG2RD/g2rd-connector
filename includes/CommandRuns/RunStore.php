@@ -30,8 +30,9 @@
  *
  * Durée de vie (décision n° 7) : une exécution terminée est gardée 7 jours, 200
  * enregistrements au plus ; une exécution non terminée n'est jamais purgée (purge(),
- * branchée sur la tâche biquotidienne). Tout part à la désinstallation, créneau
- * compris (delete_all()).
+ * branchée sur la tâche biquotidienne) : seul le ramassage (RunReaper) la clôt, après
+ * l'avoir cherchée par unfinished(). Tout part à la désinstallation, créneau compris
+ * (delete_all()).
  *
  * @package G2RD\Connector
  */
@@ -331,6 +332,53 @@ final class RunStore {
 		}
 
 		return $total;
+	}
+
+	/**
+	 * Exécutions acceptées ou en cours, `$limit` au plus, avec leur valeur brute : ce que
+	 * le ramassage (RunReaper::sweep()) examine. Vide si la base refuse la lecture.
+	 *
+	 * Le filtre sur la valeur se fait en base : les enregistrements conclus (200 gardés,
+	 * jusqu'à 64 Ko chacun) ne sont ni transférés ni comptés dans la borne, et le créneau
+	 * (sans état) non plus. Il ne fait qu'écarter : la valeur est écrite par
+	 * wp_json_encode() sans espace, donc l'état d'une exécution ouverte y figure toujours
+	 * sous la forme `"state":"accepted"` ou `"state":"running"`. Le même texte dans un
+	 * résultat, ou une collation insensible à la casse, peut ramener une exécution de
+	 * plus : l'appelant décode et relit l'état.
+	 *
+	 * @return list<array{0: string, 1: string}> [ numéro, valeur brute ].
+	 */
+	public static function unfinished( int $limit ): array {
+		global $wpdb;
+
+		if ( $limit <= 0 ) {
+			return [];
+		}
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- recherche par préfixe d'options non autochargées, jamais lues par get_option() : aucun cache pertinent.
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE %s AND ( option_value LIKE %s OR option_value LIKE %s ) LIMIT %d",
+				$wpdb->esc_like( self::OPTION_PREFIX ) . '%',
+				'%' . $wpdb->esc_like( '"state":"' . RunState::ACCEPTED . '"' ) . '%',
+				'%' . $wpdb->esc_like( '"state":"' . RunState::RUNNING . '"' ) . '%',
+				$limit
+			),
+			ARRAY_A
+		);
+
+		$found = [];
+		foreach ( (array) $rows as $row ) {
+			if ( ! is_array( $row ) || ! is_string( $row['option_name'] ?? null ) || ! is_string( $row['option_value'] ?? null ) ) {
+				continue;
+			}
+			$command_id = substr( $row['option_name'], strlen( self::OPTION_PREFIX ) );
+			if ( self::is_valid_id( $command_id ) ) {
+				$found[] = [ $command_id, $row['option_value'] ];
+			}
+		}
+
+		return $found;
 	}
 
 	/**

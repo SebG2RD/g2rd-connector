@@ -6,14 +6,16 @@ namespace G2RD\Connector\Tests\CommandRuns;
 
 /**
  * Faux $wpdb : la table des options en mémoire, avec sa clé unique sur option_name,
- * réduite aux cinq requêtes des exécutions en arrière-plan (RunStore, puis le créneau
- * et la purge) :
+ * réduite aux six requêtes des exécutions en arrière-plan (RunStore, puis le créneau,
+ * la purge et le ramassage) :
  *   - « INSERT IGNORE » : une ligne ajoutée si le nom est libre, aucune sinon ;
  *   - « SELECT option_value … WHERE option_name = %s LIMIT 1 » ;
  *   - « UPDATE … WHERE option_name = %s AND option_value = %s » : une ligne modifiée
  *     seulement si la valeur en base est encore celle attendue ;
  *   - « DELETE … WHERE option_name = %s AND option_value = %s », sur le même principe ;
- *   - « SELECT option_name, option_value … WHERE option_name LIKE %s LIMIT %d ».
+ *   - « SELECT option_name, option_value … WHERE option_name LIKE %s LIMIT %d » ;
+ *   - la même, avec en plus « AND ( option_value LIKE %s OR option_value LIKE %s ) »
+ *     (exécutions non terminées, cherchées par le ramassage).
  * Plus la recherche de noms des tickets consommés (« SELECT option_name … LIKE »), que
  * uninstall.php lance avant de retirer les exécutions.
  *
@@ -167,23 +169,31 @@ final class FakeOptionsTable {
 	}
 
 	/**
-	 * Recherche par préfixe, dans l'ordre des noms (parcours de l'index option_name).
+	 * Recherche par préfixe, dans l'ordre des noms (parcours de l'index option_name) ; et
+	 * la même, restreinte aux valeurs qui suivent l'un de deux motifs LIKE.
 	 *
 	 * @return list<array{option_name: string, option_value: string}>
 	 */
 	public function get_results( string $sql, string $output = 'OBJECT' ): array {
 		[ $template, $args ] = $this->receive( $sql );
 
-		if ( ARRAY_A !== $output || ! $this->is( 'SELECT option_name, option_value FROM {options} WHERE option_name LIKE %s LIMIT %d', $template ) ) {
-			throw new \LogicException( 'Recherche non prévue par le faux $wpdb : ' . $sql );
+		if ( ARRAY_A === $output && $this->is( 'SELECT option_name, option_value FROM {options} WHERE option_name LIKE %s LIMIT %d', $template ) ) {
+			if ( $this->read_refused() ) {
+				return [];
+			}
+			[ $pattern, $limit ] = $args;
+			return $this->find( (string) $pattern, (int) $limit );
 		}
 
-		if ( $this->read_refused() ) {
-			return [];
+		if ( ARRAY_A === $output && $this->is( 'SELECT option_name, option_value FROM {options} WHERE option_name LIKE %s AND ( option_value LIKE %s OR option_value LIKE %s ) LIMIT %d', $template ) ) {
+			if ( $this->read_refused() ) {
+				return [];
+			}
+			[ $pattern, $value_pattern, $other_value_pattern, $limit ] = $args;
+			return $this->find( (string) $pattern, (int) $limit, [ (string) $value_pattern, (string) $other_value_pattern ] );
 		}
 
-		[ $pattern, $limit ] = $args;
-		return $this->find( (string) $pattern, (int) $limit );
+		throw new \LogicException( 'Recherche non prévue par le faux $wpdb : ' . $sql );
 	}
 
 	/**
@@ -210,11 +220,13 @@ final class FakeOptionsTable {
 	}
 
 	/**
-	 * Lignes dont le nom suit le motif LIKE, `$limit` au plus, dans l'ordre des noms.
+	 * Lignes dont le nom suit le motif LIKE, `$limit` au plus, dans l'ordre des noms ; si
+	 * des motifs de valeur sont donnés, seulement celles dont la valeur suit l'un d'eux.
 	 *
+	 * @param list<string> $value_patterns
 	 * @return list<array{option_name: string, option_value: string}>
 	 */
-	private function find( string $pattern, int $limit ): array {
+	private function find( string $pattern, int $limit, array $value_patterns = [] ): array {
 		$names = array_keys( $this->rows );
 		sort( $names, SORT_STRING );
 
@@ -222,6 +234,9 @@ final class FakeOptionsTable {
 		foreach ( $names as $name ) {
 			if ( count( $found ) >= $limit ) {
 				break;
+			}
+			if ( [] !== $value_patterns && ! $this->value_matches( $this->rows[ $name ]['value'], $value_patterns ) ) {
+				continue;
 			}
 			if ( 1 === preg_match( self::like_to_regex( $pattern ), $name ) ) {
 				$found[] = [
@@ -258,6 +273,20 @@ final class FakeOptionsTable {
 		}
 		$this->last_error = 'MySQL server has gone away';
 		return true;
+	}
+
+	/**
+	 * La valeur suit-elle l'un des motifs LIKE ? Comparaison exacte (cf. écarts assumés).
+	 *
+	 * @param list<string> $patterns
+	 */
+	private function value_matches( string $value, array $patterns ): bool {
+		foreach ( $patterns as $pattern ) {
+			if ( 1 === preg_match( self::like_to_regex( $pattern ), $value ) ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private function is( string $expected, string $template ): bool {
