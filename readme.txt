@@ -127,11 +127,11 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   * `db_health` is computed at most once a day (option `g2rd_connector_db_health`, not
     autoloaded, forgotten after each database cleanup command, removed on uninstall, on every
     site of a multisite network); its `collected_at` field gives the date of that computation.
-    A computation with a failed query is not kept. **Delivery order: the platform first.** G2RD
-    WP Manager 1.59.0 ignores `collected_at` and dates the counters with the sync time ("Measured
-    … ago"): before this connector version is rolled out to sites, the platform must read
-    `collected_at` (ISO 8601 date capped at now, falling back to the sync time). Otherwise it
-    would show "measured 2 minutes ago" for counters up to almost 24 hours old;
+    A computation with a failed query is not kept. **Platform: G2RD WP Manager 1.60.0 or
+    later** to show the real date of the counters: it reads `collected_at` (ISO 8601 date capped
+    at now, falling back to the sync time). An older platform ignores that field and dates the
+    counters with the sync time ("Measured … ago"): it would show "measured 2 minutes ago" for
+    counters up to almost 24 hours old;
   * OPcache is invalidated for the connector's own files only: plugin and theme versions are
     read from the files themselves, which OPcache never serves.
   The JSON fields are unchanged.

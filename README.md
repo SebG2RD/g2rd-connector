@@ -527,12 +527,12 @@ chacun s'additionne.
   - `db_health` est calculé au plus une fois par jour (`Rest\DbHealth`, option non autochargée
     `g2rd_connector_db_health`, oubliée après chaque commande de nettoyage de la base, retirée à
     la désinstallation, sur chaque blog en multisite) ; `collected_at` donne la date de ce calcul.
-    Un calcul dont une requête a échoué n'est pas gardé. **Ordre de livraison : la plateforme
-    d'abord.** G2RD WP Manager 1.59.0 ignore `collected_at` et date les compteurs de l'heure de
-    la synchronisation (`SiteHealthMetrics::applyDbHealth()`, « Mesuré il y a … ») : avant de
-    diffuser cette version du connecteur, la plateforme doit lire `collected_at` (date ISO 8601
-    bornée à maintenant, repli sur l'heure de la synchronisation). Sinon, elle afficherait
-    « mesuré il y a 2 minutes » pour des compteurs vieux de près de 24 h ;
+    Un calcul dont une requête a échoué n'est pas gardé. **Plateforme : G2RD WP Manager 1.60.0
+    ou plus récent** pour afficher la vraie date des compteurs : elle lit `collected_at` (date
+    ISO 8601 bornée à maintenant, repli sur l'heure de la synchronisation). Une plateforme plus
+    ancienne ignore ce champ et date les compteurs de l'heure de la synchronisation
+    (« Mesuré il y a … ») : elle afficherait « mesuré il y a 2 minutes » pour des compteurs
+    vieux de près de 24 h ;
   - l'OPcache n'est invalidé que pour les fichiers du connecteur : les versions des extensions
     et des thèmes sont lues dans les fichiers eux-mêmes (`get_file_data()`), que l'OPcache ne
     sert jamais.
