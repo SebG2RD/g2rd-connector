@@ -5,8 +5,11 @@
  * spécification). Un vrai arrêt de PHP, pas une simulation : seul un processus à part peut
  * mourir d'une erreur fatale sans emporter PHPUnit.
  *
- * Lancé sans php.ini (`php -n`), avec deux arguments : le fichier d'état (créé par le test)
- * et le scénario :
+ * Lancé par le même binaire que PHPUnit, AVEC son php.ini (jamais `php -n`) : Brain Monkey
+ * charge Patchwork, qui lit chaque fichier inclus ensuite avec token_get_all(). Sous Debian,
+ * Ubuntu (machines de la CI) ou Alpine, l'extension tokenizer est un module chargé par l'ini :
+ * sans lui, le script mourrait avant d'écrire son relevé. Deux arguments : le fichier d'état
+ * (créé par le test) et le scénario :
  *   - « fatale » : erreur fatale pendant la commande. Un fichier d'extension est chargé deux
  *     fois (« Cannot redeclare », erreur de compilation que rien ne rattrape), et le nom de
  *     sa fonction rend le message plus long que 2 Ko ;
@@ -23,14 +26,20 @@
  * fonctions d'arrêt témoins, dans leur ordre réel : « reprise »
  * (ProtectedUpdate::recover_on_shutdown(), qui consigne son résultat dans PendingOutcomes
  * quand la mise à jour meurt en route), puis « réactivation »
- * (CommandExecutor::perform_plugin_upgrade()).
+ * (CommandExecutor::perform_plugin_upgrade()). Comme les vrais, chacun lève une erreur sans
+ * gravité masquée par @ : la reprise, une lecture de fichier ratée (WP_Filesystem) ; la
+ * réactivation, une dépréciation (activate_plugin() inclut le fichier de l'extension).
+ * error_get_last() les rend quand même : à l'arrêt, elles remplacent l'erreur fatale.
  *
  * Le processus peut mourir à tout moment : son état est recopié dans le fichier d'état après
  * chaque requête à la table et chaque passage d'un témoin, en JSON {journal, lignes,
- * options, notices}. `journal` : dans l'ordre, les changements d'état de l'exécution
- * (« exécution running »…) et du créneau (« créneau pris », « créneau rendu »), et les
- * passages des témoins (« reprise », « réactivation »). `notices` : erreurs PHP non fatales
- * levées dans le processus, l'avertissement voulu du scénario « sortie » excepté.
+ * options, notices, apres_les_filets}. `journal` : dans l'ordre, les changements d'état de
+ * l'exécution (« exécution running »…) et du créneau (« créneau pris », « créneau rendu »),
+ * et les passages des témoins (« reprise », « réactivation »). `notices` : erreurs PHP non
+ * fatales levées dans le processus, les erreurs voulues (avertissement du scénario « sortie »,
+ * erreurs masquées des témoins) exceptées. `apres_les_filets` : type de l'erreur que
+ * error_get_last() rend à la fin de la réactivation, juste avant le dernier filet ; null tant
+ * qu'elle n'est pas passée.
  *
  * @package G2RD\Connector
  */
@@ -94,22 +103,21 @@ $g2rd_extension = 'akismet/akismet.php';
 $g2rd_debut      = 1789000000;
 $g2rd_maintenant = $g2rd_debut;
 $g2rd_alerte     = 'Avertissement d’une extension, sans gravité';
-
-// Ni affichage ni journal : l'erreur fatale reste lisible par error_get_last(), et la sortie
-// du processus reste vide.
-ini_set( 'display_errors', '0' );
-ini_set( 'log_errors', '0' );
+// Erreurs masquées des témoins : un fichier absent (reprise), une dépréciation (réactivation).
+$g2rd_absent      = $g2rd_fichier . '.temoin-absent.txt';
+$g2rd_deprecation = 'Dépréciation masquée d’une extension réactivée (témoin)';
 
 $g2rd_journal = [];
 $g2rd_options = [];
 $g2rd_notices = [];
+$g2rd_apres   = null;
 $g2rd_suivi   = [
 	'etat'    => null,
 	'creneau' => false,
 ];
 $g2rd_table   = new FakeOptionsTable();
 
-$g2rd_recopier = static function () use ( &$g2rd_journal, &$g2rd_options, &$g2rd_notices, &$g2rd_suivi, $g2rd_table, $g2rd_fichier, $g2rd_id ): void {
+$g2rd_recopier = static function () use ( &$g2rd_journal, &$g2rd_options, &$g2rd_notices, &$g2rd_apres, &$g2rd_suivi, $g2rd_table, $g2rd_fichier, $g2rd_id ): void {
 	$ligne = $g2rd_table->rows[ RunStore::option_name( $g2rd_id ) ]['value'] ?? null;
 	$etat  = null === $ligne ? null : ( json_decode( $ligne, true )['state'] ?? '?' );
 	if ( $etat !== $g2rd_suivi['etat'] ) {
@@ -125,10 +133,11 @@ $g2rd_recopier = static function () use ( &$g2rd_journal, &$g2rd_options, &$g2rd
 		$g2rd_fichier,
 		json_encode(
 			[
-				'journal' => $g2rd_journal,
-				'lignes'  => $g2rd_table->rows,
-				'options' => $g2rd_options,
-				'notices' => $g2rd_notices,
+				'journal'          => $g2rd_journal,
+				'lignes'           => $g2rd_table->rows,
+				'options'          => $g2rd_options,
+				'notices'          => $g2rd_notices,
+				'apres_les_filets' => $g2rd_apres,
 			]
 		)
 	);
@@ -140,10 +149,12 @@ $g2rd_noter = static function ( string $passage ) use ( &$g2rd_journal, $g2rd_re
 };
 
 // Erreurs non fatales relevées, puis laissées à PHP (false) : error_get_last() les rend
-// encore à l'arrêt, comme sur un site sans gestionnaire d'erreurs.
+// encore à l'arrêt, comme sur un site sans gestionnaire d'erreurs. Les erreurs voulues
+// (avertissement du scénario « sortie », erreurs masquées des témoins) ne sont pas relevées.
 set_error_handler(
-	static function ( int $errno, string $errstr ) use ( &$g2rd_notices, $g2rd_alerte ): bool {
-		if ( $g2rd_alerte !== $errstr ) {
+	static function ( int $errno, string $errstr ) use ( &$g2rd_notices, $g2rd_alerte, $g2rd_absent, $g2rd_deprecation ): bool {
+		$voulue = $g2rd_alerte === $errstr || $g2rd_deprecation === $errstr || str_contains( $errstr, basename( $g2rd_absent ) );
+		if ( ! $voulue ) {
 			$g2rd_notices[] = $errno . ' ' . $errstr;
 		}
 		return false;
@@ -216,7 +227,7 @@ RunStore::create(
 
 $g2rd_runner = new AfterResponseRunner(
 	terminator: static fn (): bool => true,
-	executor: static function () use ( $g2rd_scenario, $g2rd_extension, $g2rd_debut, $g2rd_alerte, $g2rd_noter, $g2rd_fatale, &$g2rd_maintenant ): array {
+	executor: static function () use ( $g2rd_scenario, $g2rd_extension, $g2rd_debut, $g2rd_alerte, $g2rd_absent, $g2rd_deprecation, $g2rd_noter, $g2rd_recopier, $g2rd_fatale, &$g2rd_maintenant, &$g2rd_apres ): array {
 		// Au début de ProtectedUpdate::run(), la reprise d'une mise à jour morte, quelle que
 		// soit son extension : deux résultats consignés depuis le démarrage, l'un pour une
 		// autre extension, l'autre pour celle-ci, avant le résultat de la reprise à l'arrêt.
@@ -243,7 +254,10 @@ $g2rd_runner = new AfterResponseRunner(
 		// transaction (début de ProtectedUpdate::run()), puis la réactivation
 		// (CommandExecutor::perform_plugin_upgrade()).
 		register_shutdown_function(
-			static function () use ( $g2rd_scenario, $g2rd_extension, $g2rd_noter, $g2rd_fatale, &$g2rd_maintenant ): void {
+			static function () use ( $g2rd_scenario, $g2rd_extension, $g2rd_absent, $g2rd_noter, $g2rd_fatale, &$g2rd_maintenant ): void {
+				// Lecture de fichier ratée et masquée, comme celles de WP_Filesystem pendant la
+				// restauration.
+				@file_get_contents( $g2rd_absent ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- erreur masquée voulue : error_get_last() la rend quand même.
 				$g2rd_noter( 'reprise' );
 				if ( 'fin-normale' === $g2rd_scenario ) {
 					// La mise à jour a fermé sa transaction : rien à reprendre.
@@ -264,8 +278,14 @@ $g2rd_runner = new AfterResponseRunner(
 			}
 		);
 		register_shutdown_function(
-			static function () use ( $g2rd_noter ): void {
+			static function () use ( $g2rd_deprecation, $g2rd_noter, $g2rd_recopier, &$g2rd_apres ): void {
+				// Dépréciation masquée, comme celles du fichier de l'extension qu'inclut
+				// activate_plugin().
+				@trigger_error( $g2rd_deprecation, E_USER_DEPRECATED ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.PHP.DevelopmentFunctions.error_log_trigger_error, WordPress.Security.EscapeOutput.OutputNotEscaped -- erreur masquée voulue, texte fixe : error_get_last() la rend quand même.
 				$g2rd_noter( 'réactivation' );
+				// Ce que error_get_last() rend juste avant le dernier filet.
+				$g2rd_apres = error_get_last()['type'] ?? null;
+				$g2rd_recopier();
 			}
 		);
 
@@ -292,6 +312,13 @@ $g2rd_runner = new AfterResponseRunner(
 	}
 );
 $g2rd_runner->queue( $g2rd_id, 'update_plugin', [ 'file' => $g2rd_extension ] );
+
+// Ni affichage ni journal à partir d'ici seulement : l'erreur fatale voulue reste lisible par
+// error_get_last(), et la sortie du processus reste vide. Une erreur de la mise en place
+// (chargeur, Brain Monkey, extension PHP absente) reste affichée : le test la montre.
+ini_set( 'display_errors', '0' );
+ini_set( 'log_errors', '0' );
+
 $g2rd_runner->maybe_serve(
 	false,
 	new WP_REST_Response(

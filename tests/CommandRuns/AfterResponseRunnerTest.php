@@ -970,8 +970,11 @@ final class AfterResponseRunnerTest extends TestCase {
 	 * fastcgi_finish_request() n'existent : les tampons de sortie sont vidés (la réponse
 	 * part sur la sortie), la fin rend faux, une ligne au journal PHP du site le dit, puis
 	 * la commande s'exécute quand même, une fois, et son résultat est écrit. Cette fin ferme
-	 * tous les tampons, ceux de PHPUnit compris : elle tourne dans un processus PHP à part,
-	 * sans php.ini (tests/fixtures/command-runs/default-finish.php).
+	 * tous les tampons, ceux de PHPUnit compris : elle tourne dans un processus PHP à part
+	 * (tests/fixtures/command-runs/default-finish.php), avec le même php.ini que PHPUnit,
+	 * jamais `php -n` : le script charge Brain Monkey, donc Patchwork, qui a besoin de
+	 * l'extension tokenizer, chargée par l'ini sous Debian, Ubuntu (CI) ou Alpine. Seuls les
+	 * messages de démarrage de PHP sont tus : ils ne disent rien du connecteur.
 	 */
 	public function test_fin_de_reponse_par_defaut_en_ligne_de_commande(): void {
 		if ( ! function_exists( 'exec' ) ) {
@@ -981,7 +984,7 @@ final class AfterResponseRunnerTest extends TestCase {
 		$sortie = [];
 		$code   = 0;
 
-		exec( escapeshellarg( PHP_BINARY ) . ' -n ' . escapeshellarg( $script ) . ' 2>&1', $sortie, $code );
+		exec( escapeshellarg( PHP_BINARY ) . ' -d display_startup_errors=0 ' . escapeshellarg( $script ) . ' 2>&1', $sortie, $code );
 
 		$texte = implode( "\n", $sortie );
 		self::assertSame( 0, $code, $texte );

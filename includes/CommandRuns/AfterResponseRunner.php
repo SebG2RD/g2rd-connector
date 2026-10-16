@@ -49,6 +49,16 @@
  * dernier signe de vie (RunReaper). Le travail lui-même ne passe jamais par une fonction
  * d'arrêt.
  *
+ * La cause est relevée (error_get_last()) dans la première fonction d'arrêt du connecteur,
+ * AVANT la reprise et la réactivation, pas dans le dernier filet : leurs erreurs sans gravité,
+ * même masquées par @ (WP_Filesystem pendant la restauration, fichier de l'extension inclus
+ * par activate_plugin()), remplacent l'erreur fatale dans error_get_last(). Passent encore
+ * avant ce relevé les fonctions d'arrêt enregistrées au chargement de WordPress
+ * (wp-settings.php) : son gestionnaire d'erreurs fatales, puis l'action `shutdown` des
+ * extensions. Une erreur sans gravité levée là cacherait l'erreur fatale : la cause dit
+ * alors seulement qu'aucune erreur fatale n'a été relevée (REASON_SCRIPT_EXIT), sans
+ * affirmer qu'il n'y en a pas eu, et le journal d'erreurs PHP du site garde l'erreur fatale.
+ *
  * Seule la réponse « reçue » de cette exécution la démarre : une WP_HTTP_Response de
  * statut 202 dont `command_id` est son numéro (étape 0). Une autre extension peut l'avoir
  * remplacée après la route (filtres `rest_request_after_callbacks`, `rest_post_dispatch` :
@@ -136,9 +146,12 @@ final class AfterResponseRunner {
 
 	/**
 	 * Cause d'une interruption déclarée par le dernier filet : script terminé pendant la
-	 * commande sans erreur fatale relevée (exit ou die, wp_die() d'une extension). Distincte
-	 * de REASON_FATAL_ERROR : error_get_last() rend alors une erreur antérieure sans gravité,
-	 * qui n'est pas la cause de l'arrêt.
+	 * commande sans erreur fatale relevée à l'arrêt, le plus souvent par exit ou die (wp_die()
+	 * d'une extension). Distincte de REASON_FATAL_ERROR : error_get_last() rend alors une
+	 * erreur sans gravité, ou rien, qui n'est pas la cause de l'arrêt. Elle ne dit pas qu'il
+	 * n'y a pas eu d'erreur fatale : une erreur sans gravité levée avant le relevé, par une
+	 * fonction d'arrêt de WordPress ou d'une extension, peut l'avoir cachée (cf. l'en-tête de
+	 * la classe).
 	 */
 	public const REASON_SCRIPT_EXIT = 'script_exit';
 
@@ -189,9 +202,11 @@ final class AfterResponseRunner {
 
 	/**
 	 * Dernier filet armé : l'exécution en cours, son extension (résultat de reprise à
-	 * rattacher) et son démarrage. Null : aucune exécution en cours, ou fin normale.
+	 * rattacher), son démarrage et, à l'arrêt, l'erreur relevée par la première fonction
+	 * d'arrêt du connecteur (`last_error`, absente avant l'arrêt). Null : aucune exécution en
+	 * cours, ou fin normale.
 	 *
-	 * @var array{command_id: string, plugin_file: string|null, started_at: int}|null
+	 * @var array{command_id: string, plugin_file: string|null, started_at: int, last_error?: array{type: int, message: string, file: string, line: int}|null}|null
 	 */
 	private ?array $last_net = null;
 
@@ -313,10 +328,11 @@ final class AfterResponseRunner {
 
 	/**
 	 * Arme le dernier filet de l'exécution `$command_id`, juste avant la commande (cf.
-	 * l'en-tête de la classe). La fonction d'arrêt enregistrée ici n'enregistre, à l'arrêt,
-	 * que mark_interrupted_on_shutdown() : PHP l'ajoute alors en fin de liste, après les
-	 * filets armés pendant la commande (reprise, puis réactivation). Désarmé par la fin
-	 * normale de l'exécution.
+	 * l'en-tête de la classe). La fonction d'arrêt enregistrée ici passe, à l'arrêt, AVANT
+	 * les filets armés pendant la commande (reprise, puis réactivation) : elle relève la cause
+	 * (error_get_last()) avant que leurs erreurs sans gravité la remplacent, puis enregistre
+	 * mark_interrupted_on_shutdown(), que PHP ajoute alors en fin de liste, après eux. Désarmé
+	 * par la fin normale de l'exécution.
 	 *
 	 * @param string      $command_id  Numéro de l'exécution démarrée.
 	 * @param string|null $plugin_file Extension dont la commande remplace les fichiers, dont
@@ -334,9 +350,13 @@ final class AfterResponseRunner {
 
 		register_shutdown_function(
 			function (): void {
-				if ( null !== $this->last_net ) {
-					register_shutdown_function( [ $this, 'mark_interrupted_on_shutdown' ] );
+				if ( null === $this->last_net ) {
+					return;
 				}
+				// Relevée ici, avant la reprise et la réactivation : leurs erreurs sans
+				// gravité, même masquées par @, remplaceraient l'erreur fatale.
+				$this->last_net['last_error'] = error_get_last();
+				register_shutdown_function( [ $this, 'mark_interrupted_on_shutdown' ] );
 			}
 		);
 	}
@@ -345,9 +365,11 @@ final class AfterResponseRunner {
 	 * Dernier filet, à l'arrêt de PHP, après les filets existants. Ne fait rien si
 	 * l'exécution a fini normalement (filet désarmé) : aucune lecture, aucune écriture.
 	 * Sinon, déclare l'exécution interrompue (RunLifecycle::interrupt(), seulement si elle
-	 * est encore en cours), avec la cause relevée par error_get_last() et le résultat de
-	 * reprise de son extension consigné depuis son démarrage, s'il existe ; puis détache le
-	 * signe de vie et rend le créneau. Ne lève jamais.
+	 * est encore en cours), avec la cause relevée par error_get_last() dans la première
+	 * fonction d'arrêt du connecteur, avant la reprise et la réactivation (à défaut, appelée
+	 * hors de cette chaîne : relevée ici), et le résultat de reprise de son extension
+	 * consigné depuis son démarrage, s'il existe ; puis détache le signe de vie et rend le
+	 * créneau. Ne lève jamais.
 	 *
 	 * Écriture impossible (base qui refuse ou qui lève) : l'exécution reste en cours, et le
 	 * ramassage la déclare interrompue 600 s après son dernier signe de vie. L'erreur fatale
@@ -362,7 +384,8 @@ final class AfterResponseRunner {
 		$this->last_net = null;
 
 		try {
-			[ $reason, $error ] = self::interruption_cause( error_get_last() );
+			$last               = array_key_exists( 'last_error', $net ) ? $net['last_error'] : error_get_last();
+			[ $reason, $error ] = self::interruption_cause( $last );
 			RunLifecycle::interrupt( $net['command_id'], $reason, $error, self::recovery_since( $net['plugin_file'], $net['started_at'] ), ( $this->clock )() );
 		} catch ( \Throwable $e ) {
 			// Base qui lève, fonction de WordPress filtrée par une extension qui lève : rien
@@ -674,11 +697,14 @@ final class AfterResponseRunner {
 	 * l'erreur, placé à la fin, étant coupé le premier.
 	 *
 	 * Une erreur fatale (délai ou mémoire dépassés compris) : REASON_FATAL_ERROR, avec son
-	 * message, son fichier et sa ligne. Aucune, ou une erreur sans gravité levée plus tôt :
-	 * le script a été terminé par exit ou die (wp_die() d'une extension), REASON_SCRIPT_EXIT,
-	 * sans cette erreur, qui n'est pas la cause.
+	 * message, son fichier et sa ligne. Aucune, ou une erreur sans gravité : aucune erreur
+	 * fatale relevée, le script a le plus souvent été terminé par exit ou die (wp_die() d'une
+	 * extension) : REASON_SCRIPT_EXIT, sans cette erreur, qui n'est pas la cause. Le message
+	 * n'exclut pas une erreur fatale cachée avant le relevé (cf. l'en-tête de la classe) : il
+	 * renvoie au journal d'erreurs PHP du site.
 	 *
-	 * @param array{type: int, message: string, file: string, line: int}|null $last
+	 * @param array{type: int, message: string, file: string, line: int}|null $last Erreur
+	 *        relevée à l'arrêt, avant la reprise et la réactivation.
 	 * @return array{0: string, 1: string}
 	 */
 	private static function interruption_cause( ?array $last ): array {
@@ -697,7 +723,7 @@ final class AfterResponseRunner {
 
 		return [
 			self::REASON_SCRIPT_EXIT,
-			__( 'La commande s’est arrêtée avant d’avoir rendu son résultat : le script PHP a été terminé pendant son exécution (exit ou die), sans erreur fatale relevée. Son travail est peut-être partiel. Cause probable : une extension a interrompu la requête pendant l’opération (par exemple par wp_die()). Action : aucune pour cette opération, la plateforme vérifie l’état réel du site ; si l’arrêt se répète, le signaler à l’équipe G2RD.', 'g2rd-connector' ),
+			__( 'La commande s’est arrêtée avant d’avoir rendu son résultat : le script PHP a été terminé pendant son exécution, et aucune erreur fatale de PHP n’a été relevée à l’arrêt. Son travail est peut-être partiel. Cause probable : une extension a interrompu la requête pendant l’opération (exit, die ou wp_die()) ; plus rarement, une erreur fatale cachée, avant ce relevé, par une erreur sans gravité d’une autre fonction d’arrêt. Action : aucune pour cette opération, la plateforme vérifie l’état réel du site ; si l’arrêt se répète, chercher l’erreur dans le journal d’erreurs PHP du site, puis le signaler à l’équipe G2RD.', 'g2rd-connector' ),
 		];
 	}
 

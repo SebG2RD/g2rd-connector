@@ -148,6 +148,27 @@ final class ShutdownOrderTest extends TestCase {
 	}
 
 	/**
+	 * La reprise et la réactivation lèvent souvent des erreurs sans gravité, même masquées par
+	 * @ (WP_Filesystem pendant la restauration, fichier de l'extension inclus par
+	 * activate_plugin()) : error_get_last() les rend, et à l'arrêt elles remplacent l'erreur
+	 * fatale. Le dernier filet, qui passe après elles, ne doit pas les prendre pour la cause :
+	 * l'erreur est relevée avant elles, dans la première fonction d'arrêt du connecteur.
+	 * L'exécution reste déclarée interrompue sur l'erreur fatale, avec son message.
+	 */
+	public function test_une_erreur_masquee_dans_les_filets_ne_remplace_pas_l_erreur_fatale(): void {
+		$arret = $this->arret_reel( 'fatale' );
+
+		self::assertSame( E_USER_DEPRECATED, $arret['apres_les_filets'], 'Juste avant le dernier filet, error_get_last() rend la dépréciation masquée de la réactivation, plus l\'erreur fatale.' );
+		self::assertSame( [ 'reprise', 'réactivation', 'exécution interrupted' ], array_slice( $arret['journal'], 3, 3 ) );
+		$interruption = (array) ( $arret['execution']['interruption'] ?? [] );
+		self::assertSame( AfterResponseRunner::REASON_FATAL_ERROR, $interruption['reason'] ?? null, 'Cause : l\'erreur fatale, pas l\'arrêt sans erreur fatale.' );
+		$erreur = (string) ( $interruption['error'] ?? '' );
+		self::assertStringContainsString( 'Cannot redeclare', $erreur );
+		self::assertStringNotContainsString( 'témoin', $erreur, 'Ni la dépréciation de la réactivation…' );
+		self::assertStringNotContainsString( 'temoin-absent', $erreur, '… ni l\'avertissement de la reprise.' );
+	}
+
+	/**
 	 * La commande rend son résultat : le dernier filet, désarmé, ne fait rien à l'arrêt.
 	 * L'exécution reste conclue, et les filets existants passent comme avant.
 	 */
@@ -289,10 +310,16 @@ final class ShutdownOrderTest extends TestCase {
 	}
 
 	/**
-	 * Lance le script dans un processus PHP à part, sans php.ini, et rend son relevé : code de
-	 * sortie, sortie, journal, table des options, options, notices, et l'exécution décodée.
+	 * Lance le script dans un processus PHP à part et rend son relevé : code de sortie, sortie,
+	 * journal, table des options, options, notices, erreur rendue par error_get_last() juste
+	 * avant le dernier filet, et l'exécution décodée.
 	 *
-	 * @return array{code: int, sortie: string, journal: list<string>, lignes: array<string, array{value: string, autoload: string}>, options: array<string, mixed>, notices: list<string>, execution: array<string, mixed>}
+	 * Même binaire et même php.ini que PHPUnit, donc mêmes extensions : jamais `php -n`. Le
+	 * script charge Brain Monkey, donc Patchwork, qui a besoin de l'extension tokenizer ; sous
+	 * Debian, Ubuntu (CI) ou Alpine, elle est chargée par l'ini, et `-n` l'enlèverait. Seuls
+	 * les messages de démarrage de PHP sont tus : ils ne disent rien du connecteur.
+	 *
+	 * @return array{code: int, sortie: string, journal: list<string>, lignes: array<string, array{value: string, autoload: string}>, options: array<string, mixed>, notices: list<string>, apres_les_filets: int|null, execution: array<string, mixed>}
 	 */
 	private function arret_reel( string $scenario ): array {
 		if ( ! function_exists( 'exec' ) ) {
@@ -303,7 +330,7 @@ final class ShutdownOrderTest extends TestCase {
 		$sortie = [];
 		$code   = 0;
 
-		exec( escapeshellarg( PHP_BINARY ) . ' -n ' . escapeshellarg( $script ) . ' ' . escapeshellarg( $etat ) . ' ' . escapeshellarg( $scenario ) . ' 2>&1', $sortie, $code );
+		exec( escapeshellarg( PHP_BINARY ) . ' -d display_startup_errors=0 ' . escapeshellarg( $script ) . ' ' . escapeshellarg( $etat ) . ' ' . escapeshellarg( $scenario ) . ' 2>&1', $sortie, $code );
 
 		$releve = json_decode( (string) file_get_contents( $etat ), true );
 		foreach ( array_merge( [ $etat ], (array) glob( $etat . '.*.php' ) ) as $fichier ) {
@@ -317,13 +344,14 @@ final class ShutdownOrderTest extends TestCase {
 		$ligne = $releve['lignes'][ RunStore::option_name( self::ID ) ]['value'] ?? null;
 
 		return [
-			'code'      => $code,
-			'sortie'    => $texte,
-			'journal'   => $releve['journal'] ?? [],
-			'lignes'    => $releve['lignes'] ?? [],
-			'options'   => $releve['options'] ?? [],
-			'notices'   => $releve['notices'] ?? [],
-			'execution' => is_string( $ligne ) ? (array) json_decode( $ligne, true ) : [],
+			'code'             => $code,
+			'sortie'           => $texte,
+			'journal'          => $releve['journal'] ?? [],
+			'lignes'           => $releve['lignes'] ?? [],
+			'options'          => $releve['options'] ?? [],
+			'notices'          => $releve['notices'] ?? [],
+			'apres_les_filets' => $releve['apres_les_filets'] ?? null,
+			'execution'        => is_string( $ligne ) ? (array) json_decode( $ligne, true ) : [],
 		];
 	}
 

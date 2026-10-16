@@ -5,7 +5,9 @@
  * litespeed_finish_request() ni fastcgi_finish_request() n'existent. Elle ferme tous les
  * tampons de sortie (niveau 0) : PHPUnit ne saurait pas retrouver les siens après un test.
  *
- * Lancé sans php.ini (`php -n`). Charge l'amorce des tests (chargeur, doublures des
+ * Lancé par le même binaire que PHPUnit, avec son php.ini (jamais `php -n` : Patchwork, que
+ * charge Brain Monkey, a besoin de l'extension tokenizer, chargée par l'ini sous Debian,
+ * Ubuntu ou Alpine). Charge l'amorce des tests (chargeur, doublures des
  * classes WordPress), Brain Monkey pour les quelques fonctions WordPress utilisées, et la
  * fausse table d'options : l'enregistrement de l'exécution et le créneau sont les vrais.
  * Seuls l'exécuteur, qui note son passage, et l'horloge sont injectés ; la fin de réponse
