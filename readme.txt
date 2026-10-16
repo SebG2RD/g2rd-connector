@@ -106,6 +106,27 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   remote commands). The panel now starts from the last answer of the server, including one
   that arrived after the tab was left; if the tab was opened again before that answer
   arrived, the panel is refreshed with it. Reloading the page was not affected.
+* **Change: the connector panel is reorganised in four sections, with French labels.**
+  "Connexion au manager": state badge (connected; connection interrupted, with its cause when
+  the connection token is unreadable or refused; not enrolled yet), site number, last sign of
+  life, manager address, invitation token, and the test, enrol or disconnect, and save
+  buttons. "Échanges avec le manager": one row per setting, with an icon, a switch and a
+  short description of what it really does (hourly sign of life, formerly "Heartbeat
+  horaire"; real-time events, formerly "Webhook events"; remote commands; IPv4 to the
+  manager; direct login from G2RD). "Sécurité des commandes": signed commands required, number
+  and date of the signature check failures, and the last one explained in a plain sentence.
+  "Diagnostic": connector version, restore points (count, size, writable folder or not), last
+  capture of third-party updates. In a G2RD theme console that publishes its interface
+  contract (`window.G2RDOptions.console.version` 2 or more, theme 1.41.0 and later), the
+  panel uses the console's own classes and looks like the other tabs; with an older console
+  (theme 1.19 to 1.40) it draws the same layout with its own styles, limited to the panel and
+  based on the WordPress admin colours. Settings, REST routes and stored data are unchanged.
+* **Fix: a switch changed but not saved no longer looks applied.** As long as a setting
+  differs from the last saved value, a bar stuck to the bottom of the screen says
+  "Modifications non enregistrées" and offers to save; the same bar shows the result of the
+  last action (save, enrolment, disconnection, test). Failure messages now give the probable
+  cause and what to do, and the test says what it checks: the connector answers on this
+  site from the browser, which does not prove that the manager reaches the site.
 
 = 1.14.0-rc.2 =
 

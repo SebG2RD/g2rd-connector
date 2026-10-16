@@ -11,6 +11,10 @@
  *     Aujourd'hui elle n'en porte pas : ces pages gardent le formulaire PHP
  *     (Page::render_standalone_page), et ce script n'y apporte que la feuille de
  *     style (correctif des cases cochées).
+ *
+ * Le panneau choisit son dessin au montage (ui.ts) : natif dans une console qui
+ * publie son contrat d'interface (window.G2RDOptions.console.version ≥ 2),
+ * autonome sinon.
  */
 
 import { createRoot, StrictMode } from '@wordpress/element';
@@ -21,7 +25,13 @@ declare global {
 	interface Window {
 		G2RDConnectorData?: ConnectorBootData;
 		G2RDOptions?: {
-			registerTab: ( tab: ExternalTab ) => void;
+			/** Absent tant que le bundle de la console ne s'est pas exécuté. */
+			registerTab?: ( tab: ExternalTab ) => void;
+			/**
+			 * Contrat d'interface de la console (thème 1.41.0 et plus) : à partir de
+			 * la version 2, ses classes stables existent (cf. ui.ts).
+			 */
+			console?: { version?: number };
 		};
 	}
 }
@@ -55,9 +65,19 @@ export interface ConnectorBootData {
 	signatureRequired: boolean;
 	signatureFailures: {
 		failed_count: number;
+		/** Secondes Unix. */
 		last_failed_at: number | null;
 		last_code: string | null;
 	};
+	/**
+	 * État du jeton de connexion (Settings::token_state) : `none`, `ok`, `legacy`
+	 * (ancien format accepté), `refused` (ancien format refusé par le mode strict)
+	 * ou `unreadable` (altéré en base ou sels changés). Les deux derniers coupent
+	 * le site du manager.
+	 */
+	tokenState: string;
+	/** Mode strict du jeton (constante G2RD_CONNECTOR_REQUIRE_AUTHENTICATED_TOKEN). */
+	tokenStrict: boolean;
 	/** Points de restauration détenus par ce site (rollback des extensions). */
 	restorePoints: {
 		count: number;
