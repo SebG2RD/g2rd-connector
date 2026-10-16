@@ -37,13 +37,18 @@
  * coché, rend la coche invisible (blanc sur blanc) : la case semble décochée alors que
  * le réglage est actif. Constaté le 16/10/2026 avec le style d'administration du thème
  * G2RD (règle « body.wp-admin:not(.block-editor-page) input[type="checkbox"] »).
- * Ce sélecteur (0,5,2) passe devant celui-là et devant sa règle « :checked » (0,4,2),
- * quel que soit l'ordre de chargement, et ne vise que la page du connecteur sous
- * WordPress 7 et plus (classe « --wp7 » posée par Page::wrap_class()) : sous WordPress
- * 6, la coche est colorée sur fond blanc, peindre le fond la cacherait.
+ * Le fond (0,5,2) passe devant celui-là et devant sa règle « :checked » (0,4,2), quel
+ * que soit l'ordre de chargement, et ne vise que la page du connecteur sous WordPress 7
+ * et plus (classe « --wp7 » posée par Page::wrap_class()) : sous WordPress 6, la coche
+ * est colorée sur fond blanc, peindre le fond la cacherait.
+ * La bordure suit le fond au repos seulement (0,6,2) : au focus, elle reste celle de
+ * WordPress (schéma de couleurs) ou du thème, pour ne rien changer au dessin du focus.
  * Le repli #3858e9 est la couleur principale par défaut de l'administration WordPress 7.
  */
 body.wp-admin .g2rd-connector-wrap.g2rd-connector-wrap--wp7 input[type="checkbox"]:checked {
     background: var(--wp-admin-theme-color, #3858e9);
+}
+
+body.wp-admin .g2rd-connector-wrap.g2rd-connector-wrap--wp7 input[type="checkbox"]:checked:not(:focus) {
     border-color: var(--wp-admin-theme-color, #3858e9);
 }
