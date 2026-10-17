@@ -2,8 +2,13 @@
 /**
  * Job WP-Cron : heartbeat horaire vers le manager.
  *
- * Le hook 'g2rd_connector_heartbeat' est planifié à l'activation du plugin
- * et déclenché toutes les heures par WP-Cron.
+ * Le hook 'g2rd_connector_heartbeat' est planifié à l'enrôlement (schedule(),
+ * premier battement 60 s après), réparé à chaque démarrage d'un site enrôlé dont
+ * le battement ou les commandes à distance sont actifs (ensure_scheduled(), à une
+ * minute tirée au hasard dans l'heure), retiré à la désactivation du plugin, et
+ * déclenché toutes les heures par WP-Cron. Il porte deux travaux, chacun selon son
+ * réglage : le signe de vie (heartbeat_enabled) et le relevé de la file des
+ * commandes (remote_commands_enabled).
  *
  * @package G2RD\Connector
  */
@@ -22,6 +27,15 @@ use G2RD\Connector\Settings;
 final class HeartbeatJob {
 
 	public const HOOK = 'g2rd_connector_heartbeat';
+
+	/**
+	 * Intervalle de `hourly` (WordPress), en secondes : fenêtre du premier passage
+	 * quand le battement est réparé au démarrage (cf. ensure_scheduled()).
+	 *
+	 * Écrit en secondes littérales : `HOUR_IN_SECONDS` n'est défini qu'à l'exécution
+	 * par WordPress.
+	 */
+	public const INTERVAL_SECONDS = 3600;
 
 	/**
 	 * Horloge (secondes Unix). Injectable pour les tests ; `time()` sinon.
@@ -328,6 +342,32 @@ final class HeartbeatJob {
 		if ( ! wp_next_scheduled( self::HOOK ) ) {
 			wp_schedule_event( time() + 60, 'hourly', self::HOOK );
 		}
+	}
+
+	/**
+	 * Replanifie le battement s'il a disparu (E13). Appelée à chaque démarrage d'un
+	 * site enrôlé dont le battement ou les commandes à distance sont actifs : la
+	 * désactivation retire l'événement (unschedule()), et ni l'activation ni le
+	 * démarrage ne le remettaient. Le site restait alors sans signe de vie, et sans
+	 * relevé de la file des commandes, jusqu'à un nouvel enrôlement.
+	 *
+	 * Premier passage tiré au hasard dans l'heure (cf. Phase) : après une mise à jour
+	 * du connecteur, les sites ne repartent pas tous à la même minute. Un battement
+	 * déjà planifié garde sa date ; l'enrôlement garde son premier battement rapide
+	 * (schedule()).
+	 *
+	 * Coût à chaque démarrage : une lecture du tableau des tâches planifiées, déjà
+	 * chargé en mémoire par WordPress (option `cron`, autochargée).
+	 *
+	 * @param (\Closure(int, int): int)|null $random Tirage, injectable pour les tests.
+	 * @return bool Vrai si le battement vient d'être replanifié.
+	 */
+	public static function ensure_scheduled( ?\Closure $random = null ): bool {
+		if ( wp_next_scheduled( self::HOOK ) ) {
+			return false;
+		}
+
+		return true === wp_schedule_event( Phase::first_run( time(), self::INTERVAL_SECONDS, $random ), 'hourly', self::HOOK );
 	}
 
 	public static function unschedule(): void {

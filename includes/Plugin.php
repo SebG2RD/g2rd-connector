@@ -161,9 +161,14 @@ final class Plugin {
 			add_action( 'rest_api_init', [ new CommandController(), 'register' ] );
 		}
 
-		// Outbound : cron heartbeat (opt-in via Settings).
-		if ( Settings::get( 'heartbeat_enabled' ) ) {
+		// La tâche horaire porte deux travaux, chacun décidé par son réglage dans run() :
+		// le signe de vie (heartbeat_enabled) et le relevé de la file des commandes
+		// (remote_commands_enabled). Elle est donc branchée dès que l'un des deux est actif.
+		if ( Settings::get( 'heartbeat_enabled' ) || Settings::get( 'remote_commands_enabled' ) ) {
 			( new HeartbeatJob() )->register();
+			// Réparé à chaque démarrage, comme la découverte et la purge (E13) : une
+			// désactivation puis réactivation le retirait pour toujours.
+			HeartbeatJob::ensure_scheduled();
 		}
 
 		// Outbound : events temps réel (opt-in via Settings).
