@@ -7,6 +7,7 @@ namespace G2RD\Connector\Tests;
 use Brain\Monkey\Functions;
 use G2RD\Connector\Cron\Phase;
 use G2RD\Connector\Cron\RestorePointPurgeJob;
+use G2RD\Connector\Environment\SizeReport;
 use G2RD\Connector\Events\LoginFailedThrottle;
 use G2RD\Connector\Rest\DbHealth;
 use G2RD\Connector\Rollback\UpdateTransaction;
@@ -198,6 +199,21 @@ final class UninstallTest extends TestCase {
 		$this->uninstall();
 
 		self::assertContains( WporgAnswers::OPTION, $deleted );
+	}
+
+	/** Volumes mesurés chaque jour (cf. Environment\SizeReport) : option de réseau, une seule même en multisite. */
+	public function test_la_mesure_de_l_environnement_est_supprimee(): void {
+		$deleted = [];
+		Functions\when( 'delete_site_option' )->alias(
+			static function ( string $key ) use ( &$deleted ): bool {
+				$deleted[] = $key;
+				return true;
+			}
+		);
+
+		$this->uninstall();
+
+		self::assertContains( SizeReport::OPTION, $deleted );
 	}
 
 	private function uninstall(): void {

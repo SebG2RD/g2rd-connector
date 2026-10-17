@@ -16,6 +16,7 @@ use G2RD\Connector\Cron\RestorePointPurgeJob;
 use G2RD\Connector\Cron\UpdatesDiscoveryJob;
 use G2RD\Connector\DirectLogin\Endpoint;
 use G2RD\Connector\DirectLogin\UsedTickets;
+use G2RD\Connector\Environment\SizeReport;
 use G2RD\Connector\Events\Listener;
 use G2RD\Connector\Outbound\ManagerIpv4Guard;
 use G2RD\Connector\Rest\AdminController;
@@ -154,6 +155,10 @@ final class Plugin {
 		// n'en dépend pas : expiration contrôlée avant l'usage unique).
 		( new Endpoint() )->register();
 		add_action( RestorePointPurgeJob::HOOK, [ UsedTickets::class, 'purge_now' ] );
+		// Volumes (wp-content, médias, base) mesurés sur la même tâche biquotidienne, au
+		// plus une fois par 20 h, sous verrou et bornés ; le snapshot ne lit que ce cache
+		// (cf. Environment\SizeReport). Aucune nouvelle tâche planifiée.
+		add_action( RestorePointPurgeJob::HOOK, [ SizeReport::class, 'refresh_now' ] );
 
 		// Endpoints REST sécurisés Bearer SiteToken (consommés par le manager).
 		add_action( 'rest_api_init', [ new SnapshotController(), 'register' ] );
