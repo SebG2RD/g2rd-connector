@@ -139,7 +139,8 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   panel uses the console's own classes and looks like the other tabs; with an older console
   (theme 1.19 to 1.40) it draws the same layout with its own styles, limited to the panel and
   based on the WordPress admin colours, where each switch takes a click over 44 pixels of
-  height. Settings, REST routes and stored data are unchanged.
+  height. Settings, REST routes and stored data are unchanged (the enrolment error now carries
+  two extra fields, see below).
 * **Change: clearer action messages in the connector panel.** The result of the last action
   (save, enrolment, disconnection, test) appears under the buttons of "Connexion au manager"
   and is announced by screen readers. Failure messages now give the probable cause and what
