@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.13.0
+Stable tag: 1.14.0-rc.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -84,6 +84,46 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 
 = Unreleased =
 
+* **New: long commands can run in the background (`async_commands`).** The host's CDN resends a
+  request left about 60 seconds without an answer, so a long update could run twice. Two new
+  routes, `POST /wp-json/g2rd/v1/command-runs` and `GET /wp-json/g2rd/v1/command-runs/<id>`,
+  are registered under the same condition as `/command` (remote commands allowed). Both require
+  the token AND a valid signature, whatever the site's signature policy. The platform hands a
+  long command (updates, plugin rollback, database cleanups) to the site under an ID it chose;
+  the site answers "received" within a second or two, finishes the response
+  (`litespeed_finish_request()` or `fastcgi_finish_request()`), then runs the command in the
+  same process, through the same code as `/command`. The platform reads the result with short
+  signed requests. A resend of the same ID only gets the state back: the command never runs
+  twice. A site runs one background command at a time (another one is refused as busy, with
+  nothing run). The inventory announces the
+  `async_commands` capability only when the server can finish a response early and the
+  `G2RD_CONNECTOR_DISABLE_ASYNC_COMMANDS` constant is not set in `wp-config.php`; otherwise the
+  platform keeps using `/command`, as before. Run records are kept 7 days, 200 at most
+  (options `g2rd_cmdrun_*`, not autoloaded, removed on uninstall). A diagnostic command,
+  `async_probe`, stays off unless `G2RD_CONNECTOR_ASYNC_PROBE` is set in `wp-config.php`.
+  `/command` and the heartbeat queue are unchanged; nothing changes for a site until the
+  platform turns the mode on. What the manager reads through the new route is listed under
+  "What is sent, when" (External service section).
+
+= 1.14.0-rc.2 =
+
+* **Fix: update check answers served through a hosting proxy are now noted (Hostinger).** On
+  Hostinger, the `hostinger-auto-updates.php` must-use plugin re-sends every request to
+  api.wordpress.org to its own proxy (wpapi.hostinger.io by default) from the
+  `pre_http_request` filter, and returns the proxy's answer to WordPress. WordPress uses that
+  value as is, without the `http_api_debug` action for the original address, so 1.14.0-rc.1
+  never noted an answer on these sites and the inventory refreshed the three update checks at
+  every sync (as in 1.13: heavier, never wrong). The connector now also reads the final value
+  of `pre_http_request` (filter hooked last, value always returned unchanged), the one
+  WordPress uses: when the original address is exactly one of the three update checks, that
+  value counts as the answer, whatever host served it, with the same rules as before (a 200
+  whose JSON body carries the check's data, kept pending until WordPress writes the cached
+  answer that carries it, one write per successful check). The nested request to the proxy is
+  not counted. The status code must now be exactly the integer 200, as WordPress itself
+  requires: a "200" string returned by a filter makes WordPress stop without writing anything.
+
+= 1.14.0-rc.1 =
+
 * **Performance: the connector's scheduled tasks no longer all run at the same minute.** The
   update discovery and the restore point purge were scheduled at a fixed delay after the first
   page load following a connector update, and WordPress keeps that phase from one run to the
@@ -111,19 +151,28 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
     `g2rd_connector_wporg_answers`, not autoloaded, one write per successful check, removed on
     uninstall), when its body is JSON carrying the data of that check (`offers`, `plugins` or
     `themes`): after a 200 with an HTML body (a CDN challenge page), WordPress writes an empty
-    cached answer, which must not pass for fresh. With no answer noted (connector just updated, WordPress.org blocked), the
+    cached answer, which must not pass for fresh. The answer is kept pending in memory and
+    noted only when WordPress then writes the cached answer that carries it, in the same PHP
+    request (`set_site_transient_{$transient}` action, or an identical rewrite): a 200 that
+    WordPress does not write (turned into something else by an `http_response` filter, or an
+    update-check call made by another plugin) does not count, and the `last_checked` write made
+    before the call never notes anything. A request short-circuited by `pre_http_request` is
+    never noted. With no answer noted (connector just updated, WordPress.org blocked), the
     inventory refreshes every time, as before. The platform's "Check updates" command
-    (`check_updates`) still forces it. Updates announced by third-party updaters that do not
+    (`check_updates`) still forces it. Trade-off: a version released on WordPress.org within
+    the 3 hours before a sync, after the last answered check, may only show up at the next
+    sync, up to one sync interval (about 7 hours) later than before; worst case, about 10 hours
+    after its release instead of about 7. "Check updates" still forces the refresh. Updates announced by third-party updaters that do not
     run in REST requests are still reported. A failed core check now keeps the last known
     answer instead of an empty one;
   * `db_health` is computed at most once a day (option `g2rd_connector_db_health`, not
     autoloaded, forgotten after each database cleanup command, removed on uninstall, on every
     site of a multisite network); its `collected_at` field gives the date of that computation.
-    A computation with a failed query is not kept. **Delivery order: the platform first.** G2RD
-    WP Manager 1.59.0 ignores `collected_at` and dates the counters with the sync time ("Measured
-    … ago"): before this connector version is rolled out to sites, the platform must read
-    `collected_at` (ISO 8601 date capped at now, falling back to the sync time). Otherwise it
-    would show "measured 2 minutes ago" for counters up to almost 24 hours old;
+    A computation with a failed query is not kept. **Platform: G2RD WP Manager 1.60.0 or
+    later** to show the real date of the counters: it reads `collected_at` (ISO 8601 date capped
+    at now, falling back to the sync time). An older platform ignores that field and dates the
+    counters with the sync time ("Measured … ago"): it would show "measured 2 minutes ago" for
+    counters up to almost 24 hours old;
   * OPcache is invalidated for the connector's own files only: plugin and theme versions are
     read from the files themselves, which OPcache never serves.
   The JSON fields are unchanged.
@@ -134,26 +183,6 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   count). Child, premium and custom themes are false. No extra network call. The field is left
   out when that transient holds no answer from WordPress.org; the manager then keeps its former
   computation.
-* **New: long commands can run in the background (`async_commands`).** The host's CDN resends a
-  request left about 60 seconds without an answer, so a long update could run twice. Two new
-  routes, `POST /wp-json/g2rd/v1/command-runs` and `GET /wp-json/g2rd/v1/command-runs/<id>`,
-  are registered under the same condition as `/command` (remote commands allowed). Both require
-  the token AND a valid signature, whatever the site's signature policy. The platform hands a
-  long command (updates, plugin rollback, database cleanups) to the site under an ID it chose;
-  the site answers "received" within a second or two, finishes the response
-  (`litespeed_finish_request()` or `fastcgi_finish_request()`), then runs the command in the
-  same process, through the same code as `/command`. The platform reads the result with short
-  signed requests. A resend of the same ID only gets the state back: the command never runs
-  twice. A site runs one background command at a time (another one is refused as busy, with
-  nothing run). The inventory announces the
-  `async_commands` capability only when the server can finish a response early and the
-  `G2RD_CONNECTOR_DISABLE_ASYNC_COMMANDS` constant is not set in `wp-config.php`; otherwise the
-  platform keeps using `/command`, as before. Run records are kept 7 days, 200 at most
-  (options `g2rd_cmdrun_*`, not autoloaded, removed on uninstall). A diagnostic command,
-  `async_probe`, stays off unless `G2RD_CONNECTOR_ASYNC_PROBE` is set in `wp-config.php`.
-  `/command` and the heartbeat queue are unchanged; nothing changes for a site until the
-  platform turns the mode on. What the manager reads through the new route is listed under
-  "What is sent, when" (External service section).
 
 = 1.13.0 =
 

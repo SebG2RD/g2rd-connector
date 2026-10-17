@@ -712,23 +712,44 @@ chacun s'additionne.
     date toute neuve. Le connecteur note donc l'heure de chaque réponse 200 de api.wordpress.org
     aux trois vérifications (`Updates\WporgAnswers`, action `http_api_debug`, option de réseau
     non autochargée `g2rd_connector_wporg_answers`, une écriture par vérification réussie,
-    retirée à la désinstallation), si son corps est du JSON qui porte les données de la
+    retirée à la désinstallation), si son code est exactement l'entier 200 (comme
+    `update.php`) et son corps du JSON qui porte les données de la
     vérification (`offers`, `plugins` ou `themes`) : après un 200 au corps HTML (page de défi
-    d'un CDN), WordPress écrit un transient vide, qui ne doit pas passer pour frais. Sans
+    d'un CDN), WordPress écrit un transient vide, qui ne doit pas passer pour frais. La
+    réponse reste en attente en mémoire et n'est notée que si WordPress écrit ensuite, dans la
+    même requête PHP, le transient qui la porte (filtre `pre_set_site_transient_{$transient}`
+    puis action `set_site_transient_{$transient}`, ou réécriture identique) : un 200 que
+    WordPress n'écrit pas (filtre `http_response` qui le transforme, appel d'update-check fait
+    par une autre extension) ne compte pas, et l'écriture de `last_checked` d'avant l'appel ne
+    note jamais rien. Une requête court-circuitée par un filtre `pre_http_request` compte aussi :
+    sur les sites hébergés chez Hostinger, le mu-plugin `hostinger-auto-updates.php` refait
+    chaque requête vers api.wordpress.org vers son proxy (wpapi.hostinger.io par défaut) et rend
+    la réponse du proxy à WordPress sans action `http_api_debug` pour l'adresse d'origine — en
+    1.14.0-rc.1, rien n'y était donc noté (pilote g2rd.fr, 16/10/2026). Le connecteur observe la
+    valeur finale de `pre_http_request` (filtre branché en dernier, valeur rendue telle quelle),
+    celle que WordPress utilise : quand l'adresse d'ORIGINE est exactement l'une des trois
+    vérifications, elle compte comme la réponse, quel que soit l'hôte qui l'a servie, avec les
+    mêmes règles (en attente jusqu'à l'écriture du transient qui la porte, une écriture par
+    vérification réussie) ; la requête imbriquée vers le proxy n'est pas comptée. Sans
     réponse notée (connecteur tout juste mis à jour,
-    wordpress.org bloqué), l'inventaire rafraîchit à chaque fois, comme avant. La commande
-    `check_updates` (« Vérifier les MAJ ») force toujours. Les mises à jour des updaters tiers
+    wordpress.org ou son proxy injoignable), l'inventaire rafraîchit à chaque fois, comme avant. La commande
+    `check_updates` (« Vérifier les MAJ ») force toujours. Contrepartie : une version publiée
+    sur wordpress.org dans les 3 h qui précèdent une synchronisation, après la dernière
+    vérification répondue, peut n'apparaître qu'à la synchronisation suivante, jusqu'à un
+    intervalle de synchronisation (environ 7 h) plus tard qu'avant ; pire cas, environ 10 h
+    après sa publication au lieu d'environ 7 h. « Vérifier les MAJ » force toujours le
+    rafraîchissement. Les mises à jour des updaters tiers
     absents du contexte REST restent annoncées (rejeu de la capture). Une vérification du cœur
     en échec garde la dernière réponse connue au lieu d'un transient vide ;
   - `db_health` est calculé au plus une fois par jour (`Rest\DbHealth`, option non autochargée
     `g2rd_connector_db_health`, oubliée après chaque commande de nettoyage de la base, retirée à
     la désinstallation, sur chaque blog en multisite) ; `collected_at` donne la date de ce calcul.
-    Un calcul dont une requête a échoué n'est pas gardé. **Ordre de livraison : la plateforme
-    d'abord.** G2RD WP Manager 1.59.0 ignore `collected_at` et date les compteurs de l'heure de
-    la synchronisation (`SiteHealthMetrics::applyDbHealth()`, « Mesuré il y a … ») : avant de
-    diffuser cette version du connecteur, la plateforme doit lire `collected_at` (date ISO 8601
-    bornée à maintenant, repli sur l'heure de la synchronisation). Sinon, elle afficherait
-    « mesuré il y a 2 minutes » pour des compteurs vieux de près de 24 h ;
+    Un calcul dont une requête a échoué n'est pas gardé. **Plateforme : G2RD WP Manager 1.60.0
+    ou plus récent** pour afficher la vraie date des compteurs : elle lit `collected_at` (date
+    ISO 8601 bornée à maintenant, repli sur l'heure de la synchronisation). Une plateforme plus
+    ancienne ignore ce champ et date les compteurs de l'heure de la synchronisation
+    (« Mesuré il y a … ») : elle afficherait « mesuré il y a 2 minutes » pour des compteurs
+    vieux de près de 24 h ;
   - l'OPcache n'est invalidé que pour les fichiers du connecteur : les versions des extensions
     et des thèmes sont lues dans les fichiers eux-mêmes (`get_file_data()`), que l'OPcache ne
     sert jamais.

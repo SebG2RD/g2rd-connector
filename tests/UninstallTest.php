@@ -11,6 +11,7 @@ use G2RD\Connector\Cron\RestorePointPurgeJob;
 use G2RD\Connector\Events\LoginFailedThrottle;
 use G2RD\Connector\Rest\DbHealth;
 use G2RD\Connector\Rollback\UpdateTransaction;
+use G2RD\Connector\Settings;
 use G2RD\Connector\Tests\CommandRuns\FakeOptionsTable;
 use G2RD\Connector\Tests\DirectLogin\FakeWpdb;
 use G2RD\Connector\Updates\WporgAnswers;
@@ -155,6 +156,36 @@ final class UninstallTest extends TestCase {
 
 		self::assertContains( '1:' . DbHealth::OPTION, $deleted );
 		self::assertContains( '2:' . DbHealth::OPTION, $deleted );
+	}
+
+	/**
+	 * Réseau de plus de 100 blogs : get_sites() n'en rend que 100 par défaut
+	 * (WP_Site_Query, `number` = 100), tous avec `'number' => 0`. Les options de chaque
+	 * blog — dont `g2rd_connector_settings`, qui porte le jeton chiffré du site — sont
+	 * retirées sur tous, pas seulement sur les 100 premiers.
+	 */
+	public function test_les_options_de_chaque_blog_sont_retirees_au_dela_de_100_blogs(): void {
+		Functions\when( 'get_sites' )->alias(
+			static function ( array $args = [] ): array {
+				$number = $args['number'] ?? 100;
+				return range( 1, 0 === $number ? 150 : min( 150, (int) $number ) );
+			}
+		);
+		$deleted = [];
+		Functions\when( 'delete_option' )->alias(
+			function ( string $key ) use ( &$deleted ): bool {
+				$deleted[] = $this->blog . ':' . $key;
+				unset( $this->options[ $key ] );
+				return true;
+			}
+		);
+
+		$this->uninstall();
+
+		foreach ( [ Settings::OPTION_KEY, Phase::OPTION, DbHealth::OPTION ] as $option ) {
+			self::assertContains( '150:' . $option, $deleted, $option );
+		}
+		self::assertContains( '150:' . LoginFailedThrottle::TRANSIENT_KEY, $this->deleted_transients );
 	}
 
 	/** Heure des réponses de wordpress.org (cf. Updates\WporgAnswers) : option de réseau, comme les transients de mise à jour. */

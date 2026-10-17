@@ -26,17 +26,24 @@ delete_transient( 'g2rd_connector_login_failed_window' );
 delete_option( 'g2rd_connector_cron_phase' );
 delete_option( 'g2rd_connector_db_health' );
 
-// Si multisite, suppression sur chaque blog.
+// Si multisite, suppression sur chaque blog. 'number' => 0 : tous les blogs
+// (get_sites() n'en rend que 100 par défaut ; au-delà, les réglages, dont le jeton
+// chiffré du site, resteraient sur les blogs suivants).
 if ( is_multisite() ) {
-    $blog_ids = get_sites( [ 'fields' => 'ids' ] );
-    foreach ( $blog_ids as $blog_id ) {
-        switch_to_blog( (int) $blog_id );
-        delete_option( 'g2rd_connector_settings' );
-        delete_transient( 'g2rd_connector_login_failed_window' );
-        delete_option( 'g2rd_connector_cron_phase' );
-        delete_option( 'g2rd_connector_db_health' );
-        restore_current_blog();
-    }
+	$blog_ids = get_sites(
+		[
+			'fields' => 'ids',
+			'number' => 0,
+		]
+	);
+	foreach ( $blog_ids as $blog_id ) {
+		switch_to_blog( (int) $blog_id );
+		delete_option( 'g2rd_connector_settings' );
+		delete_transient( 'g2rd_connector_login_failed_window' );
+		delete_option( 'g2rd_connector_cron_phase' );
+		delete_option( 'g2rd_connector_db_health' );
+		restore_current_blog();
+	}
 }
 
 // Capture des MAJ tierces (option, pas transient : elle doit survivre au

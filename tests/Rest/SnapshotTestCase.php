@@ -7,6 +7,7 @@ namespace G2RD\Connector\Tests\Rest;
 use Brain\Monkey\Functions;
 use G2RD\Connector\Rest\SnapshotController;
 use G2RD\Connector\Tests\TestCase;
+use G2RD\Connector\Tests\Updates\HostingerProxy;
 use G2RD\Connector\Updates\PremiumUpdatesBridge;
 use G2RD\Connector\Updates\WporgAnswers;
 
@@ -31,8 +32,24 @@ abstract class SnapshotTestCase extends TestCase {
 		'premium-pro'      => '2.0',
 	];
 
+	/**
+	 * Adresse et corps de la réponse de wordpress.org aux trois vérifications
+	 * (wp-includes/update.php).
+	 */
+	private const WPORG_REQUESTS = [
+		'core'    => [ 'https://api.wordpress.org/core/version-check/1.7/?version=' . self::WP_VERSION, '{"offers":[{"response":"latest"}],"translations":[]}' ],
+		'plugins' => [ 'https://api.wordpress.org/plugins/update-check/1.1/', '{"plugins":[],"translations":[],"no_update":[]}' ],
+		'themes'  => [ 'https://api.wordpress.org/themes/update-check/1.1/', '{"themes":[],"translations":[],"no_update":[]}' ],
+	];
+
 	/** @var array<string, mixed> Transients de site, par nom. */
 	protected array $transients = [];
+
+	/**
+	 * Le site a le mu-plugin Hostinger (cf. Tests\Updates\HostingerProxy) : les vérifications
+	 * de WordPress passent par son proxy, et leur réponse arrive par `pre_http_request`.
+	 */
+	protected bool $hostinger_proxy = false;
 
 	/** @var array<string, list<array<mixed>>> Appels notés, par fonction : leurs arguments. */
 	protected array $calls = [];
@@ -71,6 +88,10 @@ abstract class SnapshotTestCase extends TestCase {
 		$this->calls        = [];
 		$this->site_options = [];
 		$this->wpdb         = new SnapshotWpdb();
+
+		$this->hostinger_proxy = false;
+		HostingerProxy::reset();
+
 		$this->wporg_themes = [
 			'response'  => [],
 			'no_update' => [
@@ -159,31 +180,75 @@ abstract class SnapshotTestCase extends TestCase {
 	}
 
 	/**
-	 * Ce que WordPress passe à `http_api_debug` (WP_Http::request()) après une réponse
-	 * 200 de wordpress.org à l'une des trois vérifications : la réponse est notée.
+	 * Ce que voit WporgAnswers d'une vérification réussie de WordPress, dans l'ordre de
+	 * wp-includes/update.php : écriture du transient d'avant l'appel, réponse 200 de
+	 * wordpress.org (`http_api_debug` puis `http_response`, WP_Http::request()), écriture
+	 * du transient qui la porte. La réponse est notée.
 	 */
 	protected static function wporg_answered( string $check ): void {
-		$requests = [
-			'core'    => [ 'https://api.wordpress.org/core/version-check/1.7/?version=' . self::WP_VERSION, '{"offers":[{"response":"latest"}],"translations":[]}' ],
-			'plugins' => [ 'https://api.wordpress.org/plugins/update-check/1.1/', '{"plugins":[],"translations":[],"no_update":[]}' ],
-			'themes'  => [ 'https://api.wordpress.org/themes/update-check/1.1/', '{"themes":[],"translations":[],"no_update":[]}' ],
-		];
-		[ $url, $body ] = $requests[ $check ];
+		$transient = 'update_' . $check;
 
-		WporgAnswers::record(
-			[
+		self::transient_written( $transient );
+		self::wporg_response( $check );
+		self::transient_written( $transient );
+	}
+
+	/**
+	 * Réponse 200 de wordpress.org à l'une des trois vérifications, telle que
+	 * `http_api_debug` la reçoit, puis telle que WordPress la lit après le filtre
+	 * `http_response` : la même, sauf code transformé par un autre filtre (`$read_code`).
+	 */
+	protected static function wporg_response( string $check, int $read_code = 200 ): void {
+		[ $url, $body ] = self::WPORG_REQUESTS[ $check ];
+		$received       = [
+			'headers'  => [],
+			'body'     => $body,
+			'response' => [
+				'code'    => 200,
+				'message' => 'OK',
+			],
+		];
+		$read           = $received;
+
+		$read['response']['code'] = $read_code;
+
+		WporgAnswers::record( $received, 'response', 'WpOrg\Requests\Requests', [], $url );
+		WporgAnswers::confirm_response( $read, [], $url );
+	}
+
+	/**
+	 * Même vérification réussie sur un site qui a le mu-plugin Hostinger : la requête vers
+	 * api.wordpress.org est refaite vers le proxy, qui répond 200 ; WordPress reçoit sa
+	 * réponse par le filtre `pre_http_request` (WP_Http::request() la rend sans
+	 * `http_api_debug` ni `http_response` pour l'adresse d'origine).
+	 */
+	protected static function wporg_answered_through_proxy( string $check ): void {
+		$transient      = 'update_' . $check;
+		[ $url, $body ] = self::WPORG_REQUESTS[ $check ];
+
+		self::transient_written( $transient );
+		HostingerProxy::request(
+			$url,
+			static fn (): array => [
 				'headers'  => [],
 				'body'     => $body,
 				'response' => [
 					'code'    => 200,
 					'message' => 'OK',
 				],
-			],
-			'response',
-			'WpOrg\Requests\Requests',
-			[],
-			$url
+			]
 		);
+		self::transient_written( $transient );
+	}
+
+	/**
+	 * set_site_transient() d'un transient de mise à jour, vu par WporgAnswers : filtre
+	 * `pre_set_site_transient_{$transient}`, puis action `set_site_transient_{$transient}`
+	 * (Brain Monkey note les branchements sans jamais les appeler).
+	 */
+	protected static function transient_written( string $transient ): void {
+		$value = WporgAnswers::before_write( (object) [ 'last_checked' => time() ], $transient );
+		WporgAnswers::after_write( $value, 0, $transient );
 	}
 
 	/** Offre « à jour » que wordpress.org rend toujours (api.wordpress.org/core/version-check/1.7/). */
@@ -368,7 +433,7 @@ abstract class SnapshotTestCase extends TestCase {
 		Functions\when( 'wp_version_check' )->alias(
 			function ( ...$args ): void {
 				$this->calls['wp_version_check'][] = $args;
-				self::wporg_answered( 'core' );
+				$this->wporg_answers( 'core' );
 				$this->transients['update_core'] = (object) [
 					'last_checked'    => time(),
 					'version_checked' => self::WP_VERSION,
@@ -380,7 +445,7 @@ abstract class SnapshotTestCase extends TestCase {
 		Functions\when( 'wp_update_plugins' )->alias(
 			function ( ...$args ): void {
 				$this->calls['wp_update_plugins'][] = $args;
-				self::wporg_answered( 'plugins' );
+				$this->wporg_answers( 'plugins' );
 				$this->transients['update_plugins'] = (object) [
 					'last_checked' => time(),
 					'response'     => [],
@@ -392,13 +457,22 @@ abstract class SnapshotTestCase extends TestCase {
 		Functions\when( 'wp_update_themes' )->alias(
 			function ( ...$args ): void {
 				$this->calls['wp_update_themes'][] = $args;
-				self::wporg_answered( 'themes' );
+				$this->wporg_answers( 'themes' );
 				$this->transients['update_themes'] = (object) ( [
 					'last_checked' => time(),
 					'checked'      => self::THEME_VERSIONS,
 				] + $this->wporg_themes );
 			}
 		);
+	}
+
+	/** Vérification réussie, servie par wordpress.org ou par le proxy Hostinger selon le site. */
+	private function wporg_answers( string $check ): void {
+		if ( $this->hostinger_proxy ) {
+			self::wporg_answered_through_proxy( $check );
+		} else {
+			self::wporg_answered( $check );
+		}
 	}
 
 	/**

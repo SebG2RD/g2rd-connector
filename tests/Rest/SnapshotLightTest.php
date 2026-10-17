@@ -8,6 +8,7 @@ use Brain\Monkey\Functions;
 use G2RD\Connector\Commands\CommandExecutor;
 use G2RD\Connector\Rest\DbHealth;
 use G2RD\Connector\Rest\SnapshotController;
+use G2RD\Connector\Tests\Updates\HostingerProxy;
 use G2RD\Connector\Updates\PremiumUpdatesBridge;
 use G2RD\Connector\Updates\WporgAnswers;
 
@@ -147,10 +148,8 @@ final class SnapshotLightTest extends SnapshotTestCase {
 	}
 
 	/**
-	 * Aucune réponse notée (connecteur tout juste mis à jour, requête court-circuitée par
-	 * `pre_http_request` avec une erreur ou un code autre que 200 (un 200 fourni par le
-	 * filtre est noté, comme WordPress le tient pour une réponse)) : rafraîchi à chaque
-	 * fois, comme avant.
+	 * Aucune réponse notée (connecteur tout juste mis à jour, wordpress.org bloqué) :
+	 * rafraîchi à chaque synchronisation, comme avant. Plus lourd, jamais faux.
 	 */
 	public function test_sans_reponse_notee_de_wordpress_org_les_transients_sont_rafraichis(): void {
 		$this->update_transients_checked( self::FRESH );
@@ -173,6 +172,67 @@ final class SnapshotLightTest extends SnapshotTestCase {
 		self::assertSame( 1, $this->calls_to( 'wp_version_check' ) );
 		self::assertSame( 1, $this->calls_to( 'wp_update_plugins' ) );
 		self::assertSame( 1, $this->calls_to( 'wp_update_themes' ) );
+	}
+
+	/**
+	 * Le cas du pilote (g2rd.fr, WordPress 7.1.3, 16/10/2026) : le mu-plugin Hostinger refait
+	 * chaque requête vers api.wordpress.org vers son proxy et rend la réponse du proxy par le
+	 * filtre `pre_http_request` (cf. Tests\Updates\HostingerProxy). Aucune réponse n'était
+	 * notée et l'inventaire rafraîchissait à chaque synchronisation. La réponse que WordPress
+	 * reçoit du filtre, et écrit, est notée : la synchronisation suivante ne rappelle pas
+	 * wordpress.org.
+	 */
+	public function test_avec_le_proxy_hostinger_la_synchronisation_suivante_ne_rappelle_pas_wordpress_org(): void {
+		$this->hostinger_proxy = true;
+		$this->update_transients_checked( self::STALE );
+		unset( $this->site_options[ WporgAnswers::OPTION ] );
+
+		$this->snapshot();
+		$this->snapshot();
+
+		self::assertSame( 1, $this->calls_to( 'wp_version_check' ) );
+		self::assertSame( 1, $this->calls_to( 'wp_update_plugins' ) );
+		self::assertSame( 1, $this->calls_to( 'wp_update_themes' ) );
+		self::assertEqualsCanonicalizing(
+			[
+				'https://wpapi.hostinger.io/core/version-check/1.7/?version=' . self::WP_VERSION,
+				'https://wpapi.hostinger.io/plugins/update-check/1.1/',
+				'https://wpapi.hostinger.io/themes/update-check/1.1/',
+			],
+			HostingerProxy::$network,
+			'Une requête au proxy par vérification, aucune à api.wordpress.org.'
+		);
+		foreach ( [ 'core', 'plugins', 'themes' ] as $check ) {
+			self::assertTrue( PremiumUpdatesBridge::answered_recently( $check, time() ), $check );
+		}
+	}
+
+	/**
+	 * wordpress.org répond 200 aux extensions, mais un filtre `http_response` transforme
+	 * la réponse (503) : WordPress n'écrit pas le transient qui la porterait, seule
+	 * l'écriture d'avant l'appel a eu lieu (anciennes données sous une date neuve). La
+	 * réponse n'est pas notée, ni à cette synchronisation ni à la suivante, faite ici
+	 * dans le même processus PHP : la suivante rafraîchit encore.
+	 */
+	public function test_une_reponse_que_wordpress_n_ecrit_pas_ne_rend_pas_la_synchronisation_suivante_legere(): void {
+		$this->update_transients_checked( self::STALE );
+		Functions\when( 'wp_update_plugins' )->alias(
+			function ( ...$args ): void {
+				$this->calls['wp_update_plugins'][] = $args;
+				self::transient_written( 'update_plugins' );
+				$this->transients['update_plugins'] = (object) [ 'last_checked' => time() ];
+				self::wporg_response( 'plugins', 503 );
+			}
+		);
+
+		$this->snapshot();
+		$this->snapshot();
+
+		self::assertSame( 2, $this->calls_to( 'wp_update_plugins' ) );
+		self::assertSame( 1, $this->calls_to( 'wp_version_check' ) );
+		self::assertSame( 1, $this->calls_to( 'wp_update_themes' ) );
+		self::assertFalse( PremiumUpdatesBridge::answered_recently( 'plugins', time() ) );
+		self::assertTrue( PremiumUpdatesBridge::answered_recently( 'themes', time() ) );
 	}
 
 	/** Seule la vérification restée sans réponse est rafraîchie. */

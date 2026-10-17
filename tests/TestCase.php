@@ -15,6 +15,7 @@ use G2RD\Connector\Commands\CommandExecutor;
 use G2RD\Connector\Rollback\ProtectedUpdate;
 use G2RD\Connector\Rollback\UpdateTransaction;
 use G2RD\Connector\Updates\PremiumUpdatesBridge;
+use G2RD\Connector\Updates\WporgAnswers;
 use PHPUnit\Framework\TestCase as PHPUnitTestCase;
 
 abstract class TestCase extends PHPUnitTestCase {
@@ -70,6 +71,11 @@ abstract class TestCase extends PHPUnitTestCase {
 		( new \ReflectionProperty( PremiumUpdatesBridge::class, 'replay_plugins' ) )->setValue( null, [] );
 		( new \ReflectionProperty( PremiumUpdatesBridge::class, 'replay_themes' ) )->setValue( null, [] );
 		( new \ReflectionProperty( PremiumUpdatesBridge::class, 'filters_installed' ) )->setValue( null, false );
+		// Réponses de wordpress.org amorcées, en attente ou liées à une écriture : état de
+		// requête aussi (cf. WporgAnswers).
+		foreach ( [ 'primed', 'pending', 'writing' ] as $wporg_state ) {
+			( new \ReflectionProperty( WporgAnswers::class, $wporg_state ) )->setValue( null, [] );
+		}
 	}
 
 	protected function tearDown(): void {
