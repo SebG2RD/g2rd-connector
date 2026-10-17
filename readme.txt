@@ -94,7 +94,9 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   (`litespeed_finish_request()` or `fastcgi_finish_request()`), then runs the command in the
   same process, through the same code as `/command`. The platform reads the result with short
   signed requests. A resend of the same ID only gets the state back: the command never runs
-  twice. A site runs one background command at a time (another one is refused as busy, with
+  twice. Two sends of the same ID arriving at the same moment start it once; the second one
+  waits briefly (1.5 s at most) for the first to record it, then gets the state back too. A
+  site runs one background command at a time (another one is refused as busy, with
   nothing run). The inventory announces the
   `async_commands` capability only when the server can finish a response early and the
   `G2RD_CONNECTOR_DISABLE_ASYNC_COMMANDS` constant is not set in `wp-config.php`; otherwise the

@@ -540,7 +540,8 @@ est celle de `/command` pour chaque commande.
 | Constante d'arrêt posée, numéro inconnu | 503 `g2rd_connector_async_disabled` | non ; la plateforme repasse par `/command` |
 | Corps de plus de 16 Ko | 413 `g2rd_connector_body_too_large`, avant que WordPress ne décode le JSON (filtre `rest_pre_dispatch`, priorité 5) | non |
 | Numéro mal formé ; commande inconnue ou instantanée ; charge qui n'est pas un objet | 400 `g2rd_connector_invalid_command_id`, `g2rd_connector_command_not_async`, `g2rd_connector_invalid_payload` | non |
-| Base de données qui refuse une lecture ou une écriture ; même numéro en cours de réception par une autre requête | 500 `g2rd_connector_store_unavailable`, `g2rd_connector_acceptance_in_progress` | non par cette demande ; la plateforme vérifie le numéro |
+| Même numéro et même corps reçus au même instant par une autre requête (envoi simultané) | 200 `duplicate` dès que l'autre requête a enregistré le numéro (relu pendant 1,5 s au plus) | non par cette demande ; une seule exécution, celle de l'autre requête |
+| Base de données qui refuse une lecture ou une écriture ; même numéro en cours de réception par une autre requête et toujours pas enregistré après 1,5 s | 500 `g2rd_connector_store_unavailable`, `g2rd_connector_acceptance_in_progress` | non par cette demande ; la plateforme vérifie le numéro |
 
 Un numéro connu est traité avant la constante d'arrêt : le renvoi d'une commande déjà acceptée
 reçoit son état, jamais 503. Sinon, la plateforme croirait la commande jamais partie et la
