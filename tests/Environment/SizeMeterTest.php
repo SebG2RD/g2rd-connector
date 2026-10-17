@@ -155,6 +155,61 @@ final class SizeMeterTest extends FilesystemTestCase {
 	}
 
 	/**
+	 * Option upload_path réglée sur wp-content : tout wp-content est « médias », en un
+	 * seul parcours.
+	 */
+	public function test_medias_egaux_a_wp_content_mesures_en_un_seul_parcours(): void {
+		$this->write( 'wp-content/plugins/extension/extension.php', 100 );
+		$this->write( 'wp-content/2026/10/image.jpg', 1000 );
+
+		$asked  = [];
+		$result = ( new SizeMeter( 5, 100000, null, $this->recorded_entries( $asked ) ) )->measure_files( $this->content, $this->content . '/' );
+
+		self::assertSame( 1100, $result['wp_content_bytes'] );
+		self::assertSame( 1100, $result['uploads_bytes'], 'les médias sont tout wp-content' );
+		self::assertSame( 2, $result['files_counted'] );
+		self::assertFalse( $result['partial'] );
+		self::assertSame( [ str_replace( '\\', '/', $this->content ) ], $asked, 'un seul parcours' );
+	}
+
+	/**
+	 * Médias dans wp-content mais absents (site sans aucun média envoyé) : le parcours
+	 * de wp-content a tout vu, aucun média n'existe, la mesure exacte est 0. Hors de
+	 * wp-content, un dossier qui ne s'ouvre pas rend null : absent ou illisible, on ne
+	 * sait pas lequel.
+	 */
+	public function test_medias_dans_wp_content_absents_valent_zero(): void {
+		$this->write( 'wp-content/plugins/extension/extension.php', 100 );
+
+		$result = ( new SizeMeter( 5, 100000 ) )->measure_files( $this->content, $this->content . '/uploads' );
+
+		self::assertSame( 0, $result['uploads_bytes'] );
+		self::assertSame( 100, $result['wp_content_bytes'] );
+		self::assertSame( 1, $result['files_counted'] );
+		self::assertFalse( $result['partial'] );
+	}
+
+	/**
+	 * Option upload_path réglée sur ABSPATH, le dossier du compte ou celui des domaines :
+	 * le dossier des médias CONTIENT wp-content. Le parcourir compterait wp-content deux
+	 * fois et passerait par les dossiers des autres sites du compte : il n'est pas
+	 * mesuré (null), et wp-content n'est parcouru qu'une fois.
+	 */
+	public function test_medias_qui_contiennent_wp_content_ne_sont_pas_parcourus(): void {
+		$this->write( 'wp-content/plugins/extension/extension.php', 100 );
+		$this->write( 'autre-site/wp-content/uploads/enorme.bin', 5000 );
+
+		$asked  = [];
+		$result = ( new SizeMeter( 5, 100000, null, $this->recorded_entries( $asked ) ) )->measure_files( $this->content, $this->root );
+
+		self::assertNull( $result['uploads_bytes'], 'configuration anormale : non mesurée' );
+		self::assertSame( 100, $result['wp_content_bytes'] );
+		self::assertSame( 1, $result['files_counted'], 'wp-content compté une seule fois' );
+		self::assertFalse( $result['partial'] );
+		self::assertSame( [ str_replace( '\\', '/', $this->content ) ], $asked, 'seul wp-content est parcouru' );
+	}
+
+	/**
 	 * @return array<string, array{string}>
 	 */
 	public static function unknown_uploads(): array {
@@ -184,14 +239,18 @@ final class SizeMeterTest extends FilesystemTestCase {
 	 */
 	public static function filesystem_roots(): array {
 		return [
-			'racine /'           => [ '/' ],
-			'racine \\ (Windows)' => [ '\\' ],
+			'racine /'                           => [ '/' ],
+			'racine \\ (Windows)'                => [ '\\' ],
+			// « C: » seul désigne le dossier COURANT du lecteur pour PHP, pas sa racine.
+			'racine de lecteur C:\\ (Windows)' => [ 'C:\\' ],
+			'racine de lecteur C:/ (Windows)'   => [ 'C:/' ],
 		];
 	}
 
 	/**
 	 * Option upload_path à `/` : le dossier des médias est la racine du système de
-	 * fichiers, vide une fois normalisé. Il n'est pas mesuré (null), et le reste l'est.
+	 * fichiers, vide (ou `C:` pour un lecteur Windows) une fois normalisé. Il n'est pas
+	 * mesuré (null), et le reste l'est.
 	 */
 	#[DataProvider( 'filesystem_roots' )]
 	public function test_medias_a_la_racine_du_systeme_rendent_null_sans_faire_echouer_la_mesure( string $root ): void {
@@ -211,7 +270,8 @@ final class SizeMeterTest extends FilesystemTestCase {
 	 * parcours, ni comme dossier des médias, ni comme wp-content (qui fait alors échouer
 	 * la mesure, avec le même message fixe qu'un dossier absent).
 	 */
-	public function test_la_racine_du_systeme_n_est_jamais_parcourue(): void {
+	#[DataProvider( 'filesystem_roots' )]
+	public function test_la_racine_du_systeme_n_est_jamais_parcourue( string $root ): void {
 		$asked   = [];
 		$entries = static function ( string $dir ) use ( &$asked ): \Iterator {
 			$asked[] = $dir;
@@ -219,12 +279,12 @@ final class SizeMeterTest extends FilesystemTestCase {
 		};
 		$meter   = new SizeMeter( 5, 100000, null, $entries );
 
-		$meter->measure_files( $this->content, '/' );
+		$meter->measure_files( $this->content, $root );
 		self::assertSame( [ str_replace( '\\', '/', $this->content ) ], $asked, 'seul wp-content est parcouru' );
 
 		$asked = [];
 		try {
-			$meter->measure_files( '/', '/uploads' );
+			$meter->measure_files( $root, '' );
 			self::fail( 'wp-content à la racine du système doit faire échouer la mesure' );
 		} catch ( \UnexpectedValueException $e ) {
 			self::assertStringContainsString( 'wp-content', $e->getMessage() );
@@ -260,18 +320,39 @@ final class SizeMeterTest extends FilesystemTestCase {
 		self::assertSame( 40, $result['uploads_bytes'] );
 	}
 
-	public function test_le_second_parcours_partage_le_budget_d_entrees(): void {
+	/**
+	 * @return array<string, array{int, int, int|null, bool}>
+	 */
+	public static function shared_entry_budgets(): array {
+		return [
+			// Budget, octets de wp-content, octets des médias, dossier des médias ouvert.
+			'borne atteinte dans les médias'              => [ 4, 30, 100, true ],
+			'borne atteinte pile à la fin de wp-content' => [ 3, 30, null, false ],
+			'borne atteinte dans wp-content'              => [ 2, 20, null, false ],
+		];
+	}
+
+	/**
+	 * Un seul budget pour les deux parcours. Borne atteinte avant les médias hors de
+	 * wp-content : leur dossier n'est pas ouvert, et rien n'en ayant été vu, ils ne sont
+	 * pas mesurés (null), plutôt qu'un 0 qui passerait pour un minimum.
+	 */
+	#[DataProvider( 'shared_entry_budgets' )]
+	public function test_le_second_parcours_partage_le_budget_d_entrees( int $budget, int $content_bytes, ?int $uploads_bytes, bool $uploads_opened ): void {
 		for ( $i = 0; $i < 3; $i++ ) {
 			$this->write( 'wp-content/plugins/fichier-' . $i . '.php', 10 );
 			$this->write( 'medias/image-' . $i . '.jpg', 100 );
 		}
 
-		$result = ( new SizeMeter( 5, 4 ) )->measure_files( $this->content, $this->root . '/medias' );
+		$asked  = [];
+		$result = ( new SizeMeter( 5, $budget, null, $this->recorded_entries( $asked ) ) )->measure_files( $this->content, $this->root . '/medias' );
 
 		self::assertTrue( $result['partial'] );
-		self::assertSame( 4, $result['files_counted'], 'un seul budget pour les deux parcours' );
-		self::assertSame( 30, $result['wp_content_bytes'] );
-		self::assertSame( 100, $result['uploads_bytes'], 'minimum : une seule image vue avant la borne' );
+		self::assertSame( $budget, $result['files_counted'], 'un seul budget pour les deux parcours' );
+		self::assertSame( $content_bytes, $result['wp_content_bytes'] );
+		self::assertSame( $uploads_bytes, $result['uploads_bytes'], 'minimum, ou null si aucun média n\'a été vu' );
+		$opened = [ str_replace( '\\', '/', $this->content ), str_replace( '\\', '/', $this->root . '/medias' ) ];
+		self::assertSame( $uploads_opened ? $opened : [ $opened[0] ], $asked );
 	}
 
 	public function test_borne_en_temps_rend_un_minimum_partiel(): void {
@@ -307,6 +388,32 @@ final class SizeMeterTest extends FilesystemTestCase {
 		self::assertGreaterThanOrEqual( 1000, $result['scan_ms'] );
 	}
 
+	/**
+	 * Une arborescence faite de dossiers vides (cache vidé mais gardé, sessions) ne
+	 * remet aucun fichier : les dossiers traversés doivent eux aussi faire avancer le
+	 * contrôle du temps, sinon le parcours n'aurait plus de borne. Ils ne comptent pas
+	 * comme des entrées (`files_counted`).
+	 */
+	public function test_une_arborescence_de_dossiers_vides_reste_bornee_en_temps(): void {
+		for ( $i = 0; $i < 300; $i++ ) {
+			mkdir( $this->content . '/cache/session-' . $i, 0777, true );
+		}
+
+		// Chaque lecture de l'horloge après le départ avance de 600 ms : la seconde de
+		// budget est dépassée au deuxième contrôle (256 dossiers plus loin).
+		$readings = 0;
+		$clock    = static function () use ( &$readings ): int {
+			return 600 * $readings++;
+		};
+
+		$result = ( new SizeMeter( 1, 100000, $clock ) )->measure_files( $this->content, $this->content . '/uploads' );
+
+		self::assertTrue( $result['partial'], 'borne de temps atteinte sans aucun fichier' );
+		self::assertSame( 0, $result['files_counted'], 'un dossier n\'est pas une entrée' );
+		self::assertSame( 0, $result['wp_content_bytes'] );
+		self::assertSame( 4, $readings, 'départ, deux contrôles pendant le parcours, durée finale' );
+	}
+
 	// ── Robustesse et sécurité du parcours ──────────────────────────────────────
 
 	/**
@@ -338,6 +445,44 @@ final class SizeMeterTest extends FilesystemTestCase {
 		self::assertSame( $expected_entries, $result['files_counted'], 'un lien compte comme une entrée, pour 0 octet' );
 		self::assertSame( 0, $result['uploads_bytes'], 'les médias de l\'autre site ne sont pas parcourus' );
 		self::assertFalse( $result['partial'] );
+	}
+
+	/**
+	 * @return array<string, array{string, string, int}>
+	 */
+	public static function linked_uploads(): array {
+		return [
+			// Emplacement du lien, dossier des médias, entrées comptées (wp-content seul).
+			'médias = lien dans wp-content'       => [ 'wp-content/uploads', 'wp-content/uploads', 2 ],
+			'médias sous un lien dans wp-content' => [ 'wp-content/partage', 'wp-content/partage/2026', 2 ],
+			'médias = lien hors de wp-content'    => [ 'medias', 'medias', 1 ],
+		];
+	}
+
+	/**
+	 * Dossier des médias qui est un lien (stockage partagé, médias d'un autre site du
+	 * compte) : dans wp-content, le parcours voit le lien comme une entrée de 0 octet et
+	 * un sous-total de 0 passerait pour une mesure exacte ; hors de wp-content, l'ouvrir
+	 * suivrait le lien. Dans les deux cas : non mesuré (null), jamais parcouru. Même
+	 * précédent de lien (ou de jonction Windows) que test_un_lien_symbolique_n_est_jamais_suivi.
+	 */
+	#[DataProvider( 'linked_uploads' )]
+	public function test_un_dossier_des_medias_atteint_par_un_lien_n_est_pas_mesure( string $link, string $uploads, int $entries ): void {
+		$this->write( 'wp-content/plugins/extension/extension.php', 100 );
+		$this->write( 'autre-site/2026/enorme.bin', 5000 );
+
+		if ( ! $this->link( $this->root . '/autre-site', $this->root . '/' . $link ) ) {
+			self::markTestSkipped( 'Le système refuse de créer un lien symbolique ou une jonction.' );
+		}
+
+		$asked  = [];
+		$result = ( new SizeMeter( 5, 100000, null, $this->recorded_entries( $asked ) ) )->measure_files( $this->content, $this->root . '/' . $uploads );
+
+		self::assertNull( $result['uploads_bytes'], 'non mesuré : ni 0, ni la taille de la cible' );
+		self::assertSame( 100, $result['wp_content_bytes'], 'rien de la cible n\'est compté' );
+		self::assertSame( $entries, $result['files_counted'], 'un lien dans wp-content compte comme une entrée, pour 0 octet' );
+		self::assertFalse( $result['partial'] );
+		self::assertSame( [ str_replace( '\\', '/', $this->content ) ], $asked, 'la cible du lien n\'est jamais ouverte' );
 	}
 
 	public function test_dossier_illisible_ignore_sans_erreur(): void {
@@ -493,6 +638,24 @@ final class SizeMeterTest extends FilesystemTestCase {
 		}
 		file_put_contents( $path, str_repeat( 'x', $bytes ) );
 		return $path;
+	}
+
+	/**
+	 * Fabrique du parcours qui note chaque dossier demandé, puis rend le même parcours
+	 * que la fabrique par défaut de SizeMeter.
+	 *
+	 * @param list<string> $asked Dossiers demandés, dans l'ordre (rempli par la fabrique).
+	 * @return \Closure(string): \Iterator<mixed, \SplFileInfo>
+	 */
+	private function recorded_entries( array &$asked ): \Closure {
+		return static function ( string $dir ) use ( &$asked ): \Iterator {
+			$asked[] = $dir;
+			return new \RecursiveIteratorIterator(
+				new \RecursiveDirectoryIterator( $dir, \FilesystemIterator::SKIP_DOTS ),
+				\RecursiveIteratorIterator::SELF_FIRST,
+				\RecursiveIteratorIterator::CATCH_GET_CHILD
+			);
+		};
 	}
 
 	/**
