@@ -62,6 +62,18 @@ final class Page {
 	 */
 	private array $missing_scripts = [];
 
+	/**
+	 * @param string $build_dir Dossier du build, terminé par « / » ; vide : celui
+	 *                          du connecteur (assets/admin/build). Les tests en
+	 *                          passent un fictif.
+	 * @param string $build_url Adresse du même dossier, terminée par « / » ;
+	 *                          vide : celle du connecteur.
+	 */
+	public function __construct(
+		private string $build_dir = '',
+		private string $build_url = ''
+	) {}
+
 	public function register(): void {
 		add_action( 'admin_init', [ $this, 'register_settings' ] );
 		// K4 : jeton de connexion illisible (altéré en base ou sels de wp-config.php
@@ -245,15 +257,21 @@ final class Page {
 				<?php echo esc_html__( 'Lie ce site WordPress au tableau de bord centralisé G2RD WP Manager.', 'g2rd-connector' ); ?>
 			</p>
 
+			<?php
+			// Avertissement, comme dans le panneau (« Connexion interrompue »). Site
+			// enrôlé : avis neutre, pas vert, car cette page ne vérifie pas que le
+			// site échange encore avec le manager (le panneau, lui, signale un
+			// signe de vie absent depuis plus de deux heures).
+			?>
 			<?php if ( null !== $problem ) : ?>
-				<div class="notice notice-error inline">
+				<div class="notice notice-warning inline">
 					<p>
 						<strong><?php echo esc_html__( 'Site enrôlé, mais connexion au manager interrompue.', 'g2rd-connector' ); ?></strong>
 						<?php echo esc_html( $problem ); ?>
 					</p>
 				</div>
 			<?php elseif ( $enrolled ) : ?>
-				<div class="notice notice-success inline">
+				<div class="notice notice-info inline">
 					<p>
 						<strong><?php echo esc_html__( 'Site enrôlé.', 'g2rd-connector' ); ?></strong>
 						<?php
@@ -312,42 +330,46 @@ final class Page {
 					</tr>
 					<?php endif; ?>
 					<tr>
-						<th scope="row"><?php echo esc_html__( 'Signe de vie horaire', 'g2rd-connector' ); ?></th>
+						<th scope="row" id="g2rd_heartbeat_enabled_titre"><?php echo esc_html__( 'Signe de vie horaire', 'g2rd-connector' ); ?></th>
 						<td>
 							<label>
-								<input type="checkbox" name="g2rd_heartbeat_enabled" value="1"
+								<input type="checkbox" aria-labelledby="g2rd_heartbeat_enabled_titre" aria-describedby="g2rd_heartbeat_enabled_aide"
+									name="g2rd_heartbeat_enabled" value="1"
 									<?php checked( (bool) $settings['heartbeat_enabled'] ); ?>>
-								<?php echo esc_html__( 'Toutes les heures, le site envoie au manager ses versions (WordPress, PHP, connecteur), l’espace disque libre, le nombre d’extensions actives et d’utilisateurs, et relève les commandes en attente si les commandes à distance sont autorisées.', 'g2rd-connector' ); ?>
+								<span id="g2rd_heartbeat_enabled_aide"><?php echo esc_html__( 'Toutes les heures, le site envoie au manager ses versions (WordPress, PHP, connecteur), l’espace disque libre, le nombre d’extensions actives et d’utilisateurs, et relève les commandes en attente si les commandes à distance sont autorisées.', 'g2rd-connector' ); ?></span>
 							</label>
 						</td>
 					</tr>
 					<tr>
-						<th scope="row"><?php echo esc_html__( 'Événements en temps réel', 'g2rd-connector' ); ?></th>
+						<th scope="row" id="g2rd_events_enabled_titre"><?php echo esc_html__( 'Événements en temps réel', 'g2rd-connector' ); ?></th>
 						<td>
 							<label>
-								<input type="checkbox" name="g2rd_events_enabled" value="1"
+								<input type="checkbox" aria-labelledby="g2rd_events_enabled_titre" aria-describedby="g2rd_events_enabled_aide"
+									name="g2rd_events_enabled" value="1"
 									<?php checked( (bool) $settings['events_enabled'] ); ?>>
-								<?php echo esc_html__( 'Prévient le manager dès qu’ils se produisent : connexions réussies ou échouées, extensions activées ou désactivées, mises à jour installées.', 'g2rd-connector' ); ?>
+								<span id="g2rd_events_enabled_aide"><?php echo esc_html__( 'Prévient le manager dès qu’ils se produisent : connexions réussies ou échouées, extensions activées ou désactivées, mises à jour installées.', 'g2rd-connector' ); ?></span>
 							</label>
 						</td>
 					</tr>
 					<tr>
-						<th scope="row"><?php echo esc_html__( 'Commandes à distance', 'g2rd-connector' ); ?></th>
+						<th scope="row" id="g2rd_remote_commands_enabled_titre"><?php echo esc_html__( 'Commandes à distance', 'g2rd-connector' ); ?></th>
 						<td>
 							<label>
-								<input type="checkbox" name="g2rd_remote_commands_enabled" value="1"
+								<input type="checkbox" aria-labelledby="g2rd_remote_commands_enabled_titre" aria-describedby="g2rd_remote_commands_enabled_aide"
+									name="g2rd_remote_commands_enabled" value="1"
 									<?php checked( (bool) $settings['remote_commands_enabled'] ); ?>>
-								<?php echo esc_html__( 'Autorise le manager à lancer des opérations sur ce site : mises à jour, restaurations d’extensions, vidage du cache, nettoyage de la base de données. Celles qu’il met en file sont relevées avec le signe de vie horaire.', 'g2rd-connector' ); ?>
+								<span id="g2rd_remote_commands_enabled_aide"><?php echo esc_html__( 'Autorise le manager à lancer des opérations sur ce site : mises à jour, restaurations d’extensions, vidage du cache, nettoyage de la base de données. Celles qu’il met en file sont relevées avec le signe de vie horaire.', 'g2rd-connector' ); ?></span>
 							</label>
 						</td>
 					</tr>
 					<tr>
-						<th scope="row"><?php echo esc_html__( 'IPv4 vers le manager', 'g2rd-connector' ); ?></th>
+						<th scope="row" id="g2rd_force_ipv4_to_manager_titre"><?php echo esc_html__( 'IPv4 vers le manager', 'g2rd-connector' ); ?></th>
 						<td>
 							<label>
-								<input type="checkbox" name="g2rd_force_ipv4_to_manager" value="1"
+								<input type="checkbox" aria-labelledby="g2rd_force_ipv4_to_manager_titre" aria-describedby="g2rd_force_ipv4_to_manager_aide"
+									name="g2rd_force_ipv4_to_manager" value="1"
 									<?php checked( (bool) ( $settings['force_ipv4_to_manager'] ?? false ) ); ?>>
-								<?php echo esc_html__( 'À activer si l’hébergeur bloque l’IPv6 sortante du serveur : signes de vie, événements et enrôlement passent alors par l’IPv4. Ne concerne que les appels vers le manager.', 'g2rd-connector' ); ?>
+								<span id="g2rd_force_ipv4_to_manager_aide"><?php echo esc_html__( 'À activer si l’hébergeur bloque l’IPv6 sortante du serveur : signes de vie, événements et enrôlement passent alors par l’IPv4. Ne concerne que les appels vers le manager.', 'g2rd-connector' ); ?></span>
 							</label>
 						</td>
 					</tr>
@@ -355,11 +377,11 @@ final class Page {
 						<th scope="row"><?php echo esc_html__( 'Connexion directe depuis G2RD', 'g2rd-connector' ); ?></th>
 						<td>
 							<label>
-								<input type="checkbox" name="g2rd_allow_direct_login" value="1"
+								<input type="checkbox" aria-describedby="g2rd_allow_direct_login_aide" name="g2rd_allow_direct_login" value="1"
 									<?php checked( (bool) ( $settings['allow_direct_login'] ?? true ) ); ?>>
 								<?php echo esc_html__( 'Autoriser la connexion directe depuis G2RD', 'g2rd-connector' ); ?>
 							</label>
-							<p class="description"><?php echo esc_html__( 'G2RD WP Manager peut ouvrir l\'administration de ce site sans mot de passe, avec le compte administrateur choisi dans la fiche du site (lien à usage unique valable une minute, réservé aux comptes protégés par double authentification). Décochée : le manager ouvre la page de connexion habituelle.', 'g2rd-connector' ); ?></p>
+							<p class="description" id="g2rd_allow_direct_login_aide"><?php echo esc_html__( 'G2RD WP Manager peut ouvrir l\'administration de ce site sans mot de passe, avec le compte administrateur choisi dans la fiche du site (lien à usage unique valable une minute, réservé aux comptes protégés par double authentification). Décochée : le manager ouvre la page de connexion habituelle.', 'g2rd-connector' ); ?></p>
 						</td>
 					</tr>
 				</table>
@@ -519,8 +541,8 @@ final class Page {
 	 */
 	private function do_enqueue( bool $for_tab = false ): void {
 		$this->enqueue_build(
-			G2RD_CONNECTOR_DIR . 'assets/admin/build/',
-			G2RD_CONNECTOR_URL . 'assets/admin/build/',
+			'' !== $this->build_dir ? $this->build_dir : G2RD_CONNECTOR_DIR . 'assets/admin/build/',
+			'' !== $this->build_url ? $this->build_url : G2RD_CONNECTOR_URL . 'assets/admin/build/',
 			$for_tab
 		);
 	}
@@ -528,13 +550,18 @@ final class Page {
 	/**
 	 * Charge le panneau React et sa feuille.
 	 *
+	 * Le script du panneau n'est chargé que dans l'onglet de la console du thème,
+	 * seule page qui le monte : la page autonome et la page de secours affichent
+	 * le formulaire PHP, sans conteneur #g2rd-connector-root, et n'ont besoin que
+	 * de la feuille (correctif des cases cochées). Y charger le script ajoutait
+	 * index.js, wp-components, React et toutes les données du panneau
+	 * (wp_localize_script) pour rien.
+	 *
 	 * Le panneau compilé lit des scripts de WordPress (index.asset.php), dont
 	 * react-jsx-runtime, enregistré seulement à partir de WordPress 6.6 alors que
 	 * le connecteur accepte la 6.4 : s'il en manque un, le script n'est pas chargé
-	 * (il planterait, ou WordPress l'écarterait sans rien dire). La feuille, elle,
-	 * reste chargée : elle porte le correctif des cases cochées du formulaire PHP
-	 * (page autonome et page de secours, qui n'ont pas besoin du script). Dans
-	 * l'onglet de la console du thème, un avis dit pourquoi l'onglet reste vide.
+	 * (il planterait, ou WordPress l'écarterait sans rien dire), et un avis dit
+	 * pourquoi l'onglet reste vide. La feuille, elle, reste chargée.
 	 *
 	 * Publique pour les tests (dossier de build fictif).
 	 *
@@ -546,7 +573,7 @@ final class Page {
 		$js_path  = $dir . 'index.js';
 		$css_path = $dir . 'style-index.css';
 
-		if ( file_exists( $js_path ) ) {
+		if ( $for_tab && file_exists( $js_path ) ) {
 			$dependencies          = self::script_dependencies( $dir . 'index.asset.php' );
 			$this->missing_scripts = self::missing_scripts( $dependencies );
 			if ( [] === $this->missing_scripts ) {
@@ -558,7 +585,7 @@ final class Page {
 					true
 				);
 				wp_localize_script( 'g2rd-connector-admin', 'G2RDConnectorData', $this->initial_data() );
-			} elseif ( $for_tab ) {
+			} else {
 				add_action( 'admin_notices', [ $this, 'render_missing_scripts_notice' ] );
 			}
 		}

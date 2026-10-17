@@ -200,6 +200,95 @@ final class PageTest extends TestCase {
 	}
 
 	/**
+	 * La page de secours ne charge ses assets que sur son propre hook : avant son
+	 * enregistrement (hook encore inconnu), et sur toute autre page de
+	 * l'administration, rien n'est chargé. Sur son hook, seule la feuille l'est
+	 * (correctif des cases cochées du formulaire PHP) : sans conteneur React, le
+	 * script, React et les données du panneau n'y servent à rien.
+	 */
+	public function test_la_page_de_secours_ne_charge_que_sa_feuille_et_seulement_sur_son_hook(): void {
+		Functions\when( 'add_submenu_page' )->justReturn( 'admin_page_g2rd-connector' );
+		Functions\when( 'wp_style_add_data' )->justReturn( true );
+		$dir     = $this->build_dir( true );
+		$charges = [];
+		Functions\when( 'wp_enqueue_style' )->alias(
+			static function ( string $handle ) use ( &$charges ): void {
+				$charges[] = $handle;
+			}
+		);
+		Functions\expect( 'wp_enqueue_script' )->never();
+		Functions\expect( 'wp_localize_script' )->never();
+
+		$page = new Page( $dir, 'https://site.test/build/' );
+		$page->enqueue_fallback_assets( 'admin_page_g2rd-connector' );
+		self::assertSame( [], $charges, 'Page de secours pas encore enregistrée : rien ne doit être chargé.' );
+
+		$page->register_fallback_page();
+		foreach ( [ 'index.php', 'plugins.php', 'toplevel_page_g2rd', 'appearance_page_g2rd-options', '' ] as $hook ) {
+			$page->enqueue_fallback_assets( $hook );
+		}
+		self::assertSame( [], $charges, 'Hors de la page de secours, rien ne doit être chargé.' );
+
+		$page->enqueue_fallback_assets( 'admin_page_g2rd-connector' );
+		self::assertSame( [ 'g2rd-connector-admin' ], $charges, 'Sur la page de secours, la feuille seule doit être chargée.' );
+	}
+
+	/**
+	 * Page autonome (menu de premier niveau) : même formulaire PHP, même chargement
+	 * de la feuille seule, sur son seul hook.
+	 */
+	public function test_la_page_autonome_ne_charge_que_sa_feuille(): void {
+		Functions\when( 'wp_style_add_data' )->justReturn( true );
+		Functions\when( 'wp_script_is' )->justReturn( true );
+		$dir     = $this->build_dir( true );
+		$charges = [];
+		Functions\when( 'wp_enqueue_style' )->alias(
+			static function ( string $handle, string $src ) use ( &$charges ): void {
+				$charges[] = [ $handle, $src ];
+			}
+		);
+		Functions\expect( 'wp_enqueue_script' )->never();
+		Functions\expect( 'wp_localize_script' )->never();
+
+		$page = new Page( $dir, 'https://site.test/build/' );
+		$page->enqueue_standalone_assets( 'index.php' );
+		self::assertSame( [], $charges, 'Hors de la page autonome, rien ne doit être chargé.' );
+
+		$page->enqueue_standalone_assets( 'toplevel_page_g2rd-connector' );
+		self::assertSame( [ [ 'g2rd-connector-admin', 'https://site.test/build/style-index.css' ] ], $charges );
+	}
+
+	/**
+	 * Formulaire PHP : chaque case a pour nom le titre de sa ligne (pas sa longue
+	 * description, qui devient son aide) ; site enrôlé signalé par un avis neutre,
+	 * pas vert, car la page ne vérifie pas les échanges avec le manager.
+	 */
+	public function test_les_cases_du_formulaire_ont_le_titre_pour_nom_et_la_description_pour_aide(): void {
+		Functions\when( 'get_site_option' )->justReturn( false );
+		$this->options[ Settings::OPTION_KEY ] = [
+			'manager_url' => 'https://wp-manager.g2rd.fr',
+			'site_id'     => 7,
+			'site_token'  => 'jeton-historique',
+		];
+		$html = $this->render();
+
+		foreach ( [ 'g2rd_heartbeat_enabled', 'g2rd_events_enabled', 'g2rd_remote_commands_enabled', 'g2rd_force_ipv4_to_manager' ] as $case ) {
+			self::assertMatchesRegularExpression( '/<th scope="row" id="' . $case . '_titre">/', $html, "Titre de « {$case} » sans identifiant." );
+			self::assertMatchesRegularExpression(
+				'/<input type="checkbox" aria-labelledby="' . $case . '_titre" aria-describedby="' . $case . '_aide"\s+name="' . $case . '"/',
+				$html,
+				"La case « {$case} » doit être nommée par le titre de sa ligne et décrite par sa description."
+			);
+			self::assertStringContainsString( '<span id="' . $case . '_aide">', $html );
+		}
+		self::assertStringContainsString( 'aria-describedby="g2rd_allow_direct_login_aide" name="g2rd_allow_direct_login"', $html );
+		self::assertStringContainsString( '<p class="description" id="g2rd_allow_direct_login_aide">', $html );
+
+		self::assertStringContainsString( '<div class="notice notice-info inline">', $html );
+		self::assertStringNotContainsString( 'notice-success', $html );
+	}
+
+	/**
 	 * Métadonnées de l'onglet lues par la console du thème dans le filtre. L'icône
 	 * est un nom du jeu de la console, « cloud » : le thème 1.39 en fait la classe
 	 * « dashicons-cloud », le thème 1.41 la prend dans son jeu interne (toute autre

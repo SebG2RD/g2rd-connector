@@ -195,8 +195,9 @@ qui n'est pas un menu de premier niveau, donc sans entrée de menu) : un parent 
 cacherait aussi, mais avec des avertissements de dépréciation sous PHP 8.1+ (détail dans
 `Page::FALLBACK_PARENT`). Elle affiche le même formulaire PHP que la page autonome (mêmes
 libellés que le panneau, correctif des cases cochées sous WordPress 7) ; sa feuille se charge sur
-son propre hook (`admin_page_g2rd-connector`). Elle ne monte pas le panneau React : elle ne porte
-pas de conteneur `#g2rd-connector-root`.
+son propre hook (`admin_page_g2rd-connector`), seule : elle ne monte pas le panneau React (pas de
+conteneur `#g2rd-connector-root`), donc ni son script, ni React, ni ses données n'y sont chargés.
+Il en va de même de la page autonome.
 
 ### Contrat attendu du thème
 

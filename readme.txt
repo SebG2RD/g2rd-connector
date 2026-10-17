@@ -148,6 +148,13 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   browser, which does not prove that the manager reaches the site. When the connection token
   is unreadable or refused, the panel gives the same explanation as the admin notice,
   probable cause included.
+* **Change: unsaved changes are flagged in the connector panel.** A switch turned on or off
+  looks active at once, but only "Enregistrer" applies it, and leaving the tab loses it. As
+  long as a setting differs from the saved one, "Modifications non enregistrées" now shows
+  under the last setting, announced by screen readers, with a second "Enregistrer" button;
+  the result of that save shows next to it. During an action the buttons stay focusable, so
+  the keyboard focus no longer falls back to the page, and hiding a message brings the focus
+  back to the button that started the action.
 * **Fix: the "Manager G2RD" tab loads in the console of G2RD theme 1.41 and later.** Theme
   1.41 moved its console from Appearance → G2RD Options to a top-level "G2RD" menu and
   redirects the old address there, but the connector loaded its script only on the old page:
@@ -193,7 +200,12 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   "Heartbeat horaire"), "Événements en temps réel" (formerly "Webhook events"), "Commandes à
   distance" (formerly "Commandes distantes"), "IPv4 vers le manager", "Connexion directe
   depuis G2RD". Its enrolled banner no longer claims "Connecté à …", which nothing on that page
-  checks, and reads "Manager : … — site n° …". Form field names are unchanged.
+  checks, and reads "Manager : … — site n° …", in a neutral (blue) notice instead of a green
+  one, since that page does not check the exchanges with the manager. An unusable connection
+  token is shown as a warning, as in the panel. Each checkbox is named by the title of its
+  row, its description becoming its help text. Form field names are unchanged. The PHP
+  settings pages now load only the connector stylesheet, no longer the panel script, React
+  and the panel data, which they do not use.
 * **Change: smaller wording fixes in the panel.** Each signature check failure now ends with
   what to do (for a replayed request: refused when signed commands are required, possibly run
   twice otherwise; contact G2RD support if it repeats). The remote commands switch says that
