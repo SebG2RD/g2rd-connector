@@ -33,8 +33,9 @@ This plugin relies on the **G2RD WP Manager** service operated by G2RD Agence We
 
 **What is sent, when, and only after explicit enrollment:**
 
-* On every manager-initiated `/snapshot` call: WordPress version, list of installed/active plugins and themes (names, versions, slugs), PHP/MySQL versions, memory limit.
+* On every manager-initiated `/snapshot` call: WordPress version, list of installed/active plugins and themes (names, versions, slugs), PHP/MySQL versions, memory limit. It also describes the server environment: which PHP extensions are present (sodium, openssl, zip, zlib, mysqli) and the libsodium version, the PHP execution mode (SAPI), whether the PHP `exec` function is available (only read, never called), the memory and execution time limits, the free and total space of the disk that holds `wp-content`, and the total sizes of `wp-content`, of the media library and of the database, measured at most once a day in the background (with the date, status and duration of that measurement and the number of files counted). Only totals and flags are sent: no file name and no path.
 * On every hourly heartbeat (if enabled): WordPress/PHP/connector version, free disk space, active plugin count, registered user count.
+* Every hour, if remote commands are enabled (even with the heartbeat disabled): the plugin asks the manager for its pending commands; this request sends no site data. It then reports to the manager the outcome of each command it ran or refused (status, result of the command and error message, if any).
 * On every webhook event (if enabled): event type (e.g. `user.login`, `plugin.activated`) and a small context payload (user id, plugin file name, IP for failed logins).
 * Since 1.13, the `/snapshot` answer also contains the login page address, the state of the "Allow direct login from G2RD" setting and the site's administrators (up to 50: user id, login, email, registration date), so the manager can offer direct login with the account chosen by the agency.
 * Since 1.13, a `direct_login` event (WordPress login and user id, manager user id) is sent after each direct login, if events are enabled.

@@ -38,9 +38,13 @@ g2rd-connector/
 │   ├── Events/
 │   │   └── Listener            wp_login, activated_plugin, etc.
 │   ├── DirectLogin/            connexion directe : point d'entrée, contrôles, snapshot
+│   ├── Environment/            mesure de l'environnement (bloc environment du snapshot)
 │   ├── Security/
+│   │   ├── KeyDerivation       dérivation des clés du SiteToken (trois contextes)
 │   │   ├── RequestSignature    signature des requêtes du manager
 │   │   └── DirectLoginTicket   ticket de connexion directe (classe pure)
+│   ├── Support/
+│   │   └── MysqlLock           verrou GET_LOCK réutilisable
 │   └── Admin/
 │       └── Page                tab thème OU menu top-level
 └── assets/admin/src/           React app (page admin)
@@ -168,6 +172,13 @@ horodatage ±300 s, nonce anti-rejeu) : en-têtes `X-G2RD-Timestamp`, `X-G2RD-No
 `X-G2RD-Signature: v1=…`. C'est la **route REST** (`/g2rd/v1/command`) qui est signée, pas le
 chemin de l'URL — un site en sous-dossier ou en permaliens simples (`?rest_route=`) reste valide.
 
+Toutes les clés tirées du SiteToken passent par une seule formule, `Security\KeyDerivation` :
+`HMAC-SHA256(clé = SiteToken, message = contexte)`, 32 octets, avec un contexte par usage pour
+qu'une preuve faite pour l'un ne vaille jamais pour l'autre — `g2rd-sign-v1` (requêtes du manager
+et file des commandes), `g2rd-login-v1` (tickets de connexion directe), `g2rd-backup-v1` (réservé
+aux sauvegardes chiffrées, aucun appelant pour l'instant). Les clés sont identiques à l'octet à
+celles d'avant ; vecteurs calculés indépendamment : `tests/fixtures/key-derivation-vectors.json`.
+
 Politique, réglable dans la page d'administration (« Exiger des commandes signées ») :
 
 - `report` (défaut) : la signature est vérifiée et son résultat remonté au manager (champ
@@ -196,7 +207,9 @@ jamais par le volume : aucun nonce encore vivant n'est évincé.
 #### File des commandes (cron)
 
 Le cron horaire tire aussi des commandes de la file du manager
-(`GET /api/agent/sites/{site}/commands`). Les trois commandes ci-dessus y obéissent à la **même
+(`GET /api/agent/sites/{site}/commands`), dès que les commandes à distance sont actives, **même
+signe de vie coupé** (aucun signe de vie n'est alors envoyé ; voir « Charge sur le serveur »). Les
+trois commandes ci-dessus y obéissent à la **même
 règle** que par la route REST : sans enveloppe signée valide, elles ne sont pas exécutées, quelle que
 soit la politique, et le site répond `failed` avec un code dans `result.code`
 (`g2rd_connector_signature_missing`, `g2rd_connector_signature_invalid`,
@@ -485,8 +498,52 @@ chacun s'additionne.
   lançaient à la même minute (purge à :33, découverte à 02:05 et 14:05 UTC, mesuré le
   11/10/2026). Les tâches déjà planifiées sont re-phasées une seule fois (option autochargée
   `g2rd_connector_cron_phase`, retirée à la désinstallation) ; un retrait refusé par WordPress
-  laisse la tâche à sa date, jamais en double. Le heartbeat horaire n'est pas touché : planifié à
-  l'enrôlement, sa phase suit déjà l'heure d'enrôlement de chaque site.
+  laisse la tâche à sa date, jamais en double. Le heartbeat horaire n'est pas re-phasé : planifié
+  à l'enrôlement (premier battement une minute après), sa phase suit l'heure d'enrôlement de
+  chaque site, et un battement déjà planifié garde sa date. Cette tâche horaire est branchée dès
+  que le signe de vie **ou** les commandes à distance sont actifs : la file des commandes est
+  relevée même signe de vie coupé, sans envoyer de signe de vie. Si elle a disparu (une
+  désactivation du connecteur la retire, et ni la réactivation ni le démarrage ne la remettaient :
+  plus de signe de vie ni de relevé de la file jusqu'à un nouvel enrôlement), elle est **réparée
+  au démarrage** suivant d'un site enrôlé, à une minute tirée au hasard dans l'heure
+  (`Cron\Phase`) : après une mise à jour du connecteur, les sites ne repartent pas tous à la même
+  minute. Coût à chaque démarrage : une lecture du tableau des tâches planifiées, déjà en mémoire.
+- **Mesure de l'environnement** (bloc `environment` du snapshot). Ce que le serveur permet
+  (extensions natives, mode d'exécution de PHP, disponibilité d'`exec` — lue, jamais appelée —,
+  limites de mémoire et de durée, espace disque) est lu à chaque snapshot, dans la requête web
+  servie à la plateforme (le PHP en ligne de commande peut différer : chez Hostinger, `sodium` y
+  manque), en quelques appels de fonction, sans parcours de fichiers ni requête SQL. L'espace
+  disque est celui du volume vu par PHP : sur un hébergement mutualisé, le disque du serveur, pas
+  le quota du compte. Les volumes (taille de `wp-content`, des médias, et de la base par
+  `SHOW TABLE STATUS` sur le préfixe de l'installation) sont mesurés en tâche de fond, sur la
+  tâche biquotidienne de la purge (`Environment\SizeReport`, aucune nouvelle tâche planifiée) ; le
+  snapshot ne lit que leur cache, une lecture d'option :
+  - **garde de 20 h** : aucune tentative moins de 20 h après la précédente, réussie ou non. La
+    tâche passant toutes les 12 h, un passage sur deux mesure : le cache a 24 h en régime normal,
+    davantage seulement si WP-Cron ne passe pas (un site dont WP-Cron ne passe jamais reste
+    `pending`) ;
+  - **bornes** : 5 s et 100 000 entrées (fichiers et liens) par défaut, un seul budget pour
+    `wp-content` et les médias ; filtres `g2rd_connector_environment_scan_seconds` (ramené entre 1
+    et 20 s) et `g2rd_connector_environment_scan_entries` (entre 1 000 et 500 000). Borne
+    atteinte : `partial`, et les valeurs sont un minimum. Parcours en flux, métadonnées seules
+    (contenu des fichiers jamais lu), liens symboliques **jamais suivis** (un lien vers le
+    dossier d'un autre site du même compte n'est pas parcouru), racine du système de fichiers
+    jamais parcourue ;
+  - **verrou** `GET_LOCK` non bloquant de but `env` (`Support\MysqlLock`, nom haché, commun au
+    réseau) : tenu ailleurs, l'autre processus mesure et celui-ci ne fait rien ; `GET_LOCK`
+    indisponible (fonction refusée par l'hébergeur, cluster Galera), mesure sans verrou, sous la
+    même garde de 20 h ;
+  - **tentative ratée** (en pratique, `wp-content` impossible à ouvrir) : `failed`, avec les
+    valeurs et la date de la dernière mesure réussie s'il y en a une. La tentative est notée avant
+    de mesurer : une mesure tuée par le serveur (délai, mémoire) n'est pas relancée avant 20 h, et
+    le snapshot la lit `failed` après 10 minutes sans résultat ;
+  - **multisite** : une seule mesure pour le réseau (`wp-content` et la base sont communs) ; les
+    médias sont ceux du site principal, qui contiennent `uploads/sites/N` des autres blogs.
+    Limite : sur un réseau d'avant WordPress 3.5 (médias dans `wp-content/blogs.dir`), les médias
+    des blogs secondaires sont comptés dans `wp_content_bytes`, pas dans `uploads_bytes` ;
+  - option de réseau non autochargée `g2rd_connector_environment` (`{at, attempted_at, sizes}` :
+    des totaux, un statut et des dates, aucun chemin ni nom de fichier), retirée à la
+    désinstallation.
 - **Inventaire allégé, mêmes données** (`GET /snapshot`). Chaque synchronisation vidait tout le
   cache objet du site (`wp_cache_flush()`), forçait trois appels à wordpress.org (cœur,
   extensions, thèmes, transients détruits d'abord) et relançait cinq requêtes de santé de la
