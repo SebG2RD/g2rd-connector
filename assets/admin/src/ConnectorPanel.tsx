@@ -14,13 +14,14 @@
  * sans recharger la page.
  */
 
-import { useEffect, useState } from '@wordpress/element';
+import { useEffect, useRef, useState } from '@wordpress/element';
 import { Button, FormToggle } from '@wordpress/components';
 import apiFetch from '@wordpress/api-fetch';
 import type { ConnectorBootData } from './index';
 import {
 	ENROLL_FAILURES,
-	SILENCE_HELP,
+	SILENCE_ACTIONS,
+	SILENCE_CAUSES,
 	connectionStatus,
 	elapsed,
 	enrollFailureKind,
@@ -43,10 +44,31 @@ interface Props {
 
 type Cx = ReturnType< typeof classesFor >;
 type Busy = null | 'save' | 'enroll' | 'unenroll' | 'test';
+/**
+ * Zone où s'affiche le résultat d'une action : « haut », sous les boutons de
+ * « Connexion au manager » ; « bas », sous le rappel des modifications non
+ * enregistrées (fin de « Sécurité des commandes »), quand l'enregistrement a été
+ * lancé de là : le résultat reste à côté du bouton utilisé.
+ */
+type Place = 'haut' | 'bas';
 type ActionNotice = {
 	status: 'success' | 'error';
 	message: string;
+	place: Place;
 } | null;
+
+/**
+ * Les boutons restent focalisables pendant une action (aria-disabled au lieu de
+ * l'attribut disabled natif) : sans cela, le focus clavier retombe sur la page
+ * après chaque « Enregistrer » ou « Tester la connexion ».
+ *
+ * Prop « __experimentalIsFocusable » et non « accessibleWhenDisabled » : celle-ci
+ * n'existe qu'à partir de `@wordpress/components` 28.3.0, donc de WordPress 6.7
+ * (WordPress 6.6, minimum du panneau, livre la 28.0.3, qui l'aurait passée telle
+ * quelle au DOM). Les versions suivantes traduisent toujours l'ancienne prop en
+ * accessibleWhenDisabled, sans avertissement.
+ */
+const FOCUSABLE_WHEN_DISABLED = { __experimentalIsFocusable: true } as const;
 
 /**
  * Réglages envoyés au serveur à l'enregistrement et à l'enrôlement.
@@ -63,6 +85,24 @@ function settingsPayload( d: ConnectorBootData ) {
 		allow_direct_login: d.allowDirectLogin,
 		signature_required: d.signatureRequired,
 	};
+}
+
+/**
+ * Un réglage du panneau diffère-t-il de sa valeur enregistrée sur le serveur ?
+ * Mêmes sept réglages que ceux qu'envoie « Enregistrer » (settingsPayload).
+ *
+ * @param current État du panneau.
+ * @param stored  Derniers réglages connus du serveur.
+ */
+function hasPendingChanges(
+	current: ConnectorBootData,
+	stored: ConnectorBootData
+): boolean {
+	const now = settingsPayload( current );
+	const before = settingsPayload( stored );
+	return ( Object.keys( now ) as Array< keyof typeof now > ).some(
+		( key ) => now[ key ] !== before[ key ]
+	);
 }
 
 /**
@@ -183,6 +223,63 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 		return () => window.clearInterval( timer );
 	}, [] );
 
+	// Bouton qui a lancé la dernière action, et zone de son résultat : le focus
+	// clavier y revient quand le bouton « Masquer le message » disparaît, ou
+	// passe au titre de la section si le bouton lui-même a disparu.
+	const trigger = useRef< HTMLElement | null >( null );
+	const triggerPlace = useRef< Place >( 'haut' );
+	const connectionTitle = useRef< HTMLHeadingElement >( null );
+	const securityTitle = useRef< HTMLHeadingElement >( null );
+	const titleOf = ( place: Place ): HTMLHeadingElement | null =>
+		( 'bas' === place ? securityTitle : connectionTitle ).current;
+	// Document du panneau (lu par une référence, pas par la variable globale).
+	const ownerDocument = (): Document | null =>
+		connectionTitle.current?.ownerDocument ?? null;
+
+	/**
+	 * Retient le bouton qui lance une action, et la zone de son résultat.
+	 *
+	 * @param place Zone du résultat.
+	 */
+	const rememberTrigger = ( place: Place ): void => {
+		const active = ownerDocument()?.activeElement;
+		trigger.current = active instanceof HTMLElement ? active : null;
+		triggerPlace.current = place;
+	};
+
+	// Fin d'une action : si le bouton qui l'a lancée a disparu (« Enrôler le
+	// site » après l'enrôlement, second « Enregistrer » une fois tout enregistré)
+	// et que le focus est retombé sur la page, il passe au titre de la section du
+	// résultat, que la zone annoncée (aria-live) lit ensuite.
+	useEffect( () => {
+		const launcher = trigger.current;
+		const doc = ownerDocument();
+		const active = doc?.activeElement ?? null;
+		if (
+			null === busy &&
+			null !== launcher &&
+			! launcher.isConnected &&
+			( null === active || doc?.body === active )
+		) {
+			titleOf( triggerPlace.current )?.focus();
+		}
+	}, [ busy ] );
+
+	/**
+	 * Masque le message : le focus revient au bouton qui avait lancé l'action
+	 * s'il est toujours là, sinon au titre de la section du message, au lieu de
+	 * retomber sur la page avec le bouton « Masquer le message ».
+	 */
+	const hideNotice = (): void => {
+		const launcher = trigger.current;
+		const place = notice?.place ?? 'haut';
+		setNotice( null );
+		( null !== launcher && launcher.isConnected
+			? launcher
+			: titleOf( place )
+		)?.focus();
+	};
+
 	const update = ( patch: Partial< ConnectorBootData > ): void =>
 		setState( ( current ) => ( { ...current, ...patch } ) );
 
@@ -204,22 +301,29 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 	 * repris de la même façon.
 	 *
 	 * @param kind    Action en cours (boutons désactivés pendant ce temps).
+	 * @param place   Zone du résultat.
 	 * @param request Appel REST.
 	 * @param success Message de réussite, d'après les données fraîches.
 	 * @param failure Message d'échec, d'après le détail et l'erreur rejetée.
 	 */
 	const run = async (
 		kind: Exclude< Busy, null >,
+		place: Place,
 		request: () => Promise< ConnectorBootData >,
 		success: ( fresh: ConnectorBootData ) => string,
 		failure: ( detail: string, error: unknown ) => string
 	): Promise< void > => {
+		rememberTrigger( place );
 		setBusy( kind );
 		setNotice( null );
 		try {
 			const fresh = await request();
 			accept( fresh );
-			setNotice( { status: 'success', message: success( fresh ) } );
+			setNotice( {
+				status: 'success',
+				message: success( fresh ),
+				place,
+			} );
 		} catch ( e ) {
 			const kept = savedDataOf( e );
 			if ( null !== kept ) {
@@ -228,15 +332,22 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 			setNotice( {
 				status: 'error',
 				message: failure( errorDetail( e ), e ),
+				place,
 			} );
 		} finally {
 			setBusy( null );
 		}
 	};
 
-	const save = (): Promise< void > =>
+	/**
+	 * Enregistre les réglages.
+	 *
+	 * @param place Zone du résultat : celle du bouton utilisé.
+	 */
+	const save = ( place: Place ): Promise< void > =>
 		run(
 			'save',
+			place,
 			() =>
 				apiFetch< ConnectorBootData >( {
 					path: 'g2rd/v1/admin/save',
@@ -251,6 +362,7 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 	const enroll = (): Promise< void > =>
 		run(
 			'enroll',
+			'haut',
 			async () => {
 				const fresh = await apiFetch< ConnectorBootData >( {
 					path: 'g2rd/v1/admin/enroll',
@@ -281,6 +393,7 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 		}
 		await run(
 			'unenroll',
+			'haut',
 			() =>
 				apiFetch< ConnectorBootData >( {
 					path: 'g2rd/v1/admin/unenroll',
@@ -295,6 +408,7 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 	// Sonde le point de contrôle public du connecteur sur ce site, celui
 	// qu'interroge le manager. Ne touche à aucun réglage.
 	const testHealth = async (): Promise< void > => {
+		rememberTrigger( 'haut' );
 		setBusy( 'test' );
 		setNotice( null );
 		try {
@@ -304,6 +418,7 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 			setNotice( {
 				status: 'success',
 				message: `Le connecteur répond sur ce site (version ${ resp.connector_version }). Ce test part de votre navigateur : il ne vérifie pas que le manager, lui, joint le site.`,
+				place: 'haut',
 			} );
 		} catch ( e ) {
 			setNotice( {
@@ -313,6 +428,7 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 				) }). Cause probable : API REST de WordPress désactivée ou bloquée par une extension de sécurité ou le pare-feu de l’hébergeur. Vérifiez que l’adresse ${
 					state.restUrl
 				}health s’ouvre dans votre navigateur.`,
+				place: 'haut',
 			} );
 		} finally {
 			setBusy( null );
@@ -320,6 +436,10 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 	};
 
 	const anyBusy = busy !== null;
+	// Interrupteur ou adresse modifiés mais pas encore enregistrés : la ligne
+	// passe tout de suite en « is-on », comme un réglage actif ; le rappel en fin
+	// de réglages le signale, avec un second bouton « Enregistrer ».
+	const pending = hasPendingChanges( state, saved );
 	const tokenProblem = state.enrolled
 		? ( TOKEN_PROBLEMS[ state.tokenState ] ?? null )
 		: null;
@@ -335,14 +455,15 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 		now
 	);
 	// Signe de vie actif mais aucun échange réussi depuis plus de deux heures :
-	// pastille et explication (causes probables, actions).
+	// pastille et explication (constat, puis causes probables et actions, chacune
+	// dans son paragraphe).
 	let silence: { label: string; text: string } | null = null;
 	if ( 'silent' === status.kind ) {
 		silence =
 			null === status.since
 				? {
 						label: 'Aucun signe de vie enregistré',
-						text: `Aucun échange réussi avec le manager n’est enregistré sur ce site, alors que le signe de vie part toutes les heures. ${ SILENCE_HELP }`,
+						text: 'Aucun échange réussi avec le manager n’est enregistré sur ce site, alors que le signe de vie part toutes les heures.',
 					}
 				: {
 						label: `Pas de signe de vie depuis ${ elapsed(
@@ -351,7 +472,7 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 						) }`,
 						text: `Aucun échange réussi avec le manager depuis le ${ DATE_FORMAT.format(
 							status.since
-						) }, alors que le signe de vie part toutes les heures. ${ SILENCE_HELP }`,
+						) }, alors que le signe de vie part toutes les heures.`,
 					};
 	}
 	const failures = state.signatureFailures;
@@ -381,6 +502,8 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 						<h3
 							className={ cx( 'section__title' ) }
 							id="g2rd-connector-titre-connexion"
+							ref={ connectionTitle }
+							tabIndex={ -1 }
 						>
 							Connexion au manager
 						</h3>
@@ -442,6 +565,8 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 								<strong>Pas de signe de vie.</strong>{ ' ' }
 								{ silence.text }
 							</p>
+							<p>{ SILENCE_CAUSES }</p>
+							<p>{ SILENCE_ACTIONS }</p>
 						</div>
 					) }
 
@@ -495,6 +620,7 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 							onClick={ testHealth }
 							isBusy={ busy === 'test' }
 							disabled={ anyBusy }
+							{ ...FOCUSABLE_WHEN_DISABLED }
 						>
 							Tester la connexion
 						</Button>
@@ -504,6 +630,7 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 								onClick={ enroll }
 								isBusy={ busy === 'enroll' }
 								disabled={ anyBusy || '' === token.trim() }
+								{ ...FOCUSABLE_WHEN_DISABLED }
 							>
 								Enrôler le site
 							</Button>
@@ -515,48 +642,30 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 								onClick={ unenroll }
 								isBusy={ busy === 'unenroll' }
 								disabled={ anyBusy }
+								{ ...FOCUSABLE_WHEN_DISABLED }
 							>
 								Déconnecter du manager
 							</Button>
 						) }
 						<Button
 							variant={ state.enrolled ? 'primary' : 'secondary' }
-							onClick={ save }
+							onClick={ () => save( 'haut' ) }
 							isBusy={ busy === 'save' }
 							disabled={ anyBusy }
+							{ ...FOCUSABLE_WHEN_DISABLED }
 						>
 							Enregistrer
 						</Button>
 					</div>
 
 					{ /* Résultat de la dernière action (enregistrement, enrôlement,
-					     déconnexion, test), sous les boutons qui la lancent. La zone
-					     reste dans la page même vide : les lecteurs d'écran
-					     annoncent ce qui y apparaît. */ }
-					<div className="g2rd-connector-message">
-						<div
-							className="g2rd-connector-message__text"
-							aria-live="polite"
-						>
-							{ null !== notice && (
-								<div
-									className={ `notice notice-${
-										notice.status
-									} inline ${ cx( 'notice-inline' ) }` }
-								>
-									<p>{ notice.message }</p>
-								</div>
-							) }
-						</div>
-						{ null !== notice && (
-							<Button
-								variant="tertiary"
-								onClick={ () => setNotice( null ) }
-							>
-								Masquer le message
-							</Button>
-						) }
-					</div>
+					     déconnexion, test), sous les boutons qui la lancent. */ }
+					<MessageZone
+						cx={ cx }
+						notice={ notice }
+						place="haut"
+						onHide={ hideNotice }
+					/>
 				</div>
 			</section>
 
@@ -655,6 +764,8 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 						<h3
 							className={ cx( 'section__title' ) }
 							id="g2rd-connector-titre-securite"
+							ref={ securityTitle }
+							tabIndex={ -1 }
 						>
 							Sécurité des commandes
 						</h3>
@@ -710,6 +821,41 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 									`Code technique du dernier échec : ${ failures.last_code }.` }
 							</p>
 						) }
+
+					{ /* Rappel, sous le dernier réglage, des modifications pas encore
+					     enregistrées (le bouton « Enregistrer » de « Connexion au
+					     manager » est loin au-dessus, et quitter l'onglet les perd),
+					     avec un second bouton « Enregistrer ». La zone reste dans la
+					     page même vide : les lecteurs d'écran annoncent le rappel. */ }
+					<div className="g2rd-connector-message">
+						<div
+							className="g2rd-connector-message__text"
+							aria-live="polite"
+						>
+							{ pending && (
+								<Status cx={ cx } tone="warn">
+									Modifications non enregistrées
+								</Status>
+							) }
+						</div>
+						{ pending && (
+							<Button
+								variant="primary"
+								onClick={ () => save( 'bas' ) }
+								isBusy={ busy === 'save' }
+								disabled={ anyBusy }
+								{ ...FOCUSABLE_WHEN_DISABLED }
+							>
+								Enregistrer
+							</Button>
+						) }
+					</div>
+					<MessageZone
+						cx={ cx }
+						notice={ notice }
+						place="bas"
+						onHide={ hideNotice }
+					/>
 				</div>
 			</section>
 
@@ -753,6 +899,51 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 					</Fact>
 				</dl>
 			</section>
+		</div>
+	);
+}
+
+/**
+ * Zone du résultat d'une action, annoncée aux lecteurs d'écran (aria-live). Elle
+ * reste dans la page même vide, pour que ce qui y apparaît soit annoncé ; elle
+ * n'affiche le message que s'il lui revient (notice.place).
+ *
+ * @param props        Propriétés.
+ * @param props.cx     Fabrique de classes du mode.
+ * @param props.notice Dernier résultat, ou null.
+ * @param props.place  Zone affichée ici.
+ * @param props.onHide Masque le message (et replace le focus).
+ */
+function MessageZone( {
+	cx,
+	notice,
+	place,
+	onHide,
+}: {
+	cx: Cx;
+	notice: ActionNotice;
+	place: Place;
+	onHide: () => void;
+} ): JSX.Element {
+	const shown = null !== notice && place === notice.place ? notice : null;
+	return (
+		<div className="g2rd-connector-message">
+			<div className="g2rd-connector-message__text" aria-live="polite">
+				{ null !== shown && (
+					<div
+						className={ `notice notice-${
+							shown.status
+						} inline ${ cx( 'notice-inline' ) }` }
+					>
+						<p>{ shown.message }</p>
+					</div>
+				) }
+			</div>
+			{ null !== shown && (
+				<Button variant="tertiary" onClick={ onHide }>
+					Masquer le message
+				</Button>
+			) }
 		</div>
 	);
 }

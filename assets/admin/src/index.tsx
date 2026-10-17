@@ -9,8 +9,9 @@
  *  2. Page standalone (menu top-level, ou page de secours hors menu du mode
  *     onglet) → monte sur #g2rd-connector-root si la page porte ce conteneur.
  *     Aujourd'hui elle n'en porte pas : ces pages gardent le formulaire PHP
- *     (Page::render_standalone_page), et ce script n'y apporte que la feuille de
- *     style (correctif des cases cochées).
+ *     (Page::render_standalone_page), et Page::enqueue_build n'y charge que la
+ *     feuille de style (correctif des cases cochées), pas ce script. Une page qui
+ *     porterait le conteneur devrait aussi y faire charger le script.
  *
  * Le panneau choisit son dessin au montage (ui.ts) : natif dans une console qui
  * publie son contrat d'interface (window.G2RDOptions.console.version ≥ 2),
@@ -134,10 +135,14 @@ type TabRoot = ReturnType< typeof createRoot >;
  * démontage est donc remis à la tâche suivante ; si la console remonte l'onglet
  * dans le même conteneur avant (StrictMode), la racine est reprise au lieu d'en
  * créer une seconde sur ce conteneur.
+ *
+ * lastMount : numéro du dernier montage sur ce conteneur. Le nettoyage d'un
+ * montage plus ancien, appelé après un remontage (ordre inhabituel : montage A,
+ * montage B, nettoyage de A), ne démonte donc pas le panneau affiché.
  */
 const tabRoots = new WeakMap<
 	HTMLElement,
-	{ root: TabRoot; unmountTimer?: number }
+	{ root: TabRoot; lastMount: number; unmountTimer?: number }
 >();
 
 /** Numéro de montage : clé du panneau, pour qu'un remontage reparte d'un état neuf. */
@@ -200,16 +205,25 @@ function mountThemeTab(
 	if ( entry ) {
 		window.clearTimeout( entry.unmountTimer );
 	} else {
-		entry = { root: createRoot( container ) };
+		entry = { root: createRoot( container ), lastMount: 0 };
 		tabRoots.set( container, entry );
 	}
 	const mounted = entry;
-	const shown = { root: mounted.root, mount: ++tabMounts };
+	// Numéro de cet appel à mount(), figé : shown.mount, lui, change quand
+	// rememberTabData remonte le panneau affiché.
+	const mountNumber = ++tabMounts;
+	const shown = { root: mounted.root, mount: mountNumber };
+	mounted.lastMount = mountNumber;
 	shownPanel = shown;
 	renderTabPanel( shown.root, shown.mount, latestData ?? data );
 	return () => {
 		if ( shownPanel === shown ) {
 			shownPanel = null;
+		}
+		// Un montage plus récent occupe ce conteneur : son propre nettoyage le
+		// démontera.
+		if ( mounted.lastMount !== mountNumber ) {
+			return;
 		}
 		window.clearTimeout( mounted.unmountTimer );
 		mounted.unmountTimer = window.setTimeout( () => {

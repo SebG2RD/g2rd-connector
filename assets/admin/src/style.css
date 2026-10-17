@@ -81,8 +81,23 @@
     min-width: 0;
 }
 
-.g2rd-connector-panel .g2rd-connector-message__text .notice {
+/*
+ * Avis du panneau : l'écart vient de la pile seule. Sans cela, la marge basse que
+ * la console du thème donne à ses avis (14 px) s'ajoutait à celle de la pile
+ * sous « Connexion interrompue » et « Pas de signe de vie ».
+ */
+.g2rd-connector-panel .g2rd-connector-message__text .notice,
+.g2rd-connector-panel .g2rd-connector-stack > .notice {
     margin: 0;
+}
+
+/*
+ * Avis de plusieurs paragraphes (constat, causes probables, que faire) : la
+ * console du thème annule la marge des paragraphes de ses avis, qui se
+ * collaient ; WordPress les espace déjà en mode autonome.
+ */
+.g2rd-connector-panel--console .notice p + p {
+    margin: 8px 0 0;
 }
 
 /* ── Mode autonome : texte et cartes ──────────────────────────── */
@@ -241,6 +256,28 @@
 .g2rd-connector-panel--autonome .g2rd-connector-toggle input.components-form-toggle__input[type="checkbox"] {
     top: -9px;
     height: 44px;
+}
+
+/*
+ * Petits écrans, comme la console du thème : cartes moins épaisses sous 782 px ;
+ * sous 600 px, lignes alignées en haut (l'interrupteur reste à côté du titre) et
+ * icône masquée, qui rend environ 50 px à la colonne du titre et de la
+ * description (à 360 px, « Signe de vie horaire » occupait 11 lignes).
+ */
+@media (max-width: 782px) {
+    .g2rd-connector-panel--autonome .g2rd-connector-section {
+        padding: 16px;
+    }
+}
+
+@media (max-width: 600px) {
+    .g2rd-connector-panel--autonome .g2rd-connector-setting-row {
+        align-items: flex-start;
+    }
+
+    .g2rd-connector-panel--autonome .g2rd-connector-setting-row__icon {
+        display: none;
+    }
 }
 
 /* ── Mode autonome : pastilles ────────────────────────────────── */

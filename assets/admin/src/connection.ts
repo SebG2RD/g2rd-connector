@@ -108,12 +108,19 @@ export function elapsed( since: number, now: number ): string {
 }
 
 /**
- * Causes probables et actions d'un silence du signe de vie (état « silent »).
- * « IPv4 vers le manager » et « Enregistrer » sont l'interrupteur et le bouton
- * du même panneau.
+ * Causes probables d'un silence du signe de vie (état « silent »), affichées
+ * dans leur propre paragraphe, avant les actions (SILENCE_ACTIONS) : un seul
+ * bloc d'environ 90 mots rendait les actions difficiles à repérer.
  */
-export const SILENCE_HELP =
-	'Causes probables : WP-Cron ne s’est pas déclenché, faute de visites sur le site (ou parce que DISABLE_WP_CRON est défini dans wp-config.php sans tâche cron de remplacement chez l’hébergeur) ; ou les appels sortants du serveur vers le manager sont bloqués, par exemple l’IPv6 refusée par l’hébergeur ou son CDN. Actions : rechargez cette page dans une minute (votre visite relance WP-Cron) ; si l’alerte reste, activez « IPv4 vers le manager », cliquez sur « Enregistrer » et attendez le prochain signe de vie (une heure au plus) ; vérifiez que WP-Cron s’exécute ; si rien ne change, contactez le support G2RD.';
+export const SILENCE_CAUSES =
+	'Causes probables : WP-Cron ne s’est pas déclenché, faute de visites sur le site (ou parce que DISABLE_WP_CRON est défini dans wp-config.php sans tâche cron de remplacement chez l’hébergeur) ; ou les appels sortants du serveur vers le manager sont bloqués, par exemple l’IPv6 refusée par l’hébergeur ou son CDN.';
+
+/**
+ * Actions devant un silence du signe de vie, dans l'ordre. « IPv4 vers le
+ * manager » et « Enregistrer » sont l'interrupteur et le bouton du même panneau.
+ */
+export const SILENCE_ACTIONS =
+	'Que faire : rechargez cette page dans une minute (votre visite relance WP-Cron) ; si l’alerte reste, activez « IPv4 vers le manager », cliquez sur « Enregistrer » et attendez le prochain signe de vie (une heure au plus) ; vérifiez que WP-Cron s’exécute ; si rien ne change, contactez le support G2RD.';
 
 /**
  * Famille d'un échec d'enrôlement :

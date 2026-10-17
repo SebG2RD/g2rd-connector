@@ -173,12 +173,78 @@ final class ConnectorPanelTest extends TestCase {
 			self::assertStringContainsString( "{$champ}: saved.{$champ}", $panneau, "L'état doit suivre « {$champ} » tel qu'enregistré, pas un interrupteur non enregistré." );
 		}
 
-		preg_match( "/export const SILENCE_HELP =\\s*'([^']+)'/", $connexion, $aide );
-		self::assertArrayHasKey( 1, $aide, 'SILENCE_HELP introuvable dans connection.ts.' );
-		foreach ( [ 'Causes probables', 'WP-Cron', 'Actions', '« IPv4 vers le manager »', '« Enregistrer »', 'support G2RD' ] as $attendu ) {
-			self::assertStringContainsString( $attendu, $aide[1], "L'explication du silence ne mentionne pas « {$attendu} »." );
+		// Causes probables et actions, chacune dans son paragraphe de l'avis : un
+		// seul bloc d'environ 90 mots cachait les actions.
+		preg_match( "/export const SILENCE_CAUSES =\\s*'([^']+)'/", $connexion, $causes );
+		preg_match( "/export const SILENCE_ACTIONS =\\s*'([^']+)'/", $connexion, $actions );
+		self::assertArrayHasKey( 1, $causes, 'SILENCE_CAUSES introuvable dans connection.ts.' );
+		self::assertArrayHasKey( 1, $actions, 'SILENCE_ACTIONS introuvable dans connection.ts.' );
+		self::assertStringStartsWith( 'Causes probables : ', $causes[1] );
+		self::assertStringContainsString( 'WP-Cron', $causes[1] );
+		self::assertStringStartsWith( 'Que faire : ', $actions[1] );
+		foreach ( [ '« IPv4 vers le manager »', '« Enregistrer »', 'support G2RD' ] as $attendu ) {
+			self::assertStringContainsString( $attendu, $actions[1], "Les actions devant le silence ne mentionnent pas « {$attendu} »." );
 		}
-		self::assertStringContainsString( '${ SILENCE_HELP }', $panneau, 'L’explication du silence n’est pas affichée par le panneau.' );
+		self::assertMatchesRegularExpression(
+			'/\{ silence\.text \}\s*<\/p>\s*<p>\{ SILENCE_CAUSES \}<\/p>\s*<p>\{ SILENCE_ACTIONS \}<\/p>/',
+			$panneau,
+			'L’avis du silence doit afficher le constat, puis les causes, puis les actions, chacun dans son paragraphe.'
+		);
+	}
+
+	/**
+	 * Un interrupteur modifié passe tout de suite en « is-on », comme un réglage
+	 * actif, alors que seul « Enregistrer » (en haut, dans « Connexion au
+	 * manager ») l'applique, et que quitter l'onglet le perd : sous le dernier
+	 * réglage, un rappel annoncé (aria-live) le dit, avec un second bouton
+	 * « Enregistrer ». Le rappel compare les sept réglages envoyés par
+	 * l'enregistrement à leur valeur enregistrée.
+	 */
+	public function test_les_modifications_non_enregistrees_sont_signalees_sous_les_reglages(): void {
+		$panneau = self::panneau();
+
+		self::assertMatchesRegularExpression( '/function hasPendingChanges\(.*?settingsPayload\( current \).*?settingsPayload\( stored \)/s', $panneau );
+		self::assertStringContainsString( 'const pending = hasPendingChanges( state, saved );', $panneau );
+		self::assertMatchesRegularExpression(
+			'/aria-live="polite"\s*>\s*\{ pending && \(\s*<Status cx=\{ cx \} tone="warn">\s*Modifications non enregistrées\s*<\/Status>/',
+			$panneau,
+			'Le rappel doit être une pastille d’alerte dans une zone annoncée.'
+		);
+		self::assertMatchesRegularExpression( "/\\{ pending && \\(\\s*<Button[^>]*?onClick=\\{ \\(\\) => save\\( 'bas' \\) \\}/s", $panneau, 'Second bouton « Enregistrer » attendu à côté du rappel.' );
+		self::assertStringContainsString( "onClick={ () => save( 'haut' ) }", $panneau, 'Le bouton « Enregistrer » de « Connexion au manager » reste.' );
+
+		// Le rappel suit la dernière ligne de réglage (« Exiger des commandes signées »).
+		$signature = strpos( $panneau, 'title="Exiger des commandes signées"' );
+		$rappel    = strpos( $panneau, 'Modifications non enregistrées' );
+		self::assertIsInt( $signature );
+		self::assertIsInt( $rappel );
+		self::assertGreaterThan( $signature, $rappel );
+	}
+
+	/**
+	 * Pendant une action, les boutons restent focalisables (aria-disabled) : le
+	 * focus clavier ne retombe pas sur la page. « accessibleWhenDisabled » n'existe
+	 * qu'à partir de WordPress 6.7 (@wordpress/components 28.3.0) : la prop
+	 * employée est son ancien nom, reconnu dès WordPress 6.6.
+	 */
+	public function test_les_boutons_desactives_gardent_le_focus(): void {
+		$panneau = self::panneau();
+
+		self::assertStringContainsString( 'const FOCUSABLE_WHEN_DISABLED = { __experimentalIsFocusable: true } as const;', $panneau );
+		self::assertStringNotContainsString( 'accessibleWhenDisabled=', $panneau );
+		$desactivables = 0;
+		foreach ( array_slice( explode( '<Button', self::sans_commentaires( $panneau ) ), 1 ) as $morceau ) {
+			$bouton = strstr( $morceau, '</Button>', true );
+			self::assertIsString( $bouton );
+			if ( ! str_contains( $bouton, 'disabled={' ) ) {
+				continue;
+			}
+			++$desactivables;
+			self::assertStringContainsString( '{ ...FOCUSABLE_WHEN_DISABLED }', $bouton, "Bouton désactivable sans focus conservé : <Button{$bouton}" );
+		}
+		self::assertSame( 5, $desactivables, 'Boutons désactivables attendus : Tester, Enrôler, Déconnecter et les deux « Enregistrer ».' );
+		// « Masquer le message » disparaît avec le message : le focus est replacé.
+		self::assertMatchesRegularExpression( '/const hideNotice = \(\): void => \{.*?\.focus\(\);/s', $panneau );
 	}
 
 	/**
@@ -430,6 +496,16 @@ final class ConnectorPanelTest extends TestCase {
 		foreach ( [ "'g2rd/v1/admin/save'", "'g2rd/v1/admin/enroll'", "'g2rd/v1/admin/unenroll'", "'g2rd/v1/health'", 'aria-live="polite"', 'window.confirm(' ] as $attendu ) {
 			self::assertStringContainsString( $attendu, $source, "« {$attendu} » absent du panneau." );
 		}
+	}
+
+	/**
+	 * Les avis placés dans une pile du panneau (« Connexion interrompue », « Pas de
+	 * signe de vie ») n'ont que l'écart de la pile : la marge basse que la console
+	 * donne à ses avis ne s'y ajoute pas.
+	 */
+	public function test_les_avis_de_la_pile_n_ont_pas_de_marge_propre(): void {
+		$css = self::sans_commentaires( self::source( 'assets/admin/src/style.css' ) );
+		self::assertMatchesRegularExpression( '/\.g2rd-connector-panel \.g2rd-connector-stack > \.notice\s*\{\s*margin: 0;\s*\}/', $css );
 	}
 
 	public function test_la_feuille_garde_le_correctif_des_cases_cochees(): void {
