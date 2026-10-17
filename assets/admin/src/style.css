@@ -1,29 +1,413 @@
+/*
+ * Panneau du connecteur (ConnectorPanel.tsx), deux modes (ui.ts) :
+ *
+ * - mode console (thème G2RD 1.41 et plus) : le panneau porte les classes du
+ *   contrat de la console, que le thème dessine. Les règles hors de
+ *   .g2rd-connector-panel--autonome ne font donc QUE de la mise en page, et
+ *   aucune ne vise une classe du thème (tests/Admin/ConnectorPanelTest.php) ;
+ * - mode autonome (console plus ancienne) : mêmes éléments avec les classes
+ *   « g2rd-connector-… », dessinées ici sous .g2rd-connector-panel--autonome,
+ *   d'après la maquette « Verre » de la console (cartes blanches, lignes de
+ *   réglage avec icône, interrupteur, pastilles, champs en creux). Couleurs :
+ *   accent de l'administration (--wp-admin-theme-color), gris et couleurs
+ *   d'alerte de WordPress (#00a32a, #dba617 et leurs fonds de notice), aucune
+ *   palette nouvelle.
+ */
+
+/* ── Mise en page, les deux modes ─────────────────────────────── */
 .g2rd-connector-panel {
-    max-width: 720px;
-    margin: 1.5rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
 }
 
-.g2rd-connector-panel .components-card__header h2 {
+.g2rd-connector-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.g2rd-connector-stack > p {
     margin: 0;
-    font-size: 1.25rem;
-    font-weight: 600;
 }
 
-.g2rd-connector-version {
-    color: #757575;
-    font-size: 0.85rem;
-    font-family: ui-monospace, monospace;
+.g2rd-connector-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+    gap: 14px 20px;
+}
+
+.g2rd-connector-facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+    gap: 12px 20px;
+    margin: 0;
+}
+
+.g2rd-connector-facts dd {
+    margin: 0;
 }
 
 .g2rd-connector-actions {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 1rem;
-    margin-top: 1.5rem;
+    gap: 8px;
 }
 
-.g2rd-connector-test-result {
+/*
+ * Résultat de la dernière action, sous les boutons de « Connexion au manager ».
+ * La zone (aria-live) reste dans la page même vide ; elle ne prend alors aucune
+ * place : sa marge négative annule l'écart de la pile, que la marge de son
+ * contenu rétablit quand un message s'affiche.
+ */
+.g2rd-connector-message {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 12px;
+}
+
+.g2rd-connector-stack > .g2rd-connector-message {
+    margin: -14px 0 0;
+}
+
+.g2rd-connector-message > :not(:empty) {
+    margin: 14px 0 0;
+}
+
+.g2rd-connector-message__text {
+    flex: 1 1 320px;
+    min-width: 0;
+}
+
+/*
+ * Avis du panneau : l'écart vient de la pile seule. Sans cela, la marge basse que
+ * la console du thème donne à ses avis (14 px) s'ajoutait à celle de la pile
+ * sous « Connexion interrompue » et « Pas de signe de vie ».
+ */
+.g2rd-connector-panel .g2rd-connector-message__text .notice,
+.g2rd-connector-panel .g2rd-connector-stack > .notice {
+    margin: 0;
+}
+
+/*
+ * Avis de plusieurs paragraphes (constat, causes probables, que faire) : la
+ * console du thème annule la marge des paragraphes de ses avis, qui se
+ * collaient ; WordPress les espace déjà en mode autonome.
+ */
+.g2rd-connector-panel--console .notice p + p {
+    margin: 8px 0 0;
+}
+
+/* ── Mode autonome : texte et cartes ──────────────────────────── */
+.g2rd-connector-panel--autonome {
     color: #1e1e1e;
-    font-family: ui-monospace, monospace;
-    font-size: 0.85rem;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-section {
+    padding: 20px 24px 22px;
+    border: 1px solid #dcdcde;
+    border-radius: 16px;
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 16px 40px -24px rgba(0, 0, 0, 0.25);
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-section__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px 16px;
+    margin-bottom: 14px;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-section__title {
+    margin: 0 0 4px;
+    padding: 0;
+    color: #1e1e1e;
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.3;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-section__desc,
+.g2rd-connector-panel--autonome .g2rd-connector-section__footnote {
+    max-width: 70ch;
+    margin: 0;
+    color: #646970;
+    font-size: 13px;
+    line-height: 1.55;
+}
+
+/* ── Mode autonome : lignes de réglage ────────────────────────── */
+.g2rd-connector-panel--autonome .g2rd-connector-setting-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px;
+    border-radius: 14px;
+    background: #f6f7f7;
+    box-shadow: inset 0 0 0 1px #dcdcde;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-setting-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 12px;
+    border-radius: 10px;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-setting-row.is-on {
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), inset 0 0 0 1px #dcdcde;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-setting-row__icon {
+    display: grid;
+    flex-shrink: 0;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    background: #fff;
+    color: #50575e;
+    box-shadow: inset 0 0 0 1px #dcdcde;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-setting-row.is-on .g2rd-connector-setting-row__icon {
+    background: var(--wp-admin-theme-color, #3858e9);
+    color: #fff;
+    box-shadow: none;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-setting-row__main {
+    flex: 1;
+    min-width: 0;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-setting-row__title {
+    display: block;
+    color: #1e1e1e;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-setting-row__desc {
+    margin: 2px 0 0;
+    color: #646970;
+    font-size: 12.5px;
+    line-height: 1.45;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-setting-row__control {
+    display: flex;
+    flex-shrink: 0;
+}
+
+/*
+ * Interrupteur (FormToggle de WordPress) agrandi à 44 × 26 px, comme celui de la
+ * console. La pastille garde une bordure transparente : en mode de contraste
+ * élevé de Windows, elle devient visible (même procédé que WordPress).
+ */
+.g2rd-connector-panel--autonome .g2rd-connector-toggle.components-form-toggle {
+    width: 44px;
+    height: 26px;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-toggle .components-form-toggle__track {
+    width: 44px;
+    height: 26px;
+    border: 1px solid #8c8f94;
+    border-radius: 999px;
+    background: #fff;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-toggle .components-form-toggle__thumb {
+    top: 4px;
+    left: 4px;
+    width: 18px;
+    height: 18px;
+    border: 9px solid transparent;
+    background: #50575e;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-toggle.is-checked .components-form-toggle__track {
+    border-color: var(--wp-admin-theme-color, #3858e9);
+    background: var(--wp-admin-theme-color, #3858e9);
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-toggle.is-checked .components-form-toggle__thumb {
+    background: #fff;
+    transform: translateX(18px);
+}
+
+/*
+ * Cible d'au moins 44 px de haut. La case à cocher que WordPress pose,
+ * transparente, sur tout l'interrupteur est seule à recevoir le clic : elle
+ * déborde de 9 px en haut et en bas, centrée sur le dessin de 26 px, qui ne
+ * change pas (la ligne de réglage, plus haute, la contient). (0,4,1) : passe
+ * devant la règle de WordPress (0,3,1), qui la cale sur l'interrupteur.
+ */
+.g2rd-connector-panel--autonome .g2rd-connector-toggle input.components-form-toggle__input[type="checkbox"] {
+    top: -9px;
+    height: 44px;
+}
+
+/*
+ * Petits écrans, comme la console du thème : cartes moins épaisses sous 782 px ;
+ * sous 600 px, lignes alignées en haut (l'interrupteur reste à côté du titre) et
+ * icône masquée, qui rend environ 50 px à la colonne du titre et de la
+ * description (à 360 px, « Signe de vie horaire » occupait 11 lignes).
+ */
+@media (max-width: 782px) {
+    .g2rd-connector-panel--autonome .g2rd-connector-section {
+        padding: 16px;
+    }
+}
+
+@media (max-width: 600px) {
+    .g2rd-connector-panel--autonome .g2rd-connector-setting-row {
+        align-items: flex-start;
+    }
+
+    .g2rd-connector-panel--autonome .g2rd-connector-setting-row__icon {
+        display: none;
+    }
+}
+
+/* ── Mode autonome : pastilles ────────────────────────────────── */
+.g2rd-connector-panel--autonome .g2rd-connector-chip {
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-chip--muted {
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: #f0f0f1;
+    color: #3c434a;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 4px 11px;
+    border-radius: 999px;
+    background: #f0f0f1;
+    color: #3c434a;
+    font-size: 12.5px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-status__dot {
+    flex-shrink: 0;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #a7aaad;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-status--ok {
+    background: #edfaef;
+    color: #005c12;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-status--ok .g2rd-connector-status__dot {
+    background: #00a32a;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-status--warn {
+    background: #fcf9e8;
+    color: #614200;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-status--warn .g2rd-connector-status__dot {
+    background: #dba617;
+}
+
+/* ── Mode autonome : champs en creux, boutons, notices ────────── */
+.g2rd-connector-panel--autonome .g2rd-connector-field__label {
+    display: block;
+    margin: 0 0 6px;
+    color: #646970;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-field__input {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 44px;
+    margin: 0;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 10px;
+    background: #f6f7f7;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.12), inset 0 0 0 1px #dcdcde;
+    color: #1e1e1e;
+    font-size: 14px;
+}
+
+/* (0,3,0) : passe devant input[type="url"]:focus et :disabled de WordPress (0,2,1). */
+.g2rd-connector-panel--autonome .g2rd-connector-field__input:focus {
+    outline: 2px solid transparent;
+    box-shadow: inset 0 0 0 1px #dcdcde, 0 0 0 2px var(--wp-admin-theme-color, #3858e9);
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-field__input:disabled {
+    background: #f0f0f1;
+    color: #646970;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-field__hint {
+    margin: 6px 0 0;
+    color: #646970;
+    font-size: 12.5px;
+}
+
+/* Boutons et champs : cibles d'au moins 44 px de haut. */
+.g2rd-connector-panel--autonome .components-button {
+    min-height: 44px;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-notice-inline {
+    margin: 0;
+    border-radius: 8px;
+}
+
+/*
+ * Cases cochées de la page de réglages, lisibles quel que soit le thème.
+ *
+ * WordPress (forms.css, 7.x) dessine la coche en BLANC et colore le fond de la case
+ * cochée avec --wp-admin-theme-color. Un thème qui redessine les cases de toute
+ * l'administration avec un fond blanc plus prioritaire, sans redonner ce fond à l'état
+ * coché, rend la coche invisible (blanc sur blanc) : la case semble décochée alors que
+ * le réglage est actif. Constaté le 16/10/2026 avec le style d'administration du thème
+ * G2RD (règle « body.wp-admin:not(.block-editor-page) input[type="checkbox"] »).
+ * Le fond (0,5,2) passe devant celui-là et devant sa règle « :checked » (0,4,2), quel
+ * que soit l'ordre de chargement, et ne vise que la page du connecteur sous WordPress 7
+ * et plus (classe « --wp7 » posée par Page::wrap_class()) : sous WordPress 6, la coche
+ * est colorée sur fond blanc, peindre le fond la cacherait.
+ * La bordure suit le fond au repos seulement (0,6,2) : au focus, elle reste celle de
+ * WordPress (schéma de couleurs) ou du thème, pour ne rien changer au dessin du focus.
+ * Le repli #3858e9 est la couleur principale par défaut de l'administration WordPress 7.
+ */
+body.wp-admin .g2rd-connector-wrap.g2rd-connector-wrap--wp7 input[type="checkbox"]:checked {
+    background: var(--wp-admin-theme-color, #3858e9);
+}
+
+body.wp-admin .g2rd-connector-wrap.g2rd-connector-wrap--wp7 input[type="checkbox"]:checked:not(:focus) {
+    border-color: var(--wp-admin-theme-color, #3858e9);
 }

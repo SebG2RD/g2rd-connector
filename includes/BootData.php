@@ -56,7 +56,8 @@ final class BootData {
 			// et ancien format non authentifié, accepté : normal juste après la mise à jour,
 			// suspect s'il dure),
 			// `refused` (ancien format refusé par le mode strict) ou `unreadable` (altéré
-			// en base ou sels changés). Pas encore affiché par l'app React.
+			// en base ou sels changés). Les deux derniers : « Connexion interrompue » dans
+			// le panneau React (ConnectorPanel.tsx), avec la cause.
 			'tokenState'            => Settings::token_state(),
 			// Mode strict (constante G2RD_CONNECTOR_REQUIRE_AUTHENTICATED_TOKEN) actif.
 			'tokenStrict'           => Settings::strict_token_storage(),

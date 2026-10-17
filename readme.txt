@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.14.0-rc.2
+Stable tag: 1.14.0-rc.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -21,7 +21,7 @@ Connects this WordPress site to the centralized G2RD WP Manager dashboard (https
 * **Optional event stream** — push real-time notifications (user logins, login failures, plugin activations, core/plugin/theme updates, auto-update failures) to the manager. Login failures are sent with a 2-second cap instead of 15, at most 30 per minute. Disabled until you opt in.
 * **Optional remote commands** — let the manager trigger cache clearing, update checks, core/plugin/theme updates and database maintenance (delete spam comments, delete post revisions, empty trash, delete expired transients, optimize database) remotely. Disabled until you opt in.
 * **Direct login from the manager** — the manager can open this site's dashboard without a password, through a signed one-time link valid for one minute, for staff whose manager account uses two-factor authentication. On by default; can be turned off in the plugin settings ("Allow direct login from G2RD").
-* **Theme integration** — when the optional companion theme `g2rd-theme` (>= 1.19) is active, the plugin registers itself as a tab in *Appearance → G2RD Options* instead of adding a top-level menu, for a tidy admin UX.
+* **Theme integration** — when the parent theme is the optional companion theme `g2rd-theme` (>= 1.19, child themes included), the plugin registers itself as a "Manager G2RD" tab of the theme's options console (*Appearance → G2RD Options* up to theme 1.40, top-level *G2RD* menu from theme 1.41) instead of adding a top-level menu, for a tidy admin UX. Its own settings page stays reachable outside the menu, as a fallback, at `wp-admin/admin.php?page=g2rd-connector`.
 
 = External service =
 
@@ -54,7 +54,7 @@ To provide update notifications, the plugin queries the **public GitHub Releases
 
 1. Upload the `g2rd-connector` folder to `/wp-content/plugins/`, or install the ZIP from this directory.
 2. Activate the plugin in WordPress *Plugins* page.
-3. Go to *Settings → G2RD Connector* (or *Appearance → G2RD Options → Manager G2RD* if you also run the `g2rd-theme` companion).
+3. Go to the top-level *G2RD Connector* menu (or, if the `g2rd-theme` companion is your theme or its parent theme, to the *Manager G2RD* tab of its console: *Appearance → G2RD Options* up to theme 1.40, top-level *G2RD* menu from theme 1.41).
 4. Paste your manager URL and invitation token, then click **Enroll site**.
 
 == Frequently Asked Questions ==
@@ -78,7 +78,7 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 == Screenshots ==
 
 1. Standalone settings page with manager URL, invitation token and feature toggles.
-2. Theme-integrated tab in *Appearance → G2RD Options* (requires `g2rd-theme` >= 1.19).
+2. Theme-integrated "Manager G2RD" tab in the G2RD theme console (requires `g2rd-theme` >= 1.19 as the theme or its parent theme).
 
 == Changelog ==
 
@@ -106,6 +106,137 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   `/command` and the heartbeat queue are unchanged; nothing changes for a site until the
   platform turns the mode on. What the manager reads through the new route is listed under
   "What is sent, when" (External service section).
+
+= 1.14.0-rc.3 =
+
+* **Fix: checked boxes are visible again on the standalone settings page (WordPress 7.x).**
+  WordPress 7.x draws the check mark in white on the admin accent color; an admin stylesheet
+  that gives every checkbox a white background (seen with the G2RD theme) made the mark
+  invisible, so enabled settings looked unchecked. On WordPress 7.x only, the settings page now
+  restores the accent background of checked boxes (WordPress 6.x draws a colored mark on a
+  white box and is left as is). The display bug itself never changed a setting; if a box that
+  looked empty was clicked and the page saved, review the settings once.
+* **Fix: with a child theme, the connector appears as a tab of the G2RD theme console.** The
+  connector chose between the console tab and its own "G2RD Connector" menu from the version
+  of the active theme. With a child theme (such as `g2rd-child` 1.0.0 on top of `g2rd-theme`
+  1.39.0), it read the child's version, found it older than 1.19 and showed its own menu
+  instead of the tab. It now reads the version of the parent theme, the one that provides the
+  console: a G2RD parent theme (`g2rd-theme`, or its former folder name `g2rd`) 1.19 or later
+  gives the tab, child theme or not; an older G2RD theme, a missing parent theme or any other
+  theme keep the "G2RD Connector" menu.
+* **Feature: in tab mode, the connector settings page stays reachable as a fallback.** When
+  the connector is a tab of the G2RD theme console, its own settings page is no longer in the
+  admin menu but still opens at `wp-admin/admin.php?page=g2rd-connector` (WordPress used to
+  refuse that address in tab mode), with the same PHP form as on sites without the G2RD theme
+  and the checked-box fix above. It is there in case the console does not show the tab
+  (modified theme, JavaScript error). The page is attached to `options.php` (WordPress' "All
+  options" screen, which is not a top-level menu): this keeps it out of the menu without the
+  deprecation notices (PHP 8.1 and later) that an empty or null parent page would cause.
+* **Fix: the "Manager G2RD" tab of the G2RD theme console shows its cloud icon.** The tab
+  declared its icon as a dashicons class (`dashicons-cloud`): the theme console 1.39 turned it
+  into an unknown class (no icon at all) and 1.41 replaces any unknown name with its generic
+  plug icon. It now declares `cloud`, a name of the console's icon set. Its description now
+  reads "Connexion au tableau de bord centralisé G2RD WP Manager.".
+* **Fix: leaving the tab no longer leaves an orphaned copy of the connector panel in memory.**
+  The `mount` function given to the theme console now returns its cleanup function: the
+  panel's React root is unmounted when another tab is opened.
+* **Fix: coming back to the "Manager G2RD" tab shows the last saved settings.** Each time the
+  tab was opened again, the panel started over from the values the page was loaded with:
+  after a save, an enrollment or a disconnection, going to another tab and back showed the
+  earlier values ("Site non enrôlé" after an enrollment), and saving again from there
+  silently sent them back, security settings included (signature required, direct login,
+  remote commands). The panel now starts from the last answer of the server, including one
+  that arrived after the tab was left; if the tab was opened again before that answer
+  arrived, the panel is refreshed with it. Reloading the page was not affected.
+* **Change: the connector panel is reorganised in four sections, with French labels.** The
+  connector has no translation yet: its labels show in French whatever the site language.
+  "Connexion au manager": state badge (connected; no sign of life; enrolled; connection
+  interrupted, with its cause when the connection token is unreadable or refused; not enrolled
+  yet; see below), site number, last sign of
+  life, manager address, invitation token, and the test, enrol or disconnect, and save
+  buttons. "Échanges avec le manager": one row per setting, with an icon, a switch and a
+  short description of what it really does (hourly sign of life, formerly "Heartbeat
+  horaire"; real-time events, formerly "Webhook events"; remote commands; IPv4 to the
+  manager; direct login from G2RD). "Sécurité des commandes": signed commands required, number
+  and date of the signature check failures, and the last one explained in a plain sentence.
+  "Diagnostic": connector version, restore points (count, size, writable folder or not), last
+  capture of third-party updates. In a G2RD theme console that publishes its interface
+  contract (`window.G2RDOptions.console.version` 2 or more, theme 1.41.0 and later), the
+  panel uses the console's own classes and looks like the other tabs; with an older console
+  (theme 1.19 to 1.40) it draws the same layout with its own styles, limited to the panel and
+  based on the WordPress admin colours, where each switch takes a click over 44 pixels of
+  height. Settings, REST routes and stored data are unchanged (the enrolment error now carries
+  two extra fields, see below).
+* **Change: clearer action messages in the connector panel.** The result of the last action
+  (save, enrolment, disconnection, test) appears under the buttons of "Connexion au manager"
+  and is announced by screen readers. Failure messages now give the probable cause and what
+  to do, and the test says what it checks: the connector answers on this site from the
+  browser, which does not prove that the manager reaches the site. When the connection token
+  is unreadable or refused, the panel gives the same explanation as the admin notice,
+  probable cause included.
+* **Change: unsaved changes are flagged in the connector panel.** A switch turned on or off
+  looks active at once, but only "Enregistrer" applies it, and leaving the tab loses it. As
+  long as a setting differs from the saved one, "Modifications non enregistrées" now shows
+  under the last setting, announced by screen readers, with a second "Enregistrer" button;
+  the result of that save shows next to it. During an action the buttons stay focusable, so
+  the keyboard focus no longer falls back to the page, and hiding a message brings the focus
+  back to the button that started the action.
+* **Fix: the "Manager G2RD" tab loads in the console of G2RD theme 1.41 and later.** Theme
+  1.41 moved its console from Appearance → G2RD Options to a top-level "G2RD" menu and
+  redirects the old address there, but the connector loaded its script only on the old page:
+  with theme 1.41.x the tab was listed but stayed empty, and the settings page is hidden from
+  the menu in tab mode, so the connector had no visible settings at all. The script now loads
+  on the console page of both theme generations (1.19 to 1.40, and 1.41 and later), and on no
+  other admin page.
+* **Fix: the connector panel no longer loads without the WordPress scripts it needs.** The
+  compiled panel reads `react-jsx-runtime`, which WordPress registers from version 6.6 only,
+  while its script declared a fixed list without it: under WordPress 6.4 or 6.5 the tab stayed
+  empty with a JavaScript error. The script now declares the dependencies written by the build
+  (`index.asset.php`) on top of the previous list; when one of them is not registered, the
+  panel is not loaded and the theme console shows a notice: "Ce panneau demande WordPress 6.6
+  ou plus récent", with a link to the PHP settings page, or the missing scripts and their
+  probable cause on a recent WordPress. The PHP settings page is unchanged.
+* **Change: the connection badge shows the real state of the link with the manager.**
+  "Connecté" (connected) used to appear as soon as the site was enrolled with a readable token,
+  even while the manager had been unreachable for days. It now needs a successful exchange
+  less than two hours old: a sign of life accepted by the manager, the manager reading the
+  site, or the enrolment itself. With the hourly sign of life on and no exchange for two
+  hours, the badge reads "Pas de signe de vie depuis …" (no sign of life for …) and the panel
+  explains the probable causes (WP-Cron not triggered for lack of visits, outgoing calls to
+  the manager blocked, e.g. IPv6) and what to do (reload the page a minute later, turn on "IPv4
+  vers le manager" and save, check WP-Cron). With the sign of life off and no recent exchange,
+  the badge is a neutral "Enrôlé" (enrolled) and the last sign of life says it is off.
+* **Change: an enrolment failure now gives its own probable cause and action.** The manager
+  did not answer, or a CDN or firewall refused the request on the way (HTTP 403 with no answer
+  from the manager, as with the IPv6 refusals of September): turn on "IPv4 vers le manager",
+  save, then retry with the same invitation; a new invitation would be blocked the same way.
+  The manager refused the invitation (HTTP 403 from the manager itself: expired, already used,
+  or site address different from the one recorded): generate a new invitation. Any other
+  refusal from the manager (for example HTTP 422 for a site address in http://) points to the
+  manager's own message, shown in brackets, without guessing a cause. Expired WordPress
+  session, invalid address, wrong address (HTTP 404) and too many attempts have their own
+  message too. The error
+  returned by the enrolment endpoint now says whether the manager itself answered
+  (`manager_answered`) and carries the settings saved before the attempt (`boot`): after a
+  failed enrolment, the panel and the theme tab keep the address and switches as saved,
+  instead of showing the previous ones again and sending them back on the next save.
+* **Change: the settings page speaks like the panel.** The PHP settings page (sites without
+  the G2RD theme, and the fallback page in tab mode) now uses the panel's labels and
+  descriptions: "Adresse du manager", "Jeton d'invitation", "Signe de vie horaire" (formerly
+  "Heartbeat horaire"), "Événements en temps réel" (formerly "Webhook events"), "Commandes à
+  distance" (formerly "Commandes distantes"), "IPv4 vers le manager", "Connexion directe
+  depuis G2RD". Its enrolled banner no longer claims "Connecté à …", which nothing on that page
+  checks, and reads "Manager : … — site n° …", in a neutral (blue) notice instead of a green
+  one, since that page does not check the exchanges with the manager. An unusable connection
+  token is shown as a warning, as in the panel. Each checkbox is named by the title of its
+  row, its description becoming its help text. Form field names are unchanged. The PHP
+  settings pages now load only the connector stylesheet, no longer the panel script, React
+  and the panel data, which they do not use.
+* **Change: smaller wording fixes in the panel.** Each signature check failure now ends with
+  what to do (for a replayed request: refused when signed commands are required, possibly run
+  twice otherwise; contact G2RD support if it repeats). The remote commands switch says that
+  queued commands are picked up with the hourly sign of life, and the restore points line
+  says when the folder is writable.
 
 = 1.14.0-rc.2 =
 

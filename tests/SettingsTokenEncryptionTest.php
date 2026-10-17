@@ -679,11 +679,17 @@ final class SettingsTokenEncryptionTest extends TestCase {
 
 		self::assertStringNotContainsString( 'notice-success', $html );
 		self::assertStringNotContainsString( 'Site enrôlé.', $html );
-		self::assertStringContainsString( 'notice-error', $html );
+		// Avertissement, comme « Connexion interrompue » dans le panneau React.
+		self::assertStringContainsString( 'notice-warning', $html );
 		self::assertStringContainsString( 'Déconnecter du manager', $html );
 	}
 
-	public function test_la_page_garde_le_bandeau_vert_quand_le_jeton_est_lisible(): void {
+	/**
+	 * Jeton lisible : bandeau « Site enrôlé. » neutre (bleu), pas vert. La page PHP
+	 * ne vérifie pas les échanges avec le manager : un site enrôlé mais silencieux
+	 * depuis des jours n'y est pas présenté comme en bon état.
+	 */
+	public function test_la_page_montre_un_bandeau_neutre_quand_le_jeton_est_lisible(): void {
 		$this->options[ Settings::OPTION_KEY ] = [
 			'site_id'    => 7,
 			'site_token' => Settings::encrypt_token( self::PLAIN ),
@@ -691,7 +697,8 @@ final class SettingsTokenEncryptionTest extends TestCase {
 
 		$html = $this->render_page();
 
-		self::assertStringContainsString( 'notice-success', $html );
+		self::assertStringContainsString( 'notice-info', $html );
+		self::assertStringNotContainsString( 'notice-success', $html );
 		self::assertStringContainsString( 'Site enrôlé.', $html );
 	}
 
@@ -938,6 +945,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 		Functions\when( 'wp_nonce_field' )->justReturn( '' );
 		Functions\when( 'checked' )->justReturn( '' );
 		Functions\when( 'get_site_option' )->justReturn( false );
+		Functions\when( 'get_bloginfo' )->justReturn( '7.1.3' );
 		ob_start();
 		( new Page() )->render_standalone_page();
 		return (string) ob_get_clean();

@@ -15,7 +15,7 @@
 | **Webhook events** | Push temps réel au manager : `user.login`, `user.login_failed`, `plugin.activated/deactivated`, `core.updated`, `core.auto_update`. `user.login_failed` part avec une attente plafonnée à 2 s (au lieu de 15), réponse non lue, 30 fois par minute au plus (`Events\LoginFailedThrottle`) ; au-delà, ni envoi ni écriture, pas d'événement récapitulatif. |
 | **Commandes distantes** | `POST /wp-json/g2rd/v1/command` (Bearer auth) — `clear_cache`, `check_updates`, `update_core` déclenchables depuis le manager. Depuis la 1.14, les commandes longues peuvent aussi être exécutées en arrière-plan, après la réponse (`/command-runs`) : voir « Commandes en arrière-plan (1.14) ». |
 | **Connexion directe** | `admin-ajax.php?action=g2rd_login&ticket=…` — ouvre l'administration sans mot de passe depuis le manager (ticket signé, 60 s, usage unique). Case « Autoriser la connexion directe depuis G2RD », cochée par défaut. |
-| **Intégration thème** | Si le thème [`g2rd-theme`](https://github.com/SebG2RD/g2rd-theme) ≥ v1.19 est actif, le plugin s'enregistre comme **onglet dans Apparence → Options G2RD**. Sinon, menu top-level autonome. |
+| **Intégration thème** | Si le thème parent est [`g2rd-theme`](https://github.com/SebG2RD/g2rd-theme) ≥ v1.19 (thème enfant compris), le plugin s'enregistre comme **onglet « Manager G2RD » de la console du thème**, avec une page de secours hors du menu. Sinon, menu top-level autonome. Voir [Intégration au thème G2RD](#intégration-au-thème-g2rd). |
 
 ## Architecture
 
@@ -69,7 +69,7 @@ wp plugin activate g2rd-connector
 ## Enrollment d'un site
 
 1. **Côté manager** (https://wp-manager.g2rd.fr) : Sites → *Inviter un site* → copier le **token d'invitation**.
-2. **Côté WordPress** : Réglages → G2RD Connector (ou Apparence → Options G2RD → onglet *Manager G2RD*).
+2. **Côté WordPress** : menu *G2RD Connector* (ou, avec le thème G2RD, onglet *Manager G2RD* de sa console : Apparence → Options G2RD jusqu'au thème 1.40, menu *G2RD* à partir de la 1.41).
 3. Coller le token, cliquer **Enrôler le site**. Le plugin POST `/api/sites/enroll`, reçoit `{ site_id, site_token }` et persiste.
 4. À partir de là : sync, heartbeat, events, commandes — tout transite via le SiteToken (révoquable à tout moment côté manager).
 
@@ -145,6 +145,96 @@ faux, 401/403), sans réparation possible à distance.
   celle du jeton courant ; vide après une déconnexion, absente sans openssl), ou remettre le
   connecteur à jour (la valeur réécrite par l'ancienne version est réparée à la lecture).
 - Rien ne change sur le réseau : même Bearer, même clé de signature, aucun réenrôlement.
+
+## Intégration au thème G2RD
+
+Avec le thème G2RD, le connecteur se range dans la console d'options du thème, à côté des
+autres extensions G2RD (groupe des extensions, onglet « Manager G2RD », icône `cloud`) ; sans
+lui, il garde son propre menu « G2RD Connector ». Code : `includes/Admin/Page.php` (PHP),
+`assets/admin/src/index.tsx` (montage), `assets/admin/src/ui.ts` (mode de dessin).
+
+### Détection
+
+Le choix se fait d'après le **thème parent** (`get_template()`), celui qui fournit la console, et
+SA version (en-tête `Version` lu par `wp_get_theme( get_template() )`) : la version d'un thème
+enfant n'a aucun rapport avec celle de la console (g2rd.fr : `g2rd-child` 1.0.0 sur
+`g2rd-theme` 1.39.0).
+
+| Thème parent | Résultat |
+| --- | --- |
+| `g2rd-theme` (ou son ancien dossier `g2rd`) ≥ 1.19.0, thème enfant ou non | Onglet de la console + page de secours hors du menu |
+| `g2rd-theme` < 1.19.0, thème parent introuvable, ou autre thème | Menu de premier niveau « G2RD Connector » (formulaire PHP) |
+
+Le filtre `g2rd_options_external_tabs` existe dans le thème depuis la 1.19.
+
+### Onglet de la console
+
+- **Déclaration (PHP)** : `Page::register_as_theme_tab()` ajoute au filtre
+  `g2rd_options_external_tabs` l'onglet `connector` — libellé « Manager G2RD », description
+  « Connexion au tableau de bord centralisé G2RD WP Manager. », icône `cloud` (un nom du jeu
+  d'icônes de la console, pas une classe dashicons), conteneur `g2rd-connector-tab-root`, et
+  `data` = les données de la page (`BootData::build()`, aucun secret : le jeton du site n'y
+  figure pas). La console lit libellé, description et icône dans ce filtre.
+- **Chargement** : le script et la feuille du panneau ne se chargent que sur la page de la console
+  (`Page::is_theme_console_page()`) — `appearance_page_g2rd-options` pour les thèmes 1.19 à 1.40
+  (Apparence → Options G2RD), `toplevel_page_<slug>` à partir de la 1.41 (menu de premier niveau
+  « G2RD », slug lu dans `\G2RD\AdminConsole::MENU_SLUG`, `g2rd` à défaut ; l'ancienne adresse
+  `?page=g2rd-options` y est redirigée). Rien sur les sous-pages `g2rd_page_…` ni ailleurs.
+- **Montage (JS)** : au `DOMContentLoaded`, `index.tsx` appelle
+  `window.G2RDOptions.registerTab()` avec les mêmes clé, libellé, description et icône que le
+  filtre (`tests/Admin/PageTest.php` vérifie qu'ils restent identiques). `mount` rend toujours sa
+  fonction de nettoyage : quitter l'onglet démonte la racine React (démontage remis à la tâche
+  suivante, la console l'appelant pendant son propre rendu). Les réglages renvoyés par le serveur
+  (enregistrement, enrôlement, déconnexion) sont gardés d'un montage à l'autre : revenir sur
+  l'onglet affiche les derniers réglages enregistrés, pas ceux du chargement de la page.
+
+### Page de secours
+
+En mode onglet, la page autonome reste enregistrée **hors du menu**, joignable par
+`wp-admin/admin.php?page=g2rd-connector`, au cas où la console ne montrerait pas l'onglet (thème
+modifié, erreur JavaScript). Elle est rattachée à `options.php` (écran « Toutes les options »,
+qui n'est pas un menu de premier niveau, donc sans entrée de menu) : un parent `null` ou vide la
+cacherait aussi, mais avec des avertissements de dépréciation sous PHP 8.1+ (détail dans
+`Page::FALLBACK_PARENT`). Elle affiche le même formulaire PHP que la page autonome (mêmes
+libellés que le panneau, correctif des cases cochées sous WordPress 7) ; sa feuille se charge sur
+son propre hook (`admin_page_g2rd-connector`), seule : elle ne monte pas le panneau React (pas de
+conteneur `#g2rd-connector-root`), donc ni son script, ni React, ni ses données n'y sont chargés.
+Il en va de même de la page autonome.
+
+### Contrat attendu du thème
+
+Documenté côté thème dans `docs/plugin-wordpress.md` du dépôt g2rd-theme.
+
+- **`window.G2RDOptions.registerTab( { key, label, description, icon, mount } )`** : présent dès
+  l'exécution du bundle de la console, avant le `DOMContentLoaded` où le connecteur l'appelle.
+  Absent (console non chargée), le connecteur n'enregistre rien et ne lève aucune erreur.
+- **`mount( container, data )`** : appelé quand l'onglet devient actif, `data` étant le tableau
+  `data` du filtre PHP. Il **rend une fonction de nettoyage**, que la console appelle quand on
+  quitte l'onglet (seulement si `mount` en rend une ; le connecteur la rend toujours).
+- **`window.G2RDOptions.console.version`** : contrat d'interface posé par le thème 1.41.0 et plus
+  (`\G2RD\AdminConsole::CONTRACT_VERSION`, aujourd'hui 2), lisible au moment où `mount` est
+  appelé. Le panneau le lit au montage (`detectUiMode()`) :
+  - **≥ 2 → mode console** : le panneau n'emploie que les classes du contrat et a l'allure des
+    autres onglets ; la feuille du connecteur n'y ajoute que de la mise en page ;
+  - **absent ou < 2 → mode autonome** (thème 1.19 à 1.40, comme g2rd.fr en 1.39.0) : même
+    structure, classes `g2rd-connector-…` dessinées par
+    `assets/admin/src/style.css` sous `.g2rd-connector-panel--autonome` (couleurs de
+    l'administration WordPress, `--wp-admin-theme-color`, et gris neutres ; interrupteurs
+    cliquables sur 44 px de haut).
+- **Classes stables (contrat version 2)** employées par le panneau : `g2rd-section`,
+  `g2rd-section__head`, `__title`, `__desc`, `__footnote` ; `g2rd-setting-list` >
+  `g2rd-setting-row` (modificateur `is-on`, enfants `__icon`, `__main`, `__title`, `__desc`,
+  `__control`) ; `g2rd-toggle` (interrupteur `FormToggle`) ; `g2rd-chip`, `g2rd-chip--muted` ;
+  `g2rd-status`, `--ok`, `--warn`, `__dot` ; `g2rd-field__label`, `g2rd-field__input`,
+  `g2rd-field__hint` ; `g2rd-notice-inline`. La liste est le type `UiPart` de `ui.ts` ;
+  `tests/Admin/ConnectorPanelTest.php` vérifie qu'en mode console le panneau n'emploie qu'elles et
+  qu'en mode autonome chacune est dessinée par la feuille.
+- **Icône** : `cloud`. Le thème 1.39 en fait la classe `dashicons-cloud` ; à partir de la 1.41, la
+  console la prend dans son jeu interne (toute autre valeur y devient l'icône `plug`).
+
+Côté thème, `version` n'augmente que si une classe du contrat change de sens. Si une version 3
+paraît, revoir `CONSOLE_CONTRACT_MIN` et `detectUiMode()` dans `ui.ts` : le panneau prend
+aujourd'hui toute version ≥ 2 pour la version 2.
 
 ## Routes REST exposées
 

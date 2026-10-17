@@ -175,10 +175,13 @@ if ( ! class_exists( 'WP_REST_Response' ) ) {
 }
 
 if ( ! class_exists( 'WP_Theme' ) ) {
-	/** Doublure : en-têtes du style.css et dossier, fixés par le test. */
+	/**
+	 * Doublure : en-têtes du style.css, dossier et thème parent (vide : aucun),
+	 * fixés par le test.
+	 */
 	class WP_Theme {
 		/** @param array<string, string> $headers */
-		public function __construct( private string $stylesheet, private array $headers = [], private bool $exists = true, private string $dir = '' ) {}
+		public function __construct( private string $stylesheet, private array $headers = [], private bool $exists = true, private string $dir = '', private string $template = '' ) {}
 
 		/** @return string|false */
 		public function get( string $header ) {
@@ -187,6 +190,11 @@ if ( ! class_exists( 'WP_Theme' ) ) {
 
 		public function get_stylesheet(): string {
 			return $this->stylesheet;
+		}
+
+		/** Dossier du thème parent ; celui du thème lui-même s'il n'a pas de parent, comme WordPress. */
+		public function get_template(): string {
+			return '' !== $this->template ? $this->template : $this->stylesheet;
 		}
 
 		public function exists(): bool {

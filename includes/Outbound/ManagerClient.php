@@ -83,7 +83,14 @@ final class ManagerClient {
 			return new WP_Error(
 				'g2rd_connector_enroll_failed',
 				sprintf( 'Enrollment refusé (HTTP %d) : %s', $code, is_array( $body ) ? ( $body['message'] ?? '' ) : '' ),
-				[ 'status' => $code ]
+				[
+					'status'           => $code,
+					// Le manager a-t-il répondu lui-même (JSON avec un message) ? Il
+					// répond 403 à une invitation invalide ou expirée ; un 403 sans
+					// cette réponse vient d'un CDN ou d'un pare-feu en chemin (incident
+					// IPv6 du 25/09), et une nouvelle invitation n'y changerait rien.
+					'manager_answered' => is_array( $body ) && isset( $body['message'] ) && is_string( $body['message'] ),
+				]
 			);
 		}
 
