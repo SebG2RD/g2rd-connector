@@ -110,6 +110,36 @@ final class SizeMeterTest extends FilesystemTestCase {
 		);
 	}
 
+	/**
+	 * @return array<string, array{string}>
+	 */
+	public static function trailing_separators(): array {
+		return [
+			'séparateur final /'         => [ '/' ],
+			'séparateur final \\ (Windows)' => [ '\\' ],
+		];
+	}
+
+	/**
+	 * WordPress forme le dossier des médias par `WP_CONTENT_DIR . '/uploads'` : un
+	 * WP_CONTENT_DIR défini avec un séparateur final donne `…/wp-content//uploads`. Les
+	 * séparateurs répétés sont réduits avant la comparaison, sinon aucun média n'entrerait
+	 * dans le sous-total.
+	 */
+	#[DataProvider( 'trailing_separators' )]
+	public function test_un_wp_content_termine_par_un_separateur_garde_le_sous_total_des_medias( string $separator ): void {
+		$this->write( 'wp-content/plugins/extension/extension.php', 5 );
+		$this->write( 'wp-content/uploads/image.jpg', 10 );
+
+		$content_dir = $this->content . $separator;
+		$result      = ( new SizeMeter( 5, 100000 ) )->measure_files( $content_dir, $content_dir . '/uploads' );
+
+		self::assertSame( 15, $result['wp_content_bytes'] );
+		self::assertSame( 10, $result['uploads_bytes'], 'les médias sont reconnus malgré le séparateur répété' );
+		self::assertSame( 2, $result['files_counted'] );
+		self::assertFalse( $result['partial'] );
+	}
+
 	public function test_medias_hors_de_wp_content(): void {
 		// Constante UPLOADS qui place les médias à côté de wp-content, pas dedans.
 		$this->write( 'wp-content/plugins/extension/extension.php', 100 );
@@ -131,6 +161,8 @@ final class SizeMeterTest extends FilesystemTestCase {
 		return [
 			'aucun dossier des médias'                     => [ '' ],
 			'dossier hors de wp-content impossible à ouvrir' => [ '/medias-absent' ],
+			// PHP refuse ce chemin par une \ValueError, pas une \UnexpectedValueException.
+			'chemin refusé par PHP (octet nul)'            => [ "/medias\0absent" ],
 		];
 	}
 
@@ -145,6 +177,59 @@ final class SizeMeterTest extends FilesystemTestCase {
 		self::assertSame( 100, $result['wp_content_bytes'], 'le reste est mesuré' );
 		self::assertSame( 1, $result['files_counted'] );
 		self::assertFalse( $result['partial'] );
+	}
+
+	/**
+	 * @return array<string, array{string}>
+	 */
+	public static function filesystem_roots(): array {
+		return [
+			'racine /'           => [ '/' ],
+			'racine \\ (Windows)' => [ '\\' ],
+		];
+	}
+
+	/**
+	 * Option upload_path à `/` : le dossier des médias est la racine du système de
+	 * fichiers, vide une fois normalisé. Il n'est pas mesuré (null), et le reste l'est.
+	 */
+	#[DataProvider( 'filesystem_roots' )]
+	public function test_medias_a_la_racine_du_systeme_rendent_null_sans_faire_echouer_la_mesure( string $root ): void {
+		$this->write( 'wp-content/plugins/extension/extension.php', 100 );
+
+		$result = ( new SizeMeter( 5, 100000 ) )->measure_files( $this->content, $root );
+
+		self::assertNull( $result['uploads_bytes'] );
+		self::assertSame( 100, $result['wp_content_bytes'], 'le reste est mesuré' );
+		self::assertSame( 1, $result['files_counted'] );
+		self::assertFalse( $result['partial'] );
+	}
+
+	/**
+	 * Parcourir la racine du système de fichiers, ce serait parcourir tout le serveur,
+	 * dossiers des autres sites du même compte compris : elle n'est jamais remise au
+	 * parcours, ni comme dossier des médias, ni comme wp-content (qui fait alors échouer
+	 * la mesure, avec le même message fixe qu'un dossier absent).
+	 */
+	public function test_la_racine_du_systeme_n_est_jamais_parcourue(): void {
+		$asked   = [];
+		$entries = static function ( string $dir ) use ( &$asked ): \Iterator {
+			$asked[] = $dir;
+			return new \ArrayIterator( [] );
+		};
+		$meter   = new SizeMeter( 5, 100000, null, $entries );
+
+		$meter->measure_files( $this->content, '/' );
+		self::assertSame( [ str_replace( '\\', '/', $this->content ) ], $asked, 'seul wp-content est parcouru' );
+
+		$asked = [];
+		try {
+			$meter->measure_files( '/', '/uploads' );
+			self::fail( 'wp-content à la racine du système doit faire échouer la mesure' );
+		} catch ( \UnexpectedValueException $e ) {
+			self::assertStringContainsString( 'wp-content', $e->getMessage() );
+		}
+		self::assertSame( [], $asked, 'rien n\'est parcouru' );
 	}
 
 	public function test_un_dossier_voisin_au_nom_proche_n_est_pas_compte_dans_les_medias(): void {

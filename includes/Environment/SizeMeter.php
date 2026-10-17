@@ -19,6 +19,8 @@
  *  - une entrée illisible ou disparue pendant le parcours (cache, sessions, fichiers
  *    temporaires) compte 0 octet et ne fait jamais échouer la mesure ; un dossier
  *    illisible est sauté. Seul `wp-content` impossible à ouvrir la fait échouer ;
+ *  - la racine du système de fichiers n'est jamais parcourue (tout le serveur) : des
+ *    médias à la racine ne sont pas mesurés, un wp-content à la racine fait échouer ;
  *  - aucun chemin ni nom de fichier dans la sortie ni dans les erreurs : des totaux et
  *    un drapeau.
  *
@@ -91,7 +93,8 @@ final class SizeMeter {
 	 * Médias dans wp-content (cas normal) : sous-total pris pendant le même parcours.
 	 * Médias ailleurs (constante UPLOADS) : second parcours, sur le reste du même
 	 * budget. `uploads_bytes` vaut null sans dossier des médias, ou si ce dossier, hors
-	 * de wp-content, ne s'ouvre pas.
+	 * de wp-content, ne s'ouvre pas ou est la racine du système de fichiers (jamais
+	 * parcourue).
 	 *
 	 * @param string $content_dir WP_CONTENT_DIR.
 	 * @param string $uploads_dir Dossier des médias du site principal (`basedir`), ou ''.
@@ -227,12 +230,21 @@ final class SizeMeter {
 	/**
 	 * Entrées d'un dossier ; null s'il ne s'ouvre pas.
 	 *
+	 * La racine du système de fichiers (`/` ou `\`, vide une fois normalisée) n'est
+	 * jamais remise au parcours : ce serait parcourir tout le serveur, dossiers des
+	 * autres sites du même compte compris. Un chemin que PHP refuse avant même de
+	 * l'ouvrir (\ValueError : chemin vide, octet nul) compte comme un dossier qui ne
+	 * s'ouvre pas.
+	 *
 	 * @return \Iterator<mixed, \SplFileInfo>|null
 	 */
 	private function open( string $dir ): ?\Iterator {
+		if ( '' === $dir ) {
+			return null;
+		}
 		try {
 			return ( $this->entries )( $dir );
-		} catch ( \UnexpectedValueException ) {
+		} catch ( \UnexpectedValueException | \ValueError ) {
 			return null;
 		}
 	}
