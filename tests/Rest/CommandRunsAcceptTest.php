@@ -662,6 +662,48 @@ final class CommandRunsAcceptTest extends TestCase {
 	}
 
 	/**
+	 * Cas limite : la requête qui a pris le créneau meurt avant d'écrire l'enregistrement
+	 * (processus tué, erreur fatale). Rien ne paraîtra : jusqu'à la reprise du créneau
+	 * (600 s sans signe de vie, ExecutionSlot::STALE_AFTER_SECONDS), chaque renvoi du même
+	 * numéro reçoit 500 `acceptance_in_progress` après l'attente bornée, et un autre numéro
+	 * 409 `site_busy`, sans attente ; le créneau reste tel quel. Au-delà, le renvoi suivant
+	 * du même numéro reprend le créneau et la commande, jamais enregistrée donc jamais
+	 * exécutée, l'est une fois.
+	 */
+	public function test_reception_morte_avant_l_enregistrement_500_jusqu_a_la_reprise_du_creneau(): void {
+		// Prise il y a 600 s tout juste : encore vivante.
+		self::assertTrue( ExecutionSlot::acquire( self::NUMERO, 'update_plugin', self::NOW - ExecutionSlot::STALE_AFTER_SECONDS )['acquired'] );
+		$creneau = $this->table->rows[ ExecutionSlot::OPTION ];
+
+		$reponse = $this->controleur()->accept( $this->requete( self::CORPS ) );
+
+		$this->assertRefus( $reponse, 'g2rd_connector_acceptance_in_progress', 500 );
+		self::assertLessThanOrEqual( 1500000, array_sum( $this->pauses ), 'Attente bornée à 1,5 s.' );
+		self::assertNull( RunStore::read( self::NUMERO ) );
+		self::assertSame( $creneau, $this->table->rows[ ExecutionSlot::OPTION ], 'Le créneau n’est ni repris ni rendu avant 600 s.' );
+
+		$this->pauses = [];
+		$autre        = $this->controleur()->accept( $this->requete( str_replace( self::NUMERO, self::AUTRE, self::CORPS ) ) );
+		$this->assertRefus( $autre, 'g2rd_connector_site_busy', 409 );
+		self::assertSame( self::NUMERO, $autre->get_error_data()['busy_with'] );
+		self::assertSame( [], $this->pauses, 'Un autre numéro : réponse immédiate.' );
+		self::assertSame( $creneau, $this->table->rows[ ExecutionSlot::OPTION ] );
+		self::assertSame( [], $this->programmees );
+
+		// Une seconde de plus : le détenteur est tenu pour mort, le renvoi reprend le créneau.
+		$this->table     = new FakeOptionsTable();
+		$GLOBALS['wpdb'] = $this->table;
+		self::assertTrue( ExecutionSlot::acquire( self::NUMERO, 'update_plugin', self::NOW - ExecutionSlot::STALE_AFTER_SECONDS - 1 )['acquired'] );
+
+		$reponse = $this->controleur()->accept( $this->requete( self::CORPS ) );
+
+		self::assertSame( 202, $this->statut( $reponse ) );
+		self::assertSame( [ [ self::NUMERO, 'update_plugin', [ 'file' => 'akismet/akismet.php' ] ] ], $this->programmees, 'Exécutée une fois, par ce renvoi.' );
+		self::assertSame( self::NUMERO, ExecutionSlot::holder()['command_id'] ?? null );
+		self::assertSame( self::NOW, ExecutionSlot::holder()['since'] ?? null, 'Créneau repris, pas hérité.' );
+	}
+
+	/**
 	 * La base refuse l'écriture du créneau, ou n'écrit pas l'enregistrement : 500, rien
 	 * n'est exécuté.
 	 *

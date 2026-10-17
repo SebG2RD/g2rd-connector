@@ -631,11 +631,18 @@ est celle de `/command` pour chaque commande.
 | Corps de plus de 16 Ko | 413 `g2rd_connector_body_too_large`, avant que WordPress ne décode le JSON (filtre `rest_pre_dispatch`, priorité 5) | non |
 | Numéro mal formé ; commande inconnue ou instantanée ; charge qui n'est pas un objet | 400 `g2rd_connector_invalid_command_id`, `g2rd_connector_command_not_async`, `g2rd_connector_invalid_payload` | non |
 | Même numéro et même corps reçus au même instant par une autre requête (envoi simultané) | 200 `duplicate` dès que l'autre requête a enregistré le numéro (relu pendant 1,5 s au plus) | non par cette demande ; une seule exécution, celle de l'autre requête |
-| Base de données qui refuse une lecture ou une écriture ; même numéro en cours de réception par une autre requête et toujours pas enregistré après 1,5 s | 500 `g2rd_connector_store_unavailable`, `g2rd_connector_acceptance_in_progress` | non par cette demande ; la plateforme vérifie le numéro |
+| Base de données qui refuse une lecture ou une écriture ; même numéro en cours de réception par une autre requête et toujours pas enregistré après 1,5 s ; requête d'acceptation morte avant l'enregistrement : 500 jusqu'à la reprise du créneau (600 s) | 500 `g2rd_connector_store_unavailable`, `g2rd_connector_acceptance_in_progress` | non par cette demande ; la plateforme vérifie le numéro |
 
 Un numéro connu est traité avant la constante d'arrêt : le renvoi d'une commande déjà acceptée
 reçoit son état, jamais 503. Sinon, la plateforme croirait la commande jamais partie et la
 relancerait par `/command` : elle s'exécuterait deux fois.
+
+Cas limite : la requête qui a pris le créneau meurt avant d'écrire l'enregistrement (processus
+tué, erreur fatale). Rien ne paraîtra : jusqu'à ce que le créneau ait 600 s de silence, chaque
+renvoi du même numéro occupe un processus PHP pendant l'attente (1,5 s) puis reçoit 500
+`g2rd_connector_acceptance_in_progress`, et un autre numéro reçoit 409 `g2rd_connector_site_busy`.
+La prise suivante reprend alors le créneau : le renvoi du même numéro reçoit 202, et la commande,
+jamais enregistrée donc jamais exécutée, l'est une fois.
 
 L'empreinte porte sur les octets bruts du corps, pas sur le JSON décodé : pour renvoyer un
 numéro, la plateforme renvoie le corps envoyé la première fois, sans le réencoder. Un corps

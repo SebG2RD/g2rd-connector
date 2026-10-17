@@ -404,6 +404,15 @@ final class CommandRunsController {
 	 *     `acceptance_in_progress`.
 	 * Rien n'est écrit ni programmé par cette demande, dans aucun cas : la requête qui tient
 	 * le créneau est la seule à pouvoir exécuter la commande.
+	 *
+	 * Cas limite (requête d'acceptation morte avant l'enregistrement : processus tué, erreur
+	 * fatale entre ExecutionSlot::acquire() et RunStore::create()) : 500 jusqu'à la reprise
+	 * du créneau (600 s). Rien ne paraîtra : chaque renvoi du même numéro occupe un processus
+	 * PHP pendant l'attente (1,5 s) puis reçoit 500 `acceptance_in_progress`, et un autre
+	 * numéro reçoit 409 `site_busy`, tant que le créneau n'a pas 600 s de silence
+	 * (ExecutionSlot::STALE_AFTER_SECONDS). La prise suivante le reprend alors : un renvoi du
+	 * même numéro est accepté et la commande, jamais enregistrée donc jamais exécutée,
+	 * l'est une fois. Ce n'est pas une régression : sans l'attente, la 500 était immédiate.
 	 */
 	private function await_reception( string $command_id, string $fingerprint ): WP_REST_Response|WP_Error {
 		foreach ( self::RECEPTION_PAUSES_MICROSECONDS as $pause ) {
