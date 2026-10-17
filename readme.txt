@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.14.0-rc.3
+Stable tag: 1.14.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -80,6 +80,25 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 2. Theme-integrated "Manager G2RD" tab in the G2RD theme console (requires `g2rd-theme` >= 1.19 as the theme or its parent theme).
 
 == Changelog ==
+
+= 1.14.0 =
+
+Stable release of the 1.14 line, piloted as 1.14.0-rc.1 to rc.3 (details in the entries below).
+
+* **Performance: lighter on shared hosting.** The connector's scheduled tasks run at a minute
+  drawn at random on each site instead of all at the same time, and the inventory sent to the
+  manager no longer empties the WordPress update caches at each call: wordpress.org is asked
+  again only when its last answer is more than 3 hours old, also on hosts that serve those
+  answers through a proxy (Hostinger).
+* **New: real origin of each theme and true date of the database counters** in the inventory,
+  so the manager no longer presents a premium or child theme as coming from wordpress.org nor
+  shows day-old counters as just measured.
+* **New: the connector is a tab of the G2RD theme console** (parent theme 1.19 or later, child
+  theme included), with its settings reorganised in four sections and French labels; its own
+  settings page stays reachable as a fallback.
+* **Fix: checked boxes are visible again on the settings page under WordPress 7.x.**
+* **Build: `@wordpress/element` 9.0.0** for the build tools only; the compiled admin panel is
+  identical to 1.14.0-rc.3 (React comes from WordPress).
 
 = 1.14.0-rc.3 =
 
