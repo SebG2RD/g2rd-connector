@@ -347,6 +347,7 @@ abstract class SnapshotTestCase extends TestCase {
 		Functions\when( 'wp_next_scheduled' )->justReturn( false );
 		Functions\when( 'wp_schedule_single_event' )->justReturn( true );
 		Functions\when( 'wp_parse_url' )->alias( static fn ( string $url, int $component = -1 ) => parse_url( $url, $component ) );
+		Functions\when( 'wp_convert_hr_to_bytes' )->justReturn( 268435456 );
 	}
 
 	private function stub_extensions_and_themes(): void {
