@@ -124,7 +124,9 @@ export const SILENCE_HELP =
  * - « blocked » : refus HTTP 403 qui ne vient pas du manager (CDN, pare-feu) ;
  * - « wrong-address » : HTTP 404, l'adresse ne mène pas au manager ;
  * - « throttled » : trop de tentatives (HTTP 429 du manager) ;
- * - « refused » : le manager a refusé l'invitation ;
+ * - « refused » : le manager a refusé l'invitation (HTTP 403 avec sa réponse) ;
+ * - « manager-message » : autre refus du manager (400, 422…), dont la raison
+ *   est son message, affiché entre parenthèses : aucune cause n'est supposée ;
  * - « unknown » : réponse inattendue.
  */
 export type EnrollFailure =
@@ -136,6 +138,7 @@ export type EnrollFailure =
 	| 'wrong-address'
 	| 'throttled'
 	| 'refused'
+	| 'manager-message'
 	| 'unknown';
 
 /**
@@ -148,6 +151,12 @@ export type EnrollFailure =
  * message JSON (manager_answered) : seul un 403 sans réponse du manager est un
  * blocage en chemin (incident du CDN sur l'IPv6 du 25/09), devant lequel une
  * nouvelle invitation ne servirait à rien.
+ *
+ * Les autres refus du manager n'ont pas une cause unique : 400 « Payload JSON
+ * invalide », 422 pour une adresse de site en http:// (il faut le https du site,
+ * pas une nouvelle invitation)… Le panneau renvoie alors au message du manager.
+ * Un refus non classé sans réponse du manager (page HTML d'un CDN, par exemple)
+ * est une réponse incorrecte : « unreachable ».
  *
  * @param error Valeur rejetée.
  */
@@ -187,7 +196,12 @@ export function enrollFailureKind( error: unknown ): EnrollFailure {
 	if ( 429 === status ) {
 		return 'throttled';
 	}
-	return status >= 400 ? 'refused' : 'unknown';
+	if ( status >= 400 ) {
+		return true === rejected.data?.manager_answered
+			? 'manager-message'
+			: 'unreachable';
+	}
+	return 'unknown';
 }
 
 /**
@@ -211,6 +225,8 @@ export const ENROLL_FAILURES: Record< EnrollFailure, string > = {
 		'Trop de tentatives d’enrôlement depuis ce serveur : le manager les a suspendues. Patientez quelques minutes, puis réessayez, avec une nouvelle invitation si la vôtre a plus de 15 minutes.',
 	refused:
 		'Le manager a refusé l’enrôlement. Cause probable : jeton d’invitation expiré (valable 15 minutes) ou déjà utilisé, ou adresse de ce site différente de celle enregistrée dans le manager. Générez une nouvelle invitation depuis la fiche du site dans le manager (en vérifiant l’adresse du site), puis réessayez.',
+	'manager-message':
+		'Le manager a refusé l’enrôlement et en donne la raison entre parenthèses. Suivez l’indication du manager ci-dessus, puis réessayez (avec une nouvelle invitation si la vôtre a plus de 15 minutes) ; si l’indication ne suffit pas, contactez le support G2RD.',
 	unknown:
 		'Réponse inattendue de WordPress. Cause probable : extension de sécurité, pare-feu ou erreur PHP sur ce site. Rechargez la page, puis réessayez ; si cela se répète, contactez le support G2RD.',
 };

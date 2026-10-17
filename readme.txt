@@ -169,9 +169,12 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   did not answer, or a CDN or firewall refused the request on the way (HTTP 403 with no answer
   from the manager, as with the IPv6 refusals of September): turn on "IPv4 vers le manager",
   save, then retry with the same invitation; a new invitation would be blocked the same way.
-  The manager refused the invitation (expired, already used, or site address different from
-  the one recorded): generate a new invitation. Expired WordPress session, invalid address,
-  wrong address (HTTP 404) and too many attempts have their own message too. The error
+  The manager refused the invitation (HTTP 403 from the manager itself: expired, already used,
+  or site address different from the one recorded): generate a new invitation. Any other
+  refusal from the manager (for example HTTP 422 for a site address in http://) points to the
+  manager's own message, shown in brackets, without guessing a cause. Expired WordPress
+  session, invalid address, wrong address (HTTP 404) and too many attempts have their own
+  message too. The error
   returned by the enrolment endpoint now says whether the manager itself answered
   (`manager_answered`) and carries the settings saved before the attempt (`boot`): after a
   failed enrolment, the panel and the theme tab keep the address and switches as saved,

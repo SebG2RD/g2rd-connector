@@ -209,6 +209,28 @@ final class ConnectorPanelTest extends TestCase {
 		self::assertStringContainsString( 'nouvelle invitation', $messages['refused'] );
 		self::assertStringContainsString( '15 minutes', $messages['refused'] );
 
+		// « refused » (jeton expiré, nouvelle invitation) est réservé au 403 auquel
+		// le manager a répondu lui-même. Ses autres refus (400 « Payload JSON
+		// invalide », 422 pour une adresse en http://…) n'ont pas cette cause : le
+		// panneau renvoie au message du manager, sans en supposer une. Un refus non
+		// classé sans réponse du manager est une réponse incorrecte (« unreachable »).
+		self::assertSame( 1, substr_count( $fonction[1], "'refused'" ), '« refused » ne doit être rendu qu’à un seul endroit.' );
+		self::assertMatchesRegularExpression(
+			"/if \\( 403 === status \\) \\{\\s*return true === rejected\\.data\\?\\.manager_answered \\? 'refused' : 'blocked';/",
+			$fonction[1],
+			'« refused » seulement pour un 403 auquel le manager a répondu.'
+		);
+		self::assertMatchesRegularExpression(
+			"/if \\( status >= 400 \\) \\{\\s*return true === rejected\\.data\\?\\.manager_answered\\s*\\? 'manager-message'\\s*: 'unreachable';\\s*\\}\\s*return 'unknown';\\s*$/",
+			$fonction[1],
+			'Un refus non classé (400, 422…) renvoie au message du manager s’il a répondu, sinon à une réponse incorrecte.'
+		);
+		self::assertStringContainsString( 'Suivez l’indication du manager ci-dessus', $messages['manager-message'] );
+		self::assertStringContainsString( 'entre parenthèses', $messages['manager-message'] );
+		foreach ( [ 'Cause probable', 'expiré', 'déjà utilisé', 'Générez une nouvelle invitation' ] as $cause_supposee ) {
+			self::assertStringNotContainsString( $cause_supposee, $messages['manager-message'], "Refus non classé : « {$cause_supposee} » suppose une cause que le manager n'a pas donnée." );
+		}
+
 		// Le panneau affiche ce message, et reprend les réglages joints à l'erreur.
 		$panneau = self::panneau();
 		self::assertStringContainsString( 'ENROLL_FAILURES[ enrollFailureKind( error ) ]', $panneau );
