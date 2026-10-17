@@ -160,6 +160,15 @@ final class ConnectorPanelTest extends TestCase {
 		self::assertMatchesRegularExpression( "/'heartbeat-off' === status\\.kind && \\(\\s*<Status cx=\\{ cx \\} tone=\"neutral\">\\s*Enrôlé\\s*</", $panneau );
 		self::assertMatchesRegularExpression( '/null !== silence && \(\s*<Status cx=\{ cx \} tone="warn">/', $panneau );
 		self::assertStringNotContainsString( 'state.enrolled && null === tokenProblem', $panneau, 'La pastille ne doit plus se déduire de la seule présence du jeton.' );
+		// Écran resté ouvert : l'heure de comparaison est recalculée toutes les
+		// minutes (minuterie nettoyée au démontage), pas figée au dernier rendu.
+		self::assertStringNotContainsString( 'const now = Date.now();', $panneau, 'L’heure de la pastille ne doit pas être figée au rendu.' );
+		self::assertMatchesRegularExpression(
+			'/const \[ now, setNow \] = useState\( Date\.now \);\s*useEffect\( \(\) => \{\s*const timer = window\.setInterval\( \(\) => setNow\( Date\.now\(\) \), 60000 \);\s*return \(\) => window\.clearInterval\( timer \);\s*\}, \[\] \);/',
+			$panneau,
+			'La pastille doit être recalculée toutes les minutes, minuterie arrêtée au démontage.'
+		);
+		self::assertMatchesRegularExpression( '/enrolledAt: saved\.enrolledAt,\s*\},\s*now\s*\);/', $panneau, 'connectionStatus doit recevoir l’heure recalculée.' );
 		foreach ( [ 'enrolled', 'heartbeatEnabled', 'lastHeartbeatAt', 'enrolledAt' ] as $champ ) {
 			self::assertStringContainsString( "{$champ}: saved.{$champ}", $panneau, "L'état doit suivre « {$champ} » tel qu'enregistré, pas un interrupteur non enregistré." );
 		}

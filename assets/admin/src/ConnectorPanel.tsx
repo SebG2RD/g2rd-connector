@@ -14,7 +14,7 @@
  * sans recharger la page.
  */
 
-import { useState } from '@wordpress/element';
+import { useEffect, useState } from '@wordpress/element';
 import { Button, FormToggle } from '@wordpress/components';
 import apiFetch from '@wordpress/api-fetch';
 import type { ConnectorBootData } from './index';
@@ -173,6 +173,15 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 	const [ token, setToken ] = useState( '' );
 	const [ busy, setBusy ] = useState< Busy >( null );
 	const [ notice, setNotice ] = useState< ActionNotice >( null );
+	// Heure de comparaison de la pastille d'état, recalculée toutes les minutes
+	// sans requête réseau : un écran resté ouvert des heures passe de
+	// « Connecté » à « Pas de signe de vie depuis … » dès que le silence dépasse
+	// SILENCE_MS, sans attendre un rechargement.
+	const [ now, setNow ] = useState( Date.now );
+	useEffect( () => {
+		const timer = window.setInterval( () => setNow( Date.now() ), 60000 );
+		return () => window.clearInterval( timer );
+	}, [] );
 
 	const update = ( patch: Partial< ConnectorBootData > ): void =>
 		setState( ( current ) => ( { ...current, ...patch } ) );
@@ -315,7 +324,6 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 		? ( TOKEN_PROBLEMS[ state.tokenState ] ?? null )
 		: null;
 	const lastHeartbeat = formatDate( state.lastHeartbeatAt );
-	const now = Date.now();
 	const status = connectionStatus(
 		{
 			enrolled: saved.enrolled,
