@@ -155,6 +155,14 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   the menu in tab mode, so the connector had no visible settings at all. The script now loads
   on the console page of both theme generations (1.19 to 1.40, and 1.41 and later), and on no
   other admin page.
+* **Fix: the connector panel no longer loads without the WordPress scripts it needs.** The
+  compiled panel reads `react-jsx-runtime`, which WordPress registers from version 6.6 only,
+  while its script declared a fixed list without it: under WordPress 6.4 or 6.5 the tab stayed
+  empty with a JavaScript error. The script now declares the dependencies written by the build
+  (`index.asset.php`) on top of the previous list; when one of them is not registered, the
+  panel is not loaded and the theme console shows a notice: "Ce panneau demande WordPress 6.6
+  ou plus récent", with a link to the PHP settings page, or the missing scripts and their
+  probable cause on a recent WordPress. The PHP settings page is unchanged.
 * **Change: the connection badge shows the real state of the link with the manager.**
   "Connecté" (connected) used to appear as soon as the site was enrolled with a readable token,
   even while the manager had been unreachable for days. It now needs a successful exchange

@@ -47,6 +47,21 @@ final class Page {
 	 */
 	private string $fallback_hook = '';
 
+	/**
+	 * Dépendances du script du panneau toujours demandées, auxquelles s'ajoutent
+	 * celles que wp-scripts écrit dans assets/admin/build/index.asset.php.
+	 */
+	private const SCRIPT_DEPENDENCIES = [ 'wp-element', 'wp-components', 'wp-api-fetch', 'wp-i18n', 'react', 'react-dom' ];
+
+	/**
+	 * Scripts de WordPress dont le panneau a besoin mais qui ne sont pas
+	 * enregistrés sur ce site (vide si rien ne manque) : le panneau n'est alors
+	 * pas chargé (cf. enqueue_build).
+	 *
+	 * @var list<string>
+	 */
+	private array $missing_scripts = [];
+
 	public function register(): void {
 		add_action( 'admin_init', [ $this, 'register_settings' ] );
 		// K4 : jeton de connexion illisible (altéré en base ou sels de wp-config.php
@@ -452,7 +467,7 @@ final class Page {
 		if ( ! self::is_theme_console_page( $hook ) ) {
 			return;
 		}
-		$this->do_enqueue();
+		$this->do_enqueue( true );
 	}
 
 	/**
@@ -496,24 +511,61 @@ final class Page {
 		$this->do_enqueue();
 	}
 
-	private function do_enqueue(): void {
-		$js_path  = G2RD_CONNECTOR_DIR . 'assets/admin/build/index.js';
-		$css_path = G2RD_CONNECTOR_DIR . 'assets/admin/build/style-index.css';
+	/**
+	 * Assets du connecteur, depuis assets/admin/build.
+	 *
+	 * @param bool $for_tab Onglet de la console du thème : seul le panneau React y
+	 *                      affiche les réglages, son absence y est donc signalée.
+	 */
+	private function do_enqueue( bool $for_tab = false ): void {
+		$this->enqueue_build(
+			G2RD_CONNECTOR_DIR . 'assets/admin/build/',
+			G2RD_CONNECTOR_URL . 'assets/admin/build/',
+			$for_tab
+		);
+	}
+
+	/**
+	 * Charge le panneau React et sa feuille.
+	 *
+	 * Le panneau compilé lit des scripts de WordPress (index.asset.php), dont
+	 * react-jsx-runtime, enregistré seulement à partir de WordPress 6.6 alors que
+	 * le connecteur accepte la 6.4 : s'il en manque un, le script n'est pas chargé
+	 * (il planterait, ou WordPress l'écarterait sans rien dire). La feuille, elle,
+	 * reste chargée : elle porte le correctif des cases cochées du formulaire PHP
+	 * (page autonome et page de secours, qui n'ont pas besoin du script). Dans
+	 * l'onglet de la console du thème, un avis dit pourquoi l'onglet reste vide.
+	 *
+	 * Publique pour les tests (dossier de build fictif).
+	 *
+	 * @param string $dir     Dossier du build, terminé par « / ».
+	 * @param string $url     Adresse du même dossier, terminée par « / ».
+	 * @param bool   $for_tab Onglet de la console du thème.
+	 */
+	public function enqueue_build( string $dir, string $url, bool $for_tab ): void {
+		$js_path  = $dir . 'index.js';
+		$css_path = $dir . 'style-index.css';
 
 		if ( file_exists( $js_path ) ) {
-			wp_enqueue_script(
-				'g2rd-connector-admin',
-				G2RD_CONNECTOR_URL . 'assets/admin/build/index.js',
-				[ 'wp-element', 'wp-components', 'wp-api-fetch', 'wp-i18n', 'react', 'react-dom' ],
-				(string) filemtime( $js_path ),
-				true
-			);
-			wp_localize_script( 'g2rd-connector-admin', 'G2RDConnectorData', $this->initial_data() );
+			$dependencies          = self::script_dependencies( $dir . 'index.asset.php' );
+			$this->missing_scripts = self::missing_scripts( $dependencies );
+			if ( [] === $this->missing_scripts ) {
+				wp_enqueue_script(
+					'g2rd-connector-admin',
+					$url . 'index.js',
+					$dependencies,
+					(string) filemtime( $js_path ),
+					true
+				);
+				wp_localize_script( 'g2rd-connector-admin', 'G2RDConnectorData', $this->initial_data() );
+			} elseif ( $for_tab ) {
+				add_action( 'admin_notices', [ $this, 'render_missing_scripts_notice' ] );
+			}
 		}
 		if ( file_exists( $css_path ) ) {
 			wp_enqueue_style(
 				'g2rd-connector-admin',
-				G2RD_CONNECTOR_URL . 'assets/admin/build/style-index.css',
+				$url . 'style-index.css',
 				[ 'wp-components' ],
 				(string) filemtime( $css_path )
 			);
@@ -521,5 +573,77 @@ final class Page {
 			// substitue automatiquement dans une locale de droite a gauche.
 			wp_style_add_data( 'g2rd-connector-admin', 'rtl', 'replace' );
 		}
+	}
+
+	/**
+	 * Dépendances du script : la liste fixe, plus celles du fichier écrit par
+	 * wp-scripts au build (react-jsx-runtime, notamment), sans doublon. Fichier
+	 * absent ou illisible : la liste fixe seule.
+	 *
+	 * @param string $asset_file Chemin de index.asset.php.
+	 * @return list<string>
+	 */
+	public static function script_dependencies( string $asset_file ): array {
+		$dependencies = self::SCRIPT_DEPENDENCIES;
+		$asset        = is_readable( $asset_file ) ? require $asset_file : null;
+		if ( is_array( $asset ) && isset( $asset['dependencies'] ) && is_array( $asset['dependencies'] ) ) {
+			foreach ( $asset['dependencies'] as $handle ) {
+				if ( is_string( $handle ) && '' !== $handle ) {
+					$dependencies[] = $handle;
+				}
+			}
+		}
+		return array_values( array_unique( $dependencies ) );
+	}
+
+	/**
+	 * Dépendances qui ne sont pas enregistrées sur ce site.
+	 *
+	 * @param list<string> $dependencies Noms des scripts.
+	 * @return list<string>
+	 */
+	public static function missing_scripts( array $dependencies ): array {
+		return array_values(
+			array_filter(
+				$dependencies,
+				static fn ( string $handle ): bool => ! wp_script_is( $handle, 'registered' )
+			)
+		);
+	}
+
+	/**
+	 * Avis de la console du thème quand le panneau n'a pas pu être chargé (cf.
+	 * enqueue_build) : quoi, cause, action, et la page de réglages PHP en attendant.
+	 */
+	public function render_missing_scripts_notice(): void {
+		if ( [] === $this->missing_scripts || ! current_user_can( self::CAPABILITY ) ) {
+			return;
+		}
+		$version = (string) get_bloginfo( 'version' );
+		if ( version_compare( $version, '6.6', '<' ) ) {
+			$cause = sprintf(
+				/* translators: %s: version de WordPress installée. */
+				__( 'Ce panneau demande WordPress 6.6 ou plus récent (version installée : %s) : mettez WordPress à jour.', 'g2rd-connector' ),
+				$version
+			);
+		} else {
+			$cause = sprintf(
+				/* translators: %s: noms des scripts de WordPress absents. */
+				__( 'Des scripts de WordPress dont il a besoin ne sont pas enregistrés (%s). Cause probable : une extension ou le thème les a retirés. Désactivez une à une les extensions récemment ajoutées pour trouver la cause ; si rien ne change, contactez le support G2RD.', 'g2rd-connector' ),
+				implode( ', ', $this->missing_scripts )
+			);
+		}
+		?>
+		<div class="notice notice-error">
+			<p>
+				<strong><?php echo esc_html__( 'L’onglet « Manager G2RD » ne peut pas s’afficher.', 'g2rd-connector' ); ?></strong>
+				<?php echo esc_html( $cause ); ?>
+				<?php if ( '' !== $this->fallback_hook ) : ?>
+					<?php echo esc_html__( 'En attendant, réglez le connecteur depuis', 'g2rd-connector' ); ?>
+					<a href="<?php echo esc_url( admin_url( 'admin.php?page=' . self::MENU_SLUG ) ); ?>"><?php echo esc_html__( 'sa page de réglages', 'g2rd-connector' ); ?></a>.
+				<?php endif; ?>
+			</p>
+		</div>
+		<?php
 	}
 }

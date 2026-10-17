@@ -42,8 +42,28 @@ final class PageTest extends TestCase {
 		);
 	}
 
+	/**
+	 * Dossiers de build fictifs créés par build_dir().
+	 *
+	 * @var list<string>
+	 */
+	private array $build_dirs = [];
+
 	protected function tearDown(): void {
 		$_POST = [];
+		// Les dossiers de build fictifs ne servent qu'au test qui les a créés : on
+		// les retire du dossier temporaire pour ne pas l'encombrer à chaque passage.
+		foreach ( $this->build_dirs as $dir ) {
+			foreach ( (array) glob( $dir . '*' ) as $file ) {
+				if ( is_string( $file ) && is_file( $file ) ) {
+					unlink( $file );
+				}
+			}
+			if ( is_dir( $dir ) ) {
+				rmdir( $dir );
+			}
+		}
+		$this->build_dirs = [];
 		parent::tearDown();
 	}
 
@@ -281,6 +301,118 @@ final class PageTest extends TestCase {
 	}
 
 	/**
+	 * Dépendances du script : la liste fixe, plus celles que wp-scripts écrit dans
+	 * index.asset.php (react-jsx-runtime, lu par le panneau compilé), sans doublon ;
+	 * la liste fixe seule si le fichier manque ou ne rend pas de tableau.
+	 */
+	public function test_les_dependances_du_script_viennent_du_build(): void {
+		$base = [ 'wp-element', 'wp-components', 'wp-api-fetch', 'wp-i18n', 'react', 'react-dom' ];
+		$dir  = $this->build_dir( true );
+
+		self::assertSame( array_merge( $base, [ 'react-jsx-runtime' ] ), Page::script_dependencies( $dir . 'index.asset.php' ) );
+		self::assertSame( $base, Page::script_dependencies( $dir . 'absent.asset.php' ) );
+
+		file_put_contents( $dir . 'illisible.asset.php', "<?php return 'pas un tableau';\n" );
+		self::assertSame( $base, Page::script_dependencies( $dir . 'illisible.asset.php' ) );
+	}
+
+	/**
+	 * WordPress 6.6 et plus : toutes les dépendances sont enregistrées, le panneau
+	 * est chargé avec celles du build, et aucun avis n'est ajouté.
+	 */
+	public function test_avec_toutes_les_dependances_le_panneau_est_charge(): void {
+		$this->stub_boot_data();
+		Functions\when( 'wp_script_is' )->justReturn( true );
+		Functions\when( 'wp_style_add_data' )->justReturn( true );
+		$dir = $this->build_dir( true );
+
+		Functions\expect( 'wp_enqueue_script' )
+			->once()
+			->with( 'g2rd-connector-admin', 'https://site.test/build/index.js', \Mockery::on( static fn ( array $deps ): bool => in_array( 'react-jsx-runtime', $deps, true ) ), \Mockery::type( 'string' ), true );
+		Functions\expect( 'wp_localize_script' )->once();
+		Functions\expect( 'wp_enqueue_style' )->once();
+
+		$page = new Page();
+		$page->enqueue_build( $dir, 'https://site.test/build/', true );
+
+		self::assertFalse( has_action( 'admin_notices', [ $page, 'render_missing_scripts_notice' ] ) );
+	}
+
+	/**
+	 * Sous WordPress 6.4 et 6.5, react-jsx-runtime n'est pas enregistré : le panneau
+	 * planterait (window.ReactJSXRuntime absent). Dans l'onglet de la console, il
+	 * n'est pas chargé et un avis dit quoi faire, avec le lien vers la page de
+	 * réglages PHP ; la feuille reste chargée.
+	 */
+	public function test_sans_react_jsx_runtime_l_onglet_affiche_un_avis_au_lieu_du_panneau(): void {
+		Functions\when( 'wp_script_is' )->alias( static fn ( string $handle ): bool => 'react-jsx-runtime' !== $handle );
+		Functions\when( 'get_bloginfo' )->justReturn( '6.5.5' );
+		Functions\when( 'wp_style_add_data' )->justReturn( true );
+		Functions\when( 'add_submenu_page' )->justReturn( 'admin_page_g2rd-connector' );
+		Functions\when( 'admin_url' )->alias( static fn ( string $path = '' ): string => 'https://site.test/wp-admin/' . $path );
+		$dir = $this->build_dir( true );
+
+		Functions\expect( 'wp_enqueue_script' )->never();
+		Functions\expect( 'wp_localize_script' )->never();
+		Functions\expect( 'wp_enqueue_style' )->once();
+
+		$page = new Page();
+		$page->register_fallback_page();
+		$page->enqueue_build( $dir, 'https://site.test/build/', true );
+
+		self::assertNotFalse( has_action( 'admin_notices', [ $page, 'render_missing_scripts_notice' ] ) );
+		ob_start();
+		$page->render_missing_scripts_notice();
+		$avis = (string) ob_get_clean();
+		self::assertStringContainsString( 'L’onglet « Manager G2RD » ne peut pas s’afficher.', $avis );
+		self::assertStringContainsString( 'Ce panneau demande WordPress 6.6 ou plus récent (version installée : 6.5.5) : mettez WordPress à jour.', $avis );
+		self::assertStringContainsString( 'href="https://site.test/wp-admin/admin.php?page=g2rd-connector"', $avis );
+	}
+
+	/**
+	 * WordPress récent dont un script a été retiré (extension, thème) : l'avis ne
+	 * parle pas de version de WordPress, il nomme le script absent et la cause
+	 * probable.
+	 */
+	public function test_un_script_retire_sous_un_wordpress_recent_est_nomme(): void {
+		Functions\when( 'wp_script_is' )->alias( static fn ( string $handle ): bool => 'wp-components' !== $handle );
+		Functions\when( 'wp_style_add_data' )->justReturn( true );
+		Functions\when( 'wp_enqueue_style' )->justReturn( null );
+		$dir = $this->build_dir( true );
+
+		$page = new Page();
+		$page->enqueue_build( $dir, 'https://site.test/build/', true );
+		ob_start();
+		$page->render_missing_scripts_notice();
+		$avis = (string) ob_get_clean();
+
+		self::assertStringContainsString( 'ne sont pas enregistrés (wp-components)', $avis );
+		self::assertStringContainsString( 'extension ou le thème', $avis );
+		self::assertStringNotContainsString( '6.6', $avis );
+		// Pas de page de secours enregistrée (mode page autonome) : pas de lien.
+		self::assertStringNotContainsString( 'href=', $avis );
+	}
+
+	/**
+	 * Page autonome et page de secours : le formulaire PHP n'a pas besoin du
+	 * script ; sans ses dépendances, il n'est pas chargé, sans avis, et la feuille
+	 * (correctif des cases cochées) reste chargée.
+	 */
+	public function test_hors_de_l_onglet_un_script_manquant_ne_donne_pas_d_avis(): void {
+		Functions\when( 'wp_script_is' )->alias( static fn ( string $handle ): bool => 'react-jsx-runtime' !== $handle );
+		Functions\when( 'wp_style_add_data' )->justReturn( true );
+		$dir = $this->build_dir( true );
+
+		Functions\expect( 'wp_enqueue_script' )->never();
+		Functions\expect( 'wp_enqueue_style' )->once();
+
+		$page = new Page();
+		$page->enqueue_build( $dir, 'https://site.test/build/', false );
+
+		self::assertFalse( has_action( 'admin_notices', [ $page, 'render_missing_scripts_notice' ] ) );
+	}
+
+	/**
 	 * Le formulaire PHP (page autonome, page de secours) parle comme le panneau
 	 * React : mêmes libellés pour les mêmes réglages, plus aucun ancien libellé, et
 	 * pas de « Connecté » que rien ne prouve ici. Les noms des champs envoyés, eux,
@@ -370,6 +502,34 @@ final class PageTest extends TestCase {
 			'g2rd_connector_nonce'  => 'nonce',
 			'g2rd_manager_url'      => 'https://wp-manager.g2rd.fr',
 		];
+	}
+
+	/**
+	 * Dossier de build fictif (index.js, style-index.css et, au choix,
+	 * index.asset.php comme l'écrit wp-scripts), propre à chaque test.
+	 */
+	private function build_dir( bool $with_asset ): string {
+		$dir = sys_get_temp_dir() . '/g2rd-connector-tests-build-' . uniqid( '', true ) . '/';
+		mkdir( $dir, 0777, true );
+		file_put_contents( $dir . 'index.js', "// build fictif\n" );
+		file_put_contents( $dir . 'style-index.css', "/* build fictif */\n" );
+		if ( $with_asset ) {
+			file_put_contents(
+				$dir . 'index.asset.php',
+				"<?php return array( 'dependencies' => array( 'react-jsx-runtime', 'wp-api-fetch', 'wp-components', 'wp-element' ), 'version' => 'test' );\n"
+			);
+		}
+		$this->build_dirs[] = $dir;
+		return $dir;
+	}
+
+	/**
+	 * Fonctions lues par BootData::build(), passé au script par wp_localize_script.
+	 */
+	private function stub_boot_data(): void {
+		Functions\when( 'get_site_option' )->justReturn( false );
+		Functions\when( 'rest_url' )->alias( static fn ( string $path = '' ): string => 'https://site.test/wp-json/' . $path );
+		Functions\when( 'wp_create_nonce' )->justReturn( 'nonce' );
 	}
 
 	private function render(): string {
