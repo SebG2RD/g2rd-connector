@@ -19,6 +19,9 @@
  *   numéro connu, autre corps               → 409 `command_id_conflict`
  *   renvoi du CDN (nonce vu), numéro connu   → 200 `duplicate`
  *   renvoi du CDN (nonce vu), numéro inconnu → 401 `signature_replayed`
+ *   même numéro reçu au même instant par une
+ *   autre requête (créneau tenu par lui)     → 200 `duplicate` dès qu'elle l'a enregistré
+ *                                              (1,5 s d'attente au plus), 500 sinon
  *
  * Accès : jeton ET signature valide, quelle que soit la politique du site
  * (Auth::require_signed_run_access()). Le résultat d'une commande ne sort jamais de
@@ -77,6 +80,16 @@ final class CommandRunsController {
 	private const PURGE_LIMIT = 20;
 
 	/**
+	 * Pauses (microsecondes) avant chaque relecture de l'enregistrement quand le créneau est
+	 * tenu par ce même numéro sans enregistrement encore : 1,5 s en tout au plus. La requête
+	 * qui accepte l'écrit d'ordinaire quelques millisecondes après avoir pris le créneau
+	 * (RunStore::create(), une requête SQL) ; les pauses croissantes couvrent une base
+	 * chargée sans allonger le cas ordinaire, et l'acceptation reste bien en deçà du délai
+	 * de la plateforme (15 s).
+	 */
+	private const RECEPTION_PAUSES_MICROSECONDS = [ 50000, 100000, 200000, 400000, 750000 ];
+
+	/**
 	 * Programme l'exécution de la commande acceptée, pour après la réponse.
 	 *
 	 * @var \Closure(string, string, array<mixed>|null): void
@@ -91,14 +104,26 @@ final class CommandRunsController {
 	private \Closure $clock;
 
 	/**
+	 * Pause, en microsecondes.
+	 *
+	 * @var \Closure(int): void
+	 */
+	private \Closure $pause;
+
+	/**
 	 * @param \Closure(string, string, array<mixed>|null): void $queue Programme l'exécution
 	 *        acceptée, pour après la réponse : reçoit le numéro, la commande et sa charge
 	 *        (null si absente), une fois par acceptation, et ne fait que les mémoriser.
 	 * @param (\Closure(): int)|null $clock Heure courante (secondes Unix) ; time() par défaut.
+	 * @param (\Closure(int): void)|null $pause Pause en microsecondes, pendant l'attente de
+	 *        l'enregistrement d'une autre requête (await_reception()) ; usleep() par défaut.
 	 */
-	public function __construct( \Closure $queue, ?\Closure $clock = null ) {
+	public function __construct( \Closure $queue, ?\Closure $clock = null, ?\Closure $pause = null ) {
 		$this->queue = $queue;
 		$this->clock = $clock ?? static fn (): int => time();
+		$this->pause = $pause ?? static function ( int $microseconds ): void {
+			usleep( $microseconds );
+		};
 	}
 
 	/**
@@ -164,8 +189,9 @@ final class CommandRunsController {
 	 *   4. constante d'arrêt → 503 ;
 	 *   5. ramassage des exécutions mortes, purge des comptes rendus ;
 	 *   6. prise du créneau : occupé → 409 `site_busy`, rien n'est enregistré ; tenu par ce
-	 *      même numéro (une autre requête est en train de l'accepter) → « déjà reçue » si
-	 *      l'enregistrement existe, 500 sinon ;
+	 *      même numéro (une autre requête est en train de l'accepter) → « déjà reçue » dès
+	 *      que l'enregistrement paraît, relu pendant 1,5 s au plus, 500 sinon
+	 *      (await_reception()) ;
 	 *   7. création de l'enregistrement (perdue : créneau rendu, puis « déjà reçue » si le
 	 *      numéro est apparu entre-temps, 500 sinon) ;
 	 *   8. exécution programmée pour après la réponse ;
@@ -225,9 +251,9 @@ final class CommandRunsController {
 			// requête est en train d'accepter cette commande (la plateforme renvoie le même
 			// numéro quand elle n'a pas eu de réponse). Ce n'est pas « site occupé » : la
 			// plateforme repartirait sous un nouveau numéro, et la commande s'exécuterait
-			// deux fois.
+			// deux fois. On attend brièvement son enregistrement, pour répondre « déjà reçue ».
 			if ( ( $slot['busy_with'] ?? null ) === $command_id ) {
-				return self::received_meanwhile( $command_id, $fingerprint, $now, self::acceptance_in_progress() );
+				return $this->await_reception( $command_id, $fingerprint );
 			}
 
 			return Refusal::error( Refusal::SITE_BUSY, $slot );
@@ -364,6 +390,35 @@ final class CommandRunsController {
 		}
 
 		return null === $known ? $if_absent : self::already_received( $command_id, $known, $fingerprint, $now );
+	}
+
+	/**
+	 * Le créneau est tenu par ce même numéro, sans enregistrement encore : une autre requête
+	 * (envoi simultané, ou renvoi de la plateforme sans réponse) l'a pris et écrit
+	 * l'enregistrement dans l'instant. L'enregistrement est relu, puis de nouveau après
+	 * chaque pause de RECEPTION_PAUSES_MICROSECONDS (1,5 s en tout au plus) :
+	 *   - dès qu'il paraît → « déjà reçue » (même corps) ou conflit (autre corps), comme un
+	 *     renvoi ordinaire ;
+	 *   - lecture refusée par la base → 500 `store_unavailable`, aussitôt ;
+	 *   - jamais paru (réception interrompue, base très lente) → 500
+	 *     `acceptance_in_progress`.
+	 * Rien n'est écrit ni programmé par cette demande, dans aucun cas : la requête qui tient
+	 * le créneau est la seule à pouvoir exécuter la commande.
+	 */
+	private function await_reception( string $command_id, string $fingerprint ): WP_REST_Response|WP_Error {
+		foreach ( self::RECEPTION_PAUSES_MICROSECONDS as $pause ) {
+			try {
+				$known = RunStore::read( $command_id );
+			} catch ( StoreUnavailable $e ) {
+				return self::store_unavailable();
+			}
+			if ( null !== $known ) {
+				return self::already_received( $command_id, $known, $fingerprint, ( $this->clock )() );
+			}
+			( $this->pause )( $pause );
+		}
+
+		return self::received_meanwhile( $command_id, $fingerprint, ( $this->clock )(), self::acceptance_in_progress() );
 	}
 
 	/**

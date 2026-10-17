@@ -53,6 +53,22 @@ final class CommandRunsAcceptTest extends TestCase {
 	 */
 	private array $programmees = [];
 
+	/**
+	 * Pauses demandées par la route (microsecondes), dans l'ordre : aucune n'est réellement
+	 * attendue.
+	 *
+	 * @var list<int>
+	 */
+	private array $pauses = [];
+
+	/**
+	 * Ce qui se passe ailleurs pendant une pause (une autre requête qui écrit) : reçoit le
+	 * rang de la pause, à partir de 1.
+	 *
+	 * @var (\Closure(int): void)|null
+	 */
+	private ?\Closure $pendant_la_pause = null;
+
 	protected function setUp(): void {
 		parent::setUp();
 		$this->table     = new FakeOptionsTable();
@@ -66,7 +82,9 @@ final class CommandRunsAcceptTest extends TestCase {
 			'site_id'    => 7,
 			'site_token' => self::TOKEN,
 		];
-		$this->programmees = [];
+		$this->programmees      = [];
+		$this->pauses           = [];
+		$this->pendant_la_pause = null;
 		ignore_user_abort( false );
 	}
 
@@ -124,6 +142,7 @@ final class CommandRunsAcceptTest extends TestCase {
 		self::assertSame( 200, $reponse->get_status() );
 		self::assertTrue( $reponse->get_data()['duplicate'] ?? null );
 		self::assertCount( 1, $this->programmees );
+		self::assertSame( [], $this->pauses, 'Ni l’acceptation ni le renvoi n’attendent.' );
 	}
 
 	public function test_reponse_202_a_la_forme_attendue(): void {
@@ -193,6 +212,7 @@ final class CommandRunsAcceptTest extends TestCase {
 		self::assertNull( RunStore::read( self::NUMERO ), 'Rien n’est enregistré.' );
 		self::assertSame( $creneau, $this->table->rows[ ExecutionSlot::OPTION ] ?? null, 'Le créneau reste à son détenteur.' );
 		self::assertSame( [], $this->programmees );
+		self::assertSame( [], $this->pauses, 'Occupé par une autre commande : réponse immédiate, sans attente.' );
 	}
 
 	/** § 3.3, ligne 3 : numéro connu, même corps → 200 `duplicate`, l'état sans le résultat. */
@@ -547,8 +567,9 @@ final class CommandRunsAcceptTest extends TestCase {
 	 * Le créneau est tenu par ce même numéro, sans enregistrement encore : une autre
 	 * requête est en train d'accepter cette commande (la plateforme qui renvoie le même
 	 * numéro). Ce n'est pas « site occupé » : la plateforme repartirait sous un nouveau
-	 * numéro, et la commande s'exécuterait deux fois. Réponse ambiguë (500), et le renvoi
-	 * suivant trouve le numéro.
+	 * numéro, et la commande s'exécuterait deux fois. L'enregistrement ne paraît pas pendant
+	 * la courte attente (réception interrompue, base très lente) : réponse ambiguë (500),
+	 * après une attente bornée, et le renvoi suivant trouve le numéro.
 	 */
 	public function test_meme_numero_en_cours_de_reception_jamais_site_busy(): void {
 		self::assertTrue( ExecutionSlot::acquire( self::NUMERO, 'update_plugin', self::NOW - 1 )['acquired'] );
@@ -561,11 +582,82 @@ final class CommandRunsAcceptTest extends TestCase {
 		self::assertSame( $creneau, $this->table->rows[ ExecutionSlot::OPTION ], 'Le créneau reste à la requête qui accepte.' );
 		self::assertNull( RunStore::read( self::NUMERO ) );
 		self::assertSame( [], $this->programmees );
+		self::assertNotSame( [], $this->pauses, 'L’enregistrement est relu après une attente avant la 500.' );
+		self::assertLessThanOrEqual( 1500000, array_sum( $this->pauses ), 'Attente bornée : 1,5 s au plus, l’acceptation reste courte.' );
 
-		// La requête qui accepte termine : le renvoi suivant reçoit « déjà reçue ».
+		// La requête qui accepte termine : le renvoi suivant reçoit « déjà reçue », sans attente.
+		$this->pauses = [];
 		$this->enregistre( $this->acceptee( self::NUMERO, hash( 'sha256', self::CORPS ) ) );
 		$reponse = $this->controleur()->accept( $this->requete( self::CORPS ) );
 		self::assertSame( 200, $this->statut( $reponse ) );
+		self::assertSame( [], $this->programmees );
+		self::assertSame( [], $this->pauses );
+	}
+
+	/**
+	 * § 8.2, S10 : deux envois simultanés du même numéro et du même corps (deux nonces).
+	 * Le second trouve le créneau tenu par ce numéro avant que la requête qui accepte n'ait
+	 * écrit l'enregistrement (une requête SQL plus loin). Il relit après de courtes pauses :
+	 * dès que l'enregistrement paraît, « déjà reçue », comme un renvoi ordinaire. Un seul
+	 * démarrage : celui de la requête qui accepte.
+	 */
+	public function test_meme_numero_en_cours_de_reception_attend_l_enregistrement_et_repond_duplicate(): void {
+		self::assertTrue( ExecutionSlot::acquire( self::NUMERO, 'update_plugin', self::NOW - 1 )['acquired'] );
+		$creneau = $this->table->rows[ ExecutionSlot::OPTION ];
+		// La requête qui accepte écrit l'enregistrement pendant la deuxième pause.
+		$this->pendant_la_pause = function ( int $rang ): void {
+			if ( 2 === $rang ) {
+				$this->enregistre( $this->acceptee( self::NUMERO, hash( 'sha256', self::CORPS ), self::NOW ) );
+			}
+		};
+
+		$reponse = $this->controleur()->accept( $this->signee( self::CORPS, 'nonce-du-second-envoi' ) );
+
+		self::assertInstanceOf( WP_REST_Response::class, $reponse );
+		self::assertSame( 200, $reponse->get_status() );
+		$donnees = $reponse->get_data();
+		self::assertTrue( $donnees['duplicate'] ?? null );
+		self::assertSame( self::NUMERO, $donnees['command_id'] ?? null );
+		self::assertSame( RunState::ACCEPTED, $donnees['state'] ?? null );
+		self::assertArrayNotHasKey( 'outcome', $donnees, 'Jamais le résultat à l’acceptation.' );
+		self::assertCount( 2, $this->pauses, 'Relu dès la fin de la pause où il paraît : pas d’attente de plus.' );
+		self::assertSame( $creneau, $this->table->rows[ ExecutionSlot::OPTION ], 'Le créneau reste à la requête qui accepte.' );
+		self::assertSame( [], $this->programmees, 'La requête qui accepte exécute : pas celle-ci.' );
+	}
+
+	/**
+	 * Pendant l'attente, l'enregistrement paraît sous un autre corps : c'est le conflit,
+	 * comme pour un numéro connu (409 `command_id_conflict`), rien n'est exécuté.
+	 */
+	public function test_meme_numero_en_cours_de_reception_autre_corps_409_conflit(): void {
+		self::assertTrue( ExecutionSlot::acquire( self::NUMERO, 'update_plugin', self::NOW - 1 )['acquired'] );
+		$this->pendant_la_pause = function ( int $rang ): void {
+			if ( 1 === $rang ) {
+				$this->enregistre( $this->acceptee( self::NUMERO, str_repeat( 'ef', 32 ), self::NOW ) );
+			}
+		};
+
+		$reponse = $this->controleur()->accept( $this->requete( self::CORPS ) );
+
+		$this->assertRefus( $reponse, 'g2rd_connector_command_id_conflict', 409 );
+		self::assertCount( 1, $this->pauses );
+		self::assertSame( [], $this->programmees );
+	}
+
+	/**
+	 * Pendant l'attente, la base refuse la relecture : 500 `store_unavailable` aussitôt,
+	 * sans attendre davantage, et jamais « numéro neuf ».
+	 */
+	public function test_meme_numero_en_cours_de_reception_lecture_refusee_500(): void {
+		self::assertTrue( ExecutionSlot::acquire( self::NUMERO, 'update_plugin', self::NOW - 1 )['acquired'] );
+		$this->pendant_la_pause = function (): void {
+			$this->table->read_fails = true;
+		};
+
+		$reponse = $this->controleur()->accept( $this->requete( self::CORPS ) );
+
+		$this->assertRefus( $reponse, 'g2rd_connector_store_unavailable', 500 );
+		self::assertCount( 1, $this->pauses );
 		self::assertSame( [], $this->programmees );
 	}
 
@@ -654,7 +746,13 @@ final class CommandRunsAcceptTest extends TestCase {
 			function ( string $command_id, string $command, ?array $payload ): void {
 				$this->programmees[] = [ $command_id, $command, $payload ];
 			},
-			static fn (): int => self::NOW
+			static fn (): int => self::NOW,
+			function ( int $microsecondes ): void {
+				$this->pauses[] = $microsecondes;
+				if ( null !== $this->pendant_la_pause ) {
+					( $this->pendant_la_pause )( count( $this->pauses ) );
+				}
+			}
 		);
 	}
 
