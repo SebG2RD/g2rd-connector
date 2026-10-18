@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.14.0
+Stable tag: 1.15.0-rc.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -84,7 +84,7 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 
 == Changelog ==
 
-= Unreleased =
+= 1.15.0-rc.1 =
 
 * **New: long commands can run in the background (`async_commands`).** The host's CDN resends a
   request left about 60 seconds without an answer, so a long update could run twice. Two new
@@ -105,9 +105,9 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   platform keeps using `/command`, as before. Run records are kept 7 days, 200 at most
   (options `g2rd_cmdrun_*`, not autoloaded, removed on uninstall). A diagnostic command,
   `async_probe`, stays off unless `G2RD_CONNECTOR_ASYNC_PROBE` is set in `wp-config.php`.
-  `/command` and the heartbeat queue are unchanged; nothing changes for a site until the
-  platform turns the mode on. What the manager reads through the new route is listed under
-  "What is sent, when" (External service section).
+  `/command` and the heartbeat queue are unchanged by this mode; nothing changes for a site
+  until the platform turns the mode on. What the manager reads through the new route is listed
+  under "What is sent, when" (External service section).
 * **New: server environment in the inventory (`environment` block).** The `/snapshot` answer
   describes what the server allows: PHP extensions present (sodium, openssl, zip, zlib, mysqli)
   and the libsodium version, PHP execution mode (SAPI), whether `exec` is available (only read,
