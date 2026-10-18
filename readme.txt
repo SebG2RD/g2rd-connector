@@ -38,6 +38,7 @@ This plugin relies on the **G2RD WP Manager** service operated by G2RD Agence We
 * On every webhook event (if enabled): event type (e.g. `user.login`, `plugin.activated`) and a small context payload (user id, plugin file name, IP for failed logins).
 * Since 1.13, the `/snapshot` answer also contains the login page address, the state of the "Allow direct login from G2RD" setting and the site's administrators (up to 50: user id, login, email, registration date), so the manager can offer direct login with the account chosen by the agency.
 * Since 1.13, a `direct_login` event (WordPress login and user id, manager user id) is sent after each direct login, if events are enabled.
+* Since 1.14, when the manager reads a command run in the background (signed `GET /command-runs/<id>`, if remote commands are enabled): its state, dates, current step of a protected update, the command result (same content as the `/command` answer) and, after an interruption, its cause (for a PHP fatal error: error message, file path on the server and line number) and the plugin recovery result already reported in the `/snapshot` answer. These records are only readable through that signed route.
 
 **Nothing is sent before enrollment.** Enrollment is a manual one-shot action that requires an invitation token obtained from your manager admin.
 
@@ -72,7 +73,7 @@ Disconnect from the plugin settings (button **Disconnect from manager**), or rev
 
 = What happens on uninstall? =
 
-All plugin options (`g2rd_connector_settings`, restore point index, signature state) are removed, the cron jobs are unscheduled, the restore point archives the plugin created in `wp-content/g2rd-snapshots/` are deleted (nothing else in that folder is touched), and the site stops sending anything. The manager-side record is preserved until you delete it from the dashboard.
+All plugin options (`g2rd_connector_settings`, restore point index, signature state) are removed, as are the records of the commands run in the background (`g2rd_cmdrun_*` options, finished or not, on every site of a multisite network); the cron jobs are unscheduled, the restore point archives the plugin created in `wp-content/g2rd-snapshots/` are deleted (nothing else in that folder is touched), and the site stops sending anything. The manager-side record is preserved until you delete it from the dashboard.
 
 == Screenshots ==
 
@@ -80,6 +81,31 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 2. Theme-integrated "Manager G2RD" tab in the G2RD theme console (requires `g2rd-theme` >= 1.19 as the theme or its parent theme).
 
 == Changelog ==
+
+= Unreleased =
+
+* **New: long commands can run in the background (`async_commands`).** The host's CDN resends a
+  request left about 60 seconds without an answer, so a long update could run twice. Two new
+  routes, `POST /wp-json/g2rd/v1/command-runs` and `GET /wp-json/g2rd/v1/command-runs/<id>`,
+  are registered under the same condition as `/command` (remote commands allowed). Both require
+  the token AND a valid signature, whatever the site's signature policy. The platform hands a
+  long command (updates, plugin rollback, database cleanups) to the site under an ID it chose;
+  the site answers "received" within a second or two, finishes the response
+  (`litespeed_finish_request()` or `fastcgi_finish_request()`), then runs the command in the
+  same process, through the same code as `/command`. The platform reads the result with short
+  signed requests. A resend of the same ID only gets the state back: the command never runs
+  twice. Two sends of the same ID arriving at the same moment start it once; the second one
+  waits briefly (1.5 s at most) for the first to record it, then gets the state back too. A
+  site runs one background command at a time (another one is refused as busy, with
+  nothing run). The inventory announces the
+  `async_commands` capability only when the server can finish a response early and the
+  `G2RD_CONNECTOR_DISABLE_ASYNC_COMMANDS` constant is not set in `wp-config.php`; otherwise the
+  platform keeps using `/command`, as before. Run records are kept 7 days, 200 at most
+  (options `g2rd_cmdrun_*`, not autoloaded, removed on uninstall). A diagnostic command,
+  `async_probe`, stays off unless `G2RD_CONNECTOR_ASYNC_PROBE` is set in `wp-config.php`.
+  `/command` and the heartbeat queue are unchanged; nothing changes for a site until the
+  platform turns the mode on. What the manager reads through the new route is listed under
+  "What is sent, when" (External service section).
 
 = 1.14.0 =
 

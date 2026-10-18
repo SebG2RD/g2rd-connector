@@ -970,6 +970,8 @@ final class CommandExecutor {
 			if ( false !== $result ) {
 				++$optimized;
 			}
+			// Signe de vie d'une exécution en arrière-plan (CommandRuns\RunHeartbeat) ; sans écouteur, sans effet.
+			do_action( 'g2rd_connector_command_progress', 'optimize_table' );
 		}
 
 		// Purge des transients expirés (factorisée — cf purge_expired_transients()).

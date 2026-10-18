@@ -121,6 +121,29 @@ if ( class_exists( \G2RD\Connector\DirectLogin\UsedTickets::class ) ) {
 	}
 }
 
+// Commandes exécutées en arrière-plan (cf. CommandRuns\RunStore) : enregistrements
+// `g2rd_cmdrun_<numéro>`, terminés ou non, et créneau `g2rd_cmdrun_slot`, retirés par
+// préfixe — lot après lot, et sur chaque blog en multisite (chaque blog a sa propre
+// table d'options).
+if ( class_exists( \G2RD\Connector\CommandRuns\RunStore::class ) ) {
+	\G2RD\Connector\CommandRuns\RunStore::delete_all();
+	if ( is_multisite() ) {
+		// 'number' => 0 : tous les blogs (get_sites() n'en rend que 100 par défaut).
+		$g2rd_blog_ids = get_sites(
+			[
+				'fields' => 'ids',
+				'number' => 0,
+			]
+		);
+		foreach ( $g2rd_blog_ids as $g2rd_blog_id ) {
+			switch_to_blog( (int) $g2rd_blog_id );
+			\G2RD\Connector\CommandRuns\RunStore::delete_all();
+			restore_current_blog();
+		}
+		unset( $g2rd_blog_ids, $g2rd_blog_id );
+	}
+}
+
 // Dé-planification des crons si encore présents (dont un contrôle de reprise
 // ponctuel d'une mise à jour protégée, cf. Cron\RestorePointPurgeJob::RECOVERY_HOOK).
 foreach ( [ 'g2rd_connector_heartbeat', 'g2rd_connector_refresh_updates', 'g2rd_connector_restore_points_purge', 'g2rd_connector_update_recovery_check' ] as $g2rd_hook ) {

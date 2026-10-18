@@ -10,6 +10,8 @@ declare(strict_types=1);
 namespace G2RD\Connector;
 
 use G2RD\Connector\Admin\Page;
+use G2RD\Connector\CommandRuns\AfterResponseRunner;
+use G2RD\Connector\CommandRuns\RunStore;
 use G2RD\Connector\Cron\HeartbeatJob;
 use G2RD\Connector\Cron\Phase;
 use G2RD\Connector\Cron\RestorePointPurgeJob;
@@ -21,6 +23,7 @@ use G2RD\Connector\Outbound\ManagerIpv4Guard;
 use G2RD\Connector\Rest\AdminController;
 use G2RD\Connector\Rest\Auth;
 use G2RD\Connector\Rest\CommandController;
+use G2RD\Connector\Rest\CommandRunsController;
 use G2RD\Connector\Rest\HealthController;
 use G2RD\Connector\Rest\SnapshotController;
 use G2RD\Connector\Rollback\AutoUpdateGuard;
@@ -154,11 +157,36 @@ final class Plugin {
 		// n'en dépend pas : expiration contrôlée avant l'usage unique).
 		( new Endpoint() )->register();
 		add_action( RestorePointPurgeJob::HOOK, [ UsedTickets::class, 'purge_now' ] );
+		// Comptes rendus des commandes exécutées en arrière-plan (1.14) : gardés 7 jours,
+		// 200 au plus, purgés sur la même tâche biquotidienne. Branchement à part plutôt
+		// qu'une étape de RestorePointPurgeJob::purge(), qui ne fait rien pendant une mise
+		// à jour protégée vivante. Branché même si les commandes à distance sont coupées :
+		// ce qui a été reçu avant part quand même.
+		add_action( RestorePointPurgeJob::HOOK, [ RunStore::class, 'purge_now' ] );
 
 		// Endpoints REST sécurisés Bearer SiteToken (consommés par le manager).
 		add_action( 'rest_api_init', [ new SnapshotController(), 'register' ] );
 		if ( Settings::get( 'remote_commands_enabled' ) ) {
 			add_action( 'rest_api_init', [ new CommandController(), 'register' ] );
+
+			// Commandes longues exécutées en arrière-plan (1.14) : `POST /command-runs` et
+			// `GET /command-runs/<numéro>`, signées, dans les mêmes conditions que `/command`
+			// et sous l'anti-cache de `g2rd/v1` (prevent_rest_cache()). Enregistrées même sans
+			// fonction de fin de réponse (lecture des exécutions passées après un changement
+			// de serveur) : seule la capacité `async_commands` de l'inventaire en dépend
+			// (CommandRuns\Capability). Rien n'est appelé ici. Les deux filtres sont branchés
+			// sur toutes les requêtes REST du site : hors de ces routes, ils rendent leur
+			// valeur sans rien lire, et ne lèvent jamais.
+			$runner = AfterResponseRunner::instance();
+			add_action( 'rest_api_init', [ new CommandRunsController( \Closure::fromCallable( [ $runner, 'queue' ] ) ), 'register' ] );
+			// Corps de plus de 16 Ko refusé avant que WordPress ne décode le JSON (priorité 5,
+			// avant l'anti-cache, qui vaut aussi pour ce refus).
+			add_filter( 'rest_pre_dispatch', [ CommandRunsController::class, 'guard_body_size' ], 5, 3 );
+			// Réponse « reçue » servie et terminée, puis commande exécutée. Priorité tardive :
+			// les filtres qui posent des en-têtes, dont rest_send_cors_headers() de WordPress
+			// (priorité 10, branché à rest_api_init), passent avant que la réponse parte ;
+			// sinon leurs en-têtes seraient perdus (« headers already sent » au journal PHP).
+			add_filter( 'rest_pre_serve_request', [ $runner, 'maybe_serve' ], 1000, 4 );
 		}
 
 		// Outbound : cron heartbeat (opt-in via Settings).

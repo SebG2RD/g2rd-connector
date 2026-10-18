@@ -4,12 +4,18 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Tests\Cron;
 
+use Brain\Monkey\Filters;
 use Brain\Monkey\Functions;
+use G2RD\Connector\CommandRuns\AfterResponseRunner;
+use G2RD\Connector\CommandRuns\RunStore;
 use G2RD\Connector\Cron\HeartbeatJob;
 use G2RD\Connector\Cron\Phase;
 use G2RD\Connector\Cron\RestorePointPurgeJob;
 use G2RD\Connector\Cron\UpdatesDiscoveryJob;
 use G2RD\Connector\Plugin;
+use G2RD\Connector\Rest\CommandController;
+use G2RD\Connector\Rest\CommandRunsController;
+use G2RD\Connector\Rest\SnapshotController;
 use G2RD\Connector\Settings;
 use G2RD\Connector\Tests\TestCase;
 use G2RD\Connector\Updates\WporgAnswers;
@@ -335,6 +341,71 @@ final class PhaseTest extends TestCase {
 
 		self::assertNotFalse( has_action( 'http_api_debug', [ WporgAnswers::class, 'record' ] ) );
 		self::assertNotFalse( has_filter( 'pre_http_request', [ WporgAnswers::class, 'observe_preempted' ] ), 'Requêtes court-circuitées (mu-plugin Hostinger) aussi.' );
+	}
+
+	/**
+	 * Même démarrage d'un site enrôlé : la purge des exécutions en arrière-plan (cf.
+	 * CommandRuns\RunStore) part avec la tâche biquotidienne, comme celle des tickets de
+	 * connexion directe, sans toucher à RestorePointPurgeJob::purge().
+	 */
+	public function test_le_demarrage_d_un_site_enrole_branche_la_purge_des_executions(): void {
+		Functions\when( 'is_admin' )->justReturn( false );
+		Functions\when( 'wp_load_alloptions' )->justReturn( [ Settings::OPTION_KEY => 'autochargée' ] );
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => Settings::encrypt_token( 'jeton-du-site', 'v1' ),
+		];
+
+		Plugin::instance()->boot();
+
+		self::assertNotFalse( has_action( RestorePointPurgeJob::HOOK, [ RunStore::class, 'purge_now' ] ) );
+	}
+
+	/**
+	 * Même démarrage d'un site enrôlé, commandes à distance permises (réglage par défaut) :
+	 * les deux routes des commandes en arrière-plan sont enregistrées comme `/command`, la
+	 * garde de taille passe avant l'anti-cache (priorité 5, trois arguments, sinon elle ne
+	 * voit pas la requête) et le filtre « répondre, puis exécuter » passe en dernier
+	 * (priorité 1000, quatre arguments), après les filtres qui posent des en-têtes.
+	 */
+	public function test_le_demarrage_d_un_site_enrole_branche_les_commandes_en_arriere_plan(): void {
+		Functions\when( 'is_admin' )->justReturn( false );
+		Functions\when( 'wp_load_alloptions' )->justReturn( [ Settings::OPTION_KEY => 'autochargée' ] );
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => Settings::encrypt_token( 'jeton-du-site', 'v1' ),
+		];
+		$runner = AfterResponseRunner::instance();
+		Filters\expectAdded( 'rest_pre_dispatch' )->once()->with( [ CommandRunsController::class, 'guard_body_size' ], 5, 3 );
+		Filters\expectAdded( 'rest_pre_dispatch' )->with( [ Plugin::instance(), 'prevent_rest_cache' ], 10, 3 );
+		Filters\expectAdded( 'rest_pre_serve_request' )->once()->with( [ $runner, 'maybe_serve' ], 1000, 4 );
+
+		Plugin::instance()->boot();
+
+		self::assertSame( 10, has_action( 'rest_api_init', CommandRunsController::class . '->register()' ) );
+		self::assertSame( 10, has_action( 'rest_api_init', CommandController::class . '->register()' ) );
+	}
+
+	/**
+	 * Commandes à distance coupées : ni `/command`, ni les deux routes, ni leurs filtres
+	 * (les routes existent dans les mêmes conditions que `/command`). L'inventaire reste.
+	 */
+	public function test_commandes_distantes_coupees_rien_n_est_branche(): void {
+		Functions\when( 'is_admin' )->justReturn( false );
+		Functions\when( 'wp_load_alloptions' )->justReturn( [ Settings::OPTION_KEY => 'autochargée' ] );
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'                 => 7,
+			'site_token'              => Settings::encrypt_token( 'jeton-du-site', 'v1' ),
+			'remote_commands_enabled' => false,
+		];
+
+		Plugin::instance()->boot();
+
+		self::assertFalse( has_action( 'rest_api_init', CommandRunsController::class . '->register()' ) );
+		self::assertFalse( has_action( 'rest_api_init', CommandController::class . '->register()' ) );
+		self::assertFalse( has_filter( 'rest_pre_dispatch', [ CommandRunsController::class, 'guard_body_size' ] ) );
+		self::assertFalse( has_filter( 'rest_pre_serve_request' ) );
+		self::assertSame( 10, has_action( 'rest_api_init', SnapshotController::class . '->register()' ) );
 	}
 
 	/** Site pas encore enrôlé : rien n'est écrit, donc rien n'est écouté (guideline 7). */

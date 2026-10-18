@@ -37,7 +37,19 @@ if ( ! class_exists( 'WP_REST_Request' ) ) {
 		private array $headers = [];
 		/** @var array<string, mixed> */
 		private array $params = [];
-		private string $body  = '';
+		/**
+		 * Paramètres tirés de la route par le motif de son enregistrement.
+		 *
+		 * @var array<string, mixed>
+		 */
+		private array $url_params = [];
+		/**
+		 * Paramètres de l'adresse (`?…`).
+		 *
+		 * @var array<string, mixed>
+		 */
+		private array $query_params = [];
+		private string $body        = '';
 
 		public function __construct( private string $method = 'GET', private string $route = '' ) {}
 
@@ -62,9 +74,39 @@ if ( ! class_exists( 'WP_REST_Request' ) ) {
 			$this->params[ $key ] = $value;
 		}
 
-		/** @return mixed */
+		/**
+		 * Comme WordPress, les paramètres de l'adresse (set_param()) passent avant ceux de la
+		 * route (WP_REST_Request::get_parameter_order() : GET, puis URL).
+		 *
+		 * @return mixed
+		 */
 		public function get_param( string $key ) {
-			return $this->params[ $key ] ?? null;
+			return $this->params[ $key ] ?? $this->url_params[ $key ] ?? null;
+		}
+
+		/**
+		 * Paramètres de l'adresse (`?…`), que WordPress tire de $_GET
+		 * (WP_REST_Server::serve_request()).
+		 *
+		 * @param array<string, mixed> $params
+		 */
+		public function set_query_params( array $params ): void {
+			$this->query_params = $params;
+		}
+
+		/** @return array<string, mixed> */
+		public function get_query_params(): array {
+			return $this->query_params;
+		}
+
+		/** @param array<string, mixed> $params */
+		public function set_url_params( array $params ): void {
+			$this->url_params = $params;
+		}
+
+		/** @return array<string, mixed> */
+		public function get_url_params(): array {
+			return $this->url_params;
 		}
 
 		public function get_method(): string {
@@ -79,6 +121,14 @@ if ( ! class_exists( 'WP_REST_Request' ) ) {
 		private static function canonical( string $name ): string {
 			return str_replace( '-', '_', strtolower( $name ) );
 		}
+	}
+}
+
+if ( ! class_exists( 'WP_REST_Server' ) ) {
+	/** Doublure : les méthodes HTTP des routes, rien d'autre. */
+	class WP_REST_Server {
+		public const READABLE  = 'GET';
+		public const CREATABLE = 'POST';
 	}
 }
 
@@ -98,9 +148,13 @@ if ( ! class_exists( 'WP_User' ) ) {
 	}
 }
 
-if ( ! class_exists( 'WP_REST_Response' ) ) {
-	/** Doublure : les données et le statut de la réponse, rien d'autre. */
-	class WP_REST_Response {
+if ( ! class_exists( 'WP_HTTP_Response' ) ) {
+	/**
+	 * Doublure : les données et le statut de la réponse, rien d'autre. Classe mère de
+	 * WP_REST_Response, comme dans WordPress (le filtre `rest_pre_serve_request` reçoit
+	 * un WP_HTTP_Response).
+	 */
+	class WP_HTTP_Response {
 		/** @param mixed $data */
 		public function __construct( private $data = null, private int $status = 200 ) {}
 
@@ -113,6 +167,11 @@ if ( ! class_exists( 'WP_REST_Response' ) ) {
 			return $this->status;
 		}
 	}
+}
+
+if ( ! class_exists( 'WP_REST_Response' ) ) {
+	/** Doublure : celle de WP_HTTP_Response, sa classe mère dans WordPress. */
+	class WP_REST_Response extends WP_HTTP_Response {}
 }
 
 if ( ! class_exists( 'WP_Theme' ) ) {

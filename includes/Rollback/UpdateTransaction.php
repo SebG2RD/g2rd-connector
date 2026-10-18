@@ -131,6 +131,8 @@ final class UpdateTransaction {
 		$current['step']       = $step;
 		$current['updated_at'] = $now ?? time();
 		self::write( array_merge( $current, $changes ) );
+		// Signe de vie d'une exécution en arrière-plan (CommandRuns\RunHeartbeat) ; sans écouteur, sans effet.
+		do_action( 'g2rd_connector_update_txn_progress', $step );
 		return true;
 	}
 
@@ -147,6 +149,8 @@ final class UpdateTransaction {
 		}
 		$current['updated_at'] = $now ?? time();
 		self::write( $current );
+		// Signe de vie d'une exécution en arrière-plan (CommandRuns\RunHeartbeat) ; sans écouteur, sans effet.
+		do_action( 'g2rd_connector_update_txn_progress', $current['step'] );
 	}
 
 	/**

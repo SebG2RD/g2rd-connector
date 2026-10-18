@@ -20,6 +20,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Rest;
 
+use G2RD\Connector\CommandRuns\Capability;
 use G2RD\Connector\Cron\UpdatesDiscoveryJob;
 use G2RD\Connector\DirectLogin\SnapshotFields;
 use G2RD\Connector\Rollback\PendingOutcomes;
@@ -232,15 +233,24 @@ final class SnapshotController {
 	 * `direct_login` (1.13) : le site accepte les tickets de connexion directe ; la
 	 * case du réglage est remontée à part (`site.direct_login_enabled`), pour que le
 	 * manager distingue « connecteur trop ancien » de « désactivée sur ce site ».
+	 * `async_commands` (1.14) : les commandes longues peuvent être exécutées en
+	 * arrière-plan (routes `command-runs` enregistrées, fonction de fin de réponse
+	 * présente, pas de constante d'arrêt, cf. CommandRuns\Capability) ; sinon, la
+	 * plateforme garde le mode actuel (`/command`) pour ce site.
 	 *
 	 * Publique pour les tests.
 	 *
+	 * @param (\Closure(string): bool)|null $has_finisher Détection d'une fonction de fin
+	 *        de réponse par son nom (tests) ; function_exists() par défaut.
 	 * @return list<string>
 	 */
-	public function capabilities(): array {
+	public function capabilities( ?\Closure $has_finisher = null ): array {
 		$capabilities = [ 'signed_commands', SnapshotFields::CAPABILITY ];
 		if ( Services::supported() ) {
 			$capabilities[] = 'restore_points';
+		}
+		if ( Capability::available( $has_finisher ) ) {
+			$capabilities[] = Capability::NAME;
 		}
 		return $capabilities;
 	}
