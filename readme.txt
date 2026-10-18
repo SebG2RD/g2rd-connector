@@ -108,6 +108,28 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
   `/command` and the heartbeat queue are unchanged; nothing changes for a site until the
   platform turns the mode on. What the manager reads through the new route is listed under
   "What is sent, when" (External service section).
+* **New: server environment in the inventory (`environment` block).** The `/snapshot` answer
+  describes what the server allows: PHP extensions present (sodium, openssl, zip, zlib, mysqli)
+  and the libsodium version, PHP execution mode (SAPI), whether `exec` is available (only read,
+  never called), memory and execution time limits, free and total space of the disk that holds
+  `wp-content`. The total sizes of `wp-content`, of the media library and of the database are
+  measured in the background on the existing twice-daily task, at most once every 20 hours,
+  under a lock and bounded (5 seconds and 100,000 entries by default, filters
+  `g2rd_connector_environment_scan_seconds` and `g2rd_connector_environment_scan_entries`); the
+  snapshot only reads the last measurement, with its date and status (`partial` when a bound
+  was reached). Only totals and flags are sent: no file name and no path. The measurement is
+  kept in the network option `g2rd_connector_environment` (not autoloaded, removed on
+  uninstall). No new scheduled task.
+* **Fix: the hourly task also fetches pending commands when the heartbeat is off but remote
+  commands are on.** Until now, the hourly task was only hooked when the heartbeat was
+  enabled, so such a site never fetched its command queue. It now fetches it without sending
+  a heartbeat. On a site in that case, commands left pending on the manager will be fetched
+  at the first hourly run after the update (the manager hands out 10 at most per run).
+* **Fix: the hourly heartbeat is rescheduled at startup if it disappeared.** Deactivating then
+  reactivating the plugin removed it for good (no heartbeat and no command queue until a new
+  enrollment). It is now restored at the next startup of an enrolled site where the heartbeat
+  or remote commands are enabled, at a minute drawn at random in the hour, so sites updated
+  together do not all restart at the same minute. A heartbeat already scheduled keeps its date.
 
 = 1.14.0 =
 
