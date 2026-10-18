@@ -23,6 +23,7 @@ namespace G2RD\Connector\Rest;
 use G2RD\Connector\CommandRuns\Capability;
 use G2RD\Connector\Cron\UpdatesDiscoveryJob;
 use G2RD\Connector\DirectLogin\SnapshotFields;
+use G2RD\Connector\Environment\SnapshotBlock;
 use G2RD\Connector\Rollback\PendingOutcomes;
 use G2RD\Connector\Rollback\RestorePointInventory;
 use G2RD\Connector\Rollback\Services;
@@ -89,6 +90,9 @@ final class SnapshotController {
 				'capabilities'      => $this->capabilities(),
 				'restore_points'    => RestorePointInventory::describe(),
 				'pending_outcomes'  => PendingOutcomes::all(),
+				// Ce que le serveur du site permet (extensions natives, limites, disque) et les volumes
+				// mesurés au plus une fois par jour en tâche de fond : jamais calculés ici.
+				'environment'       => SnapshotBlock::build( $now ),
 			],
 			200
 		);

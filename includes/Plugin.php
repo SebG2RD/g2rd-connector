@@ -18,6 +18,7 @@ use G2RD\Connector\Cron\RestorePointPurgeJob;
 use G2RD\Connector\Cron\UpdatesDiscoveryJob;
 use G2RD\Connector\DirectLogin\Endpoint;
 use G2RD\Connector\DirectLogin\UsedTickets;
+use G2RD\Connector\Environment\SizeReport;
 use G2RD\Connector\Events\Listener;
 use G2RD\Connector\Outbound\ManagerIpv4Guard;
 use G2RD\Connector\Rest\AdminController;
@@ -163,6 +164,10 @@ final class Plugin {
 		// à jour protégée vivante. Branché même si les commandes à distance sont coupées :
 		// ce qui a été reçu avant part quand même.
 		add_action( RestorePointPurgeJob::HOOK, [ RunStore::class, 'purge_now' ] );
+		// Volumes (wp-content, médias, base) mesurés sur la même tâche biquotidienne, au
+		// plus une fois par 20 h, sous verrou et bornés ; le snapshot ne lit que ce cache
+		// (cf. Environment\SizeReport). Aucune nouvelle tâche planifiée.
+		add_action( RestorePointPurgeJob::HOOK, [ SizeReport::class, 'refresh_now' ] );
 
 		// Endpoints REST sécurisés Bearer SiteToken (consommés par le manager).
 		add_action( 'rest_api_init', [ new SnapshotController(), 'register' ] );
@@ -189,9 +194,14 @@ final class Plugin {
 			add_filter( 'rest_pre_serve_request', [ $runner, 'maybe_serve' ], 1000, 4 );
 		}
 
-		// Outbound : cron heartbeat (opt-in via Settings).
-		if ( Settings::get( 'heartbeat_enabled' ) ) {
+		// La tâche horaire porte deux travaux, chacun décidé par son réglage dans run() :
+		// le signe de vie (heartbeat_enabled) et le relevé de la file des commandes
+		// (remote_commands_enabled). Elle est donc branchée dès que l'un des deux est actif.
+		if ( Settings::get( 'heartbeat_enabled' ) || Settings::get( 'remote_commands_enabled' ) ) {
 			( new HeartbeatJob() )->register();
+			// Réparé à chaque démarrage, comme la découverte et la purge (E13) : une
+			// désactivation puis réactivation le retirait pour toujours.
+			HeartbeatJob::ensure_scheduled();
 		}
 
 		// Outbound : events temps réel (opt-in via Settings).

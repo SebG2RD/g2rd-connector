@@ -54,6 +54,10 @@ delete_site_option( 'g2rd_updates_snapshot' );
 // (cf. Updates\WporgAnswers) : option de réseau, comme les transients de mise à jour.
 delete_site_option( 'g2rd_connector_wporg_answers' );
 
+// Volumes mesurés chaque jour (cf. Environment\SizeReport) : option de réseau, une
+// seule ligne même en multisite (wp-content et la base sont communs au réseau).
+delete_site_option( 'g2rd_connector_environment' );
+
 // Registre des nonces de signature + compteur d'échecs (cf. Security\SignatureState).
 delete_option( 'g2rd_connector_signature_state' );
 

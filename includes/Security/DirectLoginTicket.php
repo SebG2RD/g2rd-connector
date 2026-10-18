@@ -31,7 +31,7 @@ namespace G2RD\Connector\Security;
 final class DirectLoginTicket {
 
 	public const VERSION     = 'v1';
-	public const KEY_CONTEXT = 'g2rd-login-v1';
+	public const KEY_CONTEXT = KeyDerivation::CONTEXT_LOGIN;
 
 	/** Tolérance d'horloge après l'expiration, et avance maximale acceptée (spec §5.5). */
 	public const CLOCK_TOLERANCE_SECONDS = 30;
@@ -48,10 +48,10 @@ final class DirectLoginTicket {
 	public const STATUS_FUTURE        = 'future';
 
 	/**
-	 * Clé de signature (32 octets bruts) dérivée du SiteToken.
+	 * Clé de signature (32 octets bruts) dérivée du SiteToken (formule commune : KeyDerivation).
 	 */
 	public static function derive_key( string $site_token ): string {
-		return hash_hmac( 'sha256', self::KEY_CONTEXT, $site_token, true );
+		return KeyDerivation::derive( $site_token, self::KEY_CONTEXT );
 	}
 
 	/**

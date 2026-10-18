@@ -1,0 +1,95 @@
+{
+  "description": "Exemples du bloc environment du snapshot (version 1 de la forme), partagé avec backend/tests/fixtures/snapshot-environment-v1.json du manager et tests/fixtures/snapshot-environment-v1.json du connecteur, à l'octet. Ne pas modifier sans mettre à jour les deux dépôts.",
+  "examples": {
+    "complet": {
+      "version": 1,
+      "php_sapi": "litespeed",
+      "extensions": {
+        "sodium": false,
+        "openssl": true,
+        "zip": true,
+        "zlib": true,
+        "mysqli": true
+      },
+      "sodium_library_version": null,
+      "exec_available": false,
+      "memory_limit_bytes": 268435456,
+      "max_execution_seconds": 30,
+      "disk": {
+        "status": "ok",
+        "free_bytes": 85899345920,
+        "total_bytes": 214748364800
+      },
+      "sizes": {
+        "status": "partial",
+        "measured_at": "2026-10-16T03:12:45+00:00",
+        "wp_content_bytes": 2147483648,
+        "uploads_bytes": 1610612736,
+        "files_counted": 100000,
+        "db_bytes": 52428800,
+        "db_status": "ok",
+        "scan_ms": 3120
+      }
+    },
+    "jamais_mesure": {
+      "version": 1,
+      "php_sapi": "litespeed",
+      "extensions": {
+        "sodium": false,
+        "openssl": true,
+        "zip": true,
+        "zlib": true,
+        "mysqli": true
+      },
+      "sodium_library_version": null,
+      "exec_available": false,
+      "memory_limit_bytes": 268435456,
+      "max_execution_seconds": 30,
+      "disk": {
+        "status": "ok",
+        "free_bytes": 85899345920,
+        "total_bytes": 214748364800
+      },
+      "sizes": {
+        "status": "pending",
+        "measured_at": null,
+        "wp_content_bytes": null,
+        "uploads_bytes": null,
+        "files_counted": null,
+        "db_bytes": null,
+        "db_status": null,
+        "scan_ms": null
+      }
+    },
+    "disque_indisponible": {
+      "version": 1,
+      "php_sapi": "fpm-fcgi",
+      "extensions": {
+        "sodium": true,
+        "openssl": true,
+        "zip": false,
+        "zlib": true,
+        "mysqli": true
+      },
+      "sodium_library_version": "1.0.18",
+      "exec_available": true,
+      "memory_limit_bytes": -1,
+      "max_execution_seconds": 0,
+      "disk": {
+        "status": "unavailable",
+        "free_bytes": null,
+        "total_bytes": null
+      },
+      "sizes": {
+        "status": "ok",
+        "measured_at": "2026-10-15T22:40:03+02:00",
+        "wp_content_bytes": 734003200,
+        "uploads_bytes": 524288000,
+        "files_counted": 18342,
+        "db_bytes": null,
+        "db_status": "unavailable",
+        "scan_ms": 1460
+      }
+    }
+  }
+}

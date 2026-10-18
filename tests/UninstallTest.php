@@ -8,6 +8,7 @@ use Brain\Monkey\Functions;
 use G2RD\Connector\CommandRuns\RunStore;
 use G2RD\Connector\Cron\Phase;
 use G2RD\Connector\Cron\RestorePointPurgeJob;
+use G2RD\Connector\Environment\SizeReport;
 use G2RD\Connector\Events\LoginFailedThrottle;
 use G2RD\Connector\Rest\DbHealth;
 use G2RD\Connector\Rollback\UpdateTransaction;
@@ -272,6 +273,21 @@ final class UninstallTest extends TestCase {
 			array_keys( $tables[2]->rows ),
 			$multisite ? 'Second blog du réseau.' : 'Hors multisite, aucune autre table n\'est touchée.'
 		);
+	}
+
+	/** Volumes mesurés chaque jour (cf. Environment\SizeReport) : option de réseau, une seule même en multisite. */
+	public function test_la_mesure_de_l_environnement_est_supprimee(): void {
+		$deleted = [];
+		Functions\when( 'delete_site_option' )->alias(
+			static function ( string $key ) use ( &$deleted ): bool {
+				$deleted[] = $key;
+				return true;
+			}
+		);
+
+		$this->uninstall();
+
+		self::assertContains( SizeReport::OPTION, $deleted );
 	}
 
 	private function uninstall(): void {

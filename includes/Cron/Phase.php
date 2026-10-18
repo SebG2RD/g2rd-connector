@@ -17,10 +17,14 @@
  *     (first_run()), pour la découverte des mises à jour et la purge ;
  *   - les tâches déjà planifiées sont re-phasées une seule fois (maybe_rephase()).
  *
- * Non concernés : le heartbeat horaire, planifié à l'enrôlement seulement (sa phase
- * suit donc l'heure d'enrôlement de chaque site, déjà répartie), et les passages
- * ponctuels, qui ont besoin de leur heure (contrôle de reprise d'une mise à jour
- * protégée, découverte immédiate demandée par le snapshot).
+ * Non concernés par le re-phasage : le heartbeat horaire, que maybe_rephase() ne
+ * reçoit pas (un battement existant garde sa phase, qui suit l'heure d'enrôlement de
+ * chaque site, déjà répartie). Planifié à l'enrôlement (`time() + 60`, premier signe
+ * de vie rapide), il est en revanche réparé au démarrage s'il a disparu
+ * (HeartbeatJob::ensure_scheduled()), à un premier passage tiré par first_run().
+ * Non concernés non plus : les passages ponctuels, qui ont besoin de leur heure
+ * (contrôle de reprise d'une mise à jour protégée, découverte immédiate demandée par
+ * le snapshot).
  *
  * @package G2RD\Connector
  */

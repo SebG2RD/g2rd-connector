@@ -110,6 +110,37 @@ final class SnapshotInventoryTest extends SnapshotTestCase {
 				'dir_writable' => 'bool',
 			],
 			'pending_outcomes'  => 'list',
+			'environment'       => [
+				'version'                => 'int',
+				'php_sapi'               => 'string',
+				'extensions'             => [
+					'sodium'  => 'bool',
+					'openssl' => 'bool',
+					'zip'     => 'bool',
+					'zlib'    => 'bool',
+					'mysqli'  => 'bool',
+				],
+				// Seul type qui dépend du PHP qui joue le test : la version n'est lue que si sodium est natif.
+				'sodium_library_version' => extension_loaded( 'sodium' ) ? 'string' : 'null',
+				'exec_available'         => 'bool',
+				'memory_limit_bytes'     => 'int',
+				'max_execution_seconds'  => 'int',
+				'disk'                   => [
+					'status'      => 'string',
+					'free_bytes'  => 'int',
+					'total_bytes' => 'int',
+				],
+				'sizes'                  => [
+					'status'           => 'string',
+					'measured_at'      => 'null',
+					'wp_content_bytes' => 'null',
+					'uploads_bytes'    => 'null',
+					'files_counted'    => 'null',
+					'db_bytes'         => 'null',
+					'db_status'        => 'null',
+					'scan_ms'          => 'null',
+				],
+			],
 		];
 	}
 }

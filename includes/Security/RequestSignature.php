@@ -28,7 +28,7 @@ namespace G2RD\Connector\Security;
 final class RequestSignature {
 
 	public const VERSION        = 'v1';
-	public const KEY_CONTEXT    = 'g2rd-sign-v1';
+	public const KEY_CONTEXT    = KeyDerivation::CONTEXT_SIGN;
 	public const WINDOW_SECONDS = 300;
 
 	public const HEADER_TIMESTAMP = 'x-g2rd-timestamp';
@@ -57,10 +57,10 @@ final class RequestSignature {
 	public const CODE_TOKEN_UNAVAILABLE = 'token_unavailable';
 
 	/**
-	 * Clé de signature (32 octets bruts) dérivée du SiteToken.
+	 * Clé de signature (32 octets bruts) dérivée du SiteToken (formule commune : KeyDerivation).
 	 */
 	public static function derive_key( string $site_token ): string {
-		return hash_hmac( 'sha256', self::KEY_CONTEXT, $site_token, true );
+		return KeyDerivation::derive( $site_token, self::KEY_CONTEXT );
 	}
 
 	/**

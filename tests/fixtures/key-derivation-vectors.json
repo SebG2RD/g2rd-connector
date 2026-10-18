@@ -1,0 +1,78 @@
+{
+  "description": "Vecteurs de dérivation des clés (Security\\KeyDerivation) calculés par une implémentation indépendante (.NET HMACSHA256), pas par le code testé. Ne pas modifier sans mettre à jour les deux dépôts.",
+  "formula": "HMAC-SHA256(key = jeton, message = contexte), 32 octets",
+  "vectors": [
+    {
+      "name": "jeton_des_vecteurs_de_signature_sign",
+      "site_token": "test-site-token-0123456789abcdef",
+      "context": "g2rd-sign-v1",
+      "key_hex": "e0bce1fee90fa2c2e52f308646e6bb0b46152c4ed71f3f4a07701edff46254ea"
+    },
+    {
+      "name": "jeton_des_vecteurs_de_signature_login",
+      "site_token": "test-site-token-0123456789abcdef",
+      "context": "g2rd-login-v1",
+      "key_hex": "a6703e991559c2e1c0dd5b8b4f42ec572c99b7837c80ac83afc8464e3a3083a9"
+    },
+    {
+      "name": "jeton_des_vecteurs_de_signature_backup",
+      "site_token": "test-site-token-0123456789abcdef",
+      "context": "g2rd-backup-v1",
+      "key_hex": "268c9cadbea5c859200b90bfdb9554b9c32600e67e2a685ed1f9a5dfa8ab30a3"
+    },
+    {
+      "name": "jeton_vide_sign",
+      "site_token": "",
+      "context": "g2rd-sign-v1",
+      "key_hex": "d2c0d5d228140cbc78139c458515b98072e603c474379284be93a3a0d8eaa983"
+    },
+    {
+      "name": "jeton_vide_login",
+      "site_token": "",
+      "context": "g2rd-login-v1",
+      "key_hex": "48a8c610344b363c55233b1fe902c962a52d3629a43a8657a03496b29707f0d1"
+    },
+    {
+      "name": "jeton_vide_backup",
+      "site_token": "",
+      "context": "g2rd-backup-v1",
+      "key_hex": "4c94379c470b424160f0870b6443275e3596030b64683751784724bf32b2c7d7"
+    },
+    {
+      "name": "jeton_ab_x32_sign",
+      "site_token": "abababababababababababababababababababababababababababababababab",
+      "context": "g2rd-sign-v1",
+      "key_hex": "c47b7bfb3a29fea78ee7c0064bb56d6e071058676576f6948ce6b27fe2a82582"
+    },
+    {
+      "name": "jeton_ab_x32_login",
+      "site_token": "abababababababababababababababababababababababababababababababab",
+      "context": "g2rd-login-v1",
+      "key_hex": "70ee214697fd4ba580f0935fc8e8561e68475136fc6020679a8ac388f88c7eb5"
+    },
+    {
+      "name": "jeton_ab_x32_backup",
+      "site_token": "abababababababababababababababababababababababababababababababab",
+      "context": "g2rd-backup-v1",
+      "key_hex": "4abd854cec0e30eef7a64bf49dcfaee2abd9d52d237c5e762747b594f67bd5c0"
+    },
+    {
+      "name": "jeton_utf8_sign",
+      "site_token": "jeton-é-✓",
+      "context": "g2rd-sign-v1",
+      "key_hex": "8ab2d4ba4ee2b6cfe81b0cbf27a593b7e629f92a43bf2c27e233b00176980f87"
+    },
+    {
+      "name": "jeton_utf8_login",
+      "site_token": "jeton-é-✓",
+      "context": "g2rd-login-v1",
+      "key_hex": "deecabd7112c6468b3338add704987916439f7ab35e45e557bafa4073882c246"
+    },
+    {
+      "name": "jeton_utf8_backup",
+      "site_token": "jeton-é-✓",
+      "context": "g2rd-backup-v1",
+      "key_hex": "ef6e662437f37f2b2d9ca26bf7ad73d6881062334ed17ba66c2ea0404465ded4"
+    }
+  ]
+}

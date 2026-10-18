@@ -14,7 +14,8 @@
  * on REFUSE d'enregistrer plutôt que d'évincer une entrée vivante.
  *
  * Concurrence : la lecture-modification-écriture de l'option se fait sous un
- * verrou consultatif MySQL (GET_LOCK), pour qu'une requête simultanée n'efface pas
+ * verrou consultatif MySQL (GET_LOCK, Support\MysqlLock, but `sig`, même nom de
+ * verrou que les versions précédentes), pour qu'une requête simultanée n'efface pas
  * le nonce qu'une autre vient d'écrire (il redeviendrait rejouable). Si le verrou
  * est indisponible (fonction désactivée par l'hébergeur, cluster Galera, délai
  * dépassé), on retombe sur le comportement d'avant, sans verrou : jamais de refus
@@ -28,6 +29,8 @@
 declare(strict_types=1);
 
 namespace G2RD\Connector\Security;
+
+use G2RD\Connector\Support\MysqlLock;
 
 final class SignatureState {
 
@@ -68,6 +71,13 @@ final class SignatureState {
 
 	/** Attente maximale du verrou, en secondes, avant de continuer sans lui. */
 	private const LOCK_TIMEOUT_SECONDS = 3;
+
+	/**
+	 * But du verrou (MysqlLock, portée blog). Ne jamais le changer : le nom du verrou
+	 * en dépend, et deux versions du connecteur qui tournent ensemble pendant une mise
+	 * à jour doivent prendre le même (sinon un nonce effacé redeviendrait rejouable).
+	 */
+	private const LOCK_PURPOSE = 'sig';
 
 	/**
 	 * Enregistre un nonce et dit ce qu'il en est : NONCE_ACCEPTED, NONCE_REPLAYED
@@ -182,97 +192,30 @@ final class SignatureState {
 	 * Exécute `$operation` (lecture-modification-écriture de l'option) sous verrou
 	 * MySQL, ou sans verrou s'il ne peut pas être pris — le comportement d'avant.
 	 *
+	 * Verrou tenu ailleurs jusqu'au bout du délai (BUSY) ou indisponible
+	 * (UNAVAILABLE) : même repli, l'opération sans verrou et sans purge du cache,
+	 * comme avant l'extraction du verrou dans Support\MysqlLock (le registre ne
+	 * distinguait pas les deux cas).
+	 *
 	 * @template T
 	 * @param callable(): T $operation
 	 * @return T
 	 */
 	private static function with_lock( callable $operation ): mixed {
-		$lock = self::acquire_lock();
-		try {
-			if ( null !== $lock && function_exists( 'wp_cache_delete' ) ) {
-				// Sous verrou, on relit la base : un cache objet persistant (Redis,
-				// LiteSpeed…) pourrait sinon servir une version antérieure à
-				// l'écriture d'une requête concurrente.
-				wp_cache_delete( self::OPTION_KEY, 'options' );
-			}
-			return $operation();
-		} finally {
-			if ( null !== $lock ) {
-				self::release_lock( $lock );
-			}
-		}
-	}
-
-	/**
-	 * Prend le verrou consultatif. Retourne son nom, ou null s'il n'a pas pu être
-	 * pris (pas de $wpdb, GET_LOCK indisponible, délai dépassé) : l'appelant
-	 * continue alors sans verrou.
-	 */
-	private static function acquire_lock(): ?string {
-		$wpdb = self::wpdb();
-		if ( null === $wpdb ) {
-			return null;
-		}
-
-		$name     = self::lock_name( $wpdb );
-		$acquired = self::quiet_query( $wpdb, $wpdb->prepare( 'SELECT GET_LOCK(%s, %d)', $name, self::LOCK_TIMEOUT_SECONDS ) );
-
-		return '1' === $acquired ? $name : null;
-	}
-
-	private static function release_lock( string $name ): void {
-		$wpdb = self::wpdb();
-		if ( null !== $wpdb ) {
-			self::quiet_query( $wpdb, $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $name ) );
-		}
-	}
-
-	/**
-	 * Nom du verrou. L'espace des noms GET_LOCK est commun à TOUT le serveur MySQL
-	 * (mutualisé) : il inclut la base et la table des options, pour ne jamais
-	 * sérialiser des sites voisins (ni deux blogs d'un multisite). 33 caractères,
-	 * sous la limite de 64 de MySQL.
-	 */
-	private static function lock_name( object $wpdb ): string {
-		$database = defined( 'DB_NAME' ) ? (string) constant( 'DB_NAME' ) : '';
-		$table    = isset( $wpdb->options ) && is_string( $wpdb->options ) ? $wpdb->options : '';
-
-		return 'g2rd_sig_' . substr( hash( 'sha256', $database . '|' . $table ), 0, 24 );
-	}
-
-	/**
-	 * Exécute une requête de verrou sans jamais afficher d'erreur SQL (une erreur
-	 * affichée casserait la réponse JSON d'un site en WP_DEBUG_DISPLAY) ni lever.
-	 */
-	private static function quiet_query( object $wpdb, mixed $query ): ?string {
-		if ( ! is_string( $query ) || '' === $query ) {
-			return null;
-		}
-
-		$can_suppress = method_exists( $wpdb, 'suppress_errors' );
-		$previous     = $can_suppress ? $wpdb->suppress_errors( true ) : false;
-		try {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.NotPrepared -- verrou consultatif MySQL (GET_LOCK/RELEASE_LOCK), requête préparée par l'appelant, rien à mettre en cache.
-			$result = $wpdb->get_var( $query );
-		} catch ( \Throwable ) {
-			$result = null;
-		} finally {
-			if ( $can_suppress ) {
-				$wpdb->suppress_errors( (bool) $previous );
-			}
-		}
-
-		return null === $result ? null : (string) $result;
-	}
-
-	/**
-	 * Le $wpdb global s'il est exploitable, sinon null (tests, contexte précoce).
-	 */
-	private static function wpdb(): ?object {
-		$wpdb = $GLOBALS['wpdb'] ?? null;
-		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'get_var' ) || ! method_exists( $wpdb, 'prepare' ) ) {
-			return null;
-		}
-		return $wpdb;
+		return MysqlLock::run(
+			self::LOCK_PURPOSE,
+			self::LOCK_TIMEOUT_SECONDS,
+			static function () use ( $operation ): mixed {
+				if ( function_exists( 'wp_cache_delete' ) ) {
+					// Sous verrou, on relit la base : un cache objet persistant (Redis,
+					// LiteSpeed…) pourrait sinon servir une version antérieure à
+					// l'écriture d'une requête concurrente.
+					wp_cache_delete( self::OPTION_KEY, 'options' );
+				}
+				return $operation();
+			},
+			$operation,
+			$operation
+		);
 	}
 }
