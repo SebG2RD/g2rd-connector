@@ -49,6 +49,7 @@ use G2RD\Connector\CommandRuns\RunState;
 use G2RD\Connector\CommandRuns\RunStore;
 use G2RD\Connector\CommandRuns\StoreUnavailable;
 use G2RD\Connector\Security\RequestSignature;
+use G2RD\Connector\Support\ArrayShape;
 use WP_Error;
 use WP_REST_Request;
 use WP_REST_Response;
@@ -358,7 +359,7 @@ final class CommandRunsController {
 		if ( array_key_exists( 'payload', $data ) ) {
 			$payload = $data['payload'];
 			// Un objet JSON décodé : un tableau à clés, ou vide. Une liste non vide n'en est pas un.
-			if ( ! is_array( $payload ) || ( [] !== $payload && array_is_list( $payload ) ) ) {
+			if ( ! is_array( $payload ) || ( [] !== $payload && ArrayShape::is_list( $payload ) ) ) {
 				return Refusal::error( Refusal::INVALID_PAYLOAD );
 			}
 		}

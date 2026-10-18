@@ -41,6 +41,8 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\CommandRuns;
 
+use G2RD\Connector\Support\ArrayShape;
+
 final class RunStore {
 
 	public const OPTION_PREFIX = 'g2rd_cmdrun_';
@@ -180,7 +182,7 @@ final class RunStore {
 			return null;
 		}
 		$record = json_decode( $raw, true );
-		if ( ! is_array( $record ) || array_is_list( $record ) ) {
+		if ( ! is_array( $record ) || ArrayShape::is_list( $record ) ) {
 			return null;
 		}
 
@@ -482,7 +484,7 @@ final class RunStore {
 			return self::fitting_json( $record );
 		}
 
-		$is_list = array_is_list( $value );
+		$is_list = ArrayShape::is_list( $value );
 		foreach ( self::removal_order( $value ) as $entry ) {
 			unset( $value[ $entry ] );
 			$record[ $part ][ $key ] = $is_list ? array_values( $value ) : $value;
