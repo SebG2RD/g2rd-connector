@@ -24,7 +24,7 @@ final class SnapshotCapabilitiesTest extends TestCase {
 	}
 
 	/**
-	 * `async_commands` (1.14) : le site exécute les commandes longues en arrière-plan. La
+	 * `async_commands` (1.15) : le site exécute les commandes longues en arrière-plan. La
 	 * détection de la fonction de fin de réponse est injectée (en ligne de commande, aucune
 	 * n'existe, et un test ne doit jamais les déclarer).
 	 */

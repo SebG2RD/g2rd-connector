@@ -158,7 +158,7 @@ final class Plugin {
 		// n'en dépend pas : expiration contrôlée avant l'usage unique).
 		( new Endpoint() )->register();
 		add_action( RestorePointPurgeJob::HOOK, [ UsedTickets::class, 'purge_now' ] );
-		// Comptes rendus des commandes exécutées en arrière-plan (1.14) : gardés 7 jours,
+		// Comptes rendus des commandes exécutées en arrière-plan (1.15) : gardés 7 jours,
 		// 200 au plus, purgés sur la même tâche biquotidienne. Branchement à part plutôt
 		// qu'une étape de RestorePointPurgeJob::purge(), qui ne fait rien pendant une mise
 		// à jour protégée vivante. Branché même si les commandes à distance sont coupées :
@@ -174,7 +174,7 @@ final class Plugin {
 		if ( Settings::get( 'remote_commands_enabled' ) ) {
 			add_action( 'rest_api_init', [ new CommandController(), 'register' ] );
 
-			// Commandes longues exécutées en arrière-plan (1.14) : `POST /command-runs` et
+			// Commandes longues exécutées en arrière-plan (1.15) : `POST /command-runs` et
 			// `GET /command-runs/<numéro>`, signées, dans les mêmes conditions que `/command`
 			// et sous l'anti-cache de `g2rd/v1` (prevent_rest_cache()). Enregistrées même sans
 			// fonction de fin de réponse (lecture des exécutions passées après un changement

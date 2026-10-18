@@ -237,7 +237,7 @@ final class SnapshotController {
 	 * `direct_login` (1.13) : le site accepte les tickets de connexion directe ; la
 	 * case du réglage est remontée à part (`site.direct_login_enabled`), pour que le
 	 * manager distingue « connecteur trop ancien » de « désactivée sur ce site ».
-	 * `async_commands` (1.14) : les commandes longues peuvent être exécutées en
+	 * `async_commands` (1.15) : les commandes longues peuvent être exécutées en
 	 * arrière-plan (routes `command-runs` enregistrées, fonction de fin de réponse
 	 * présente, pas de constante d'arrêt, cf. CommandRuns\Capability) ; sinon, la
 	 * plateforme garde le mode actuel (`/command`) pour ce site.
