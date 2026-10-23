@@ -12,15 +12,18 @@ SLUG="g2rd-connector"
 
 echo "Vérification de $ZIP"
 
-# Liste des entrées lue UNE fois dans un fichier temporaire : sous `pipefail`, un
-# `unzip -Z1 | grep -q` faisait sortir unzip en 141 (SIGPIPE) dès que grep trouvait
-# sa ligne et s'arrêtait, et le `if !` prenait ce code pour un fichier manquant.
-LISTE=$(mktemp)
+# Ne pas rebrancher `unzip -Z1 | grep -q` : sous `pipefail`, unzip sort en 141 (SIGPIPE)
+# dès que grep trouve sa ligne et s'arrête ; un fichier requis paraît alors manquant et,
+# pire, un contenu interdit (vendor/, node_modules/) paraît absent. Les recherches portent
+# sur la liste des entrées, écrite une seule fois dans ce fichier temporaire.
+LISTE=$(mktemp) || { echo "ERREUR: impossible de créer un fichier temporaire (TMPDIR accessible en écriture ?)"; exit 1; }
 trap 'rm -f "$LISTE"' EXIT
 
 # 1) Intégrité de l'archive
 unzip -t "$ZIP" >/dev/null
 echo "OK   : intégrité de l'archive"
+
+# Liste des entrées, lue une fois pour toutes les étapes suivantes
 unzip -Z1 "$ZIP" >"$LISTE"
 
 # 2) Dossier racine unique = g2rd-connector/ (exigence wp.org)
