@@ -12,12 +12,19 @@ SLUG="g2rd-connector"
 
 echo "Vérification de $ZIP"
 
+# Liste des entrées lue UNE fois dans un fichier temporaire : sous `pipefail`, un
+# `unzip -Z1 | grep -q` faisait sortir unzip en 141 (SIGPIPE) dès que grep trouvait
+# sa ligne et s'arrêtait, et le `if !` prenait ce code pour un fichier manquant.
+LISTE=$(mktemp)
+trap 'rm -f "$LISTE"' EXIT
+
 # 1) Intégrité de l'archive
 unzip -t "$ZIP" >/dev/null
 echo "OK   : intégrité de l'archive"
+unzip -Z1 "$ZIP" >"$LISTE"
 
 # 2) Dossier racine unique = g2rd-connector/ (exigence wp.org)
-TOP=$(unzip -Z1 "$ZIP" | awk -F/ 'NF>1 || $0 ~ /\/$/ {print $1}' | sort -u)
+TOP=$(awk -F/ 'NF>1 || $0 ~ /\/$/ {print $1}' "$LISTE" | sort -u)
 if [ "$(echo "$TOP" | wc -l)" -ne 1 ] || [ "$TOP" != "$SLUG" ]; then
   echo "ERREUR: dossier racine attendu unique '$SLUG/', trouvé :"
   echo "$TOP"
@@ -34,7 +41,7 @@ required=(
   "$SLUG/includes/autoload.php"
 )
 for f in "${required[@]}"; do
-  if ! unzip -Z1 "$ZIP" | grep -qx "$f"; then
+  if ! grep -qxF -- "$f" "$LISTE"; then
     echo "ERREUR: fichier requis manquant dans le ZIP : $f"
     exit 1
   fi
@@ -42,7 +49,7 @@ for f in "${required[@]}"; do
 done
 
 # 4) Le bundle admin compilé doit être présent
-if ! unzip -Z1 "$ZIP" | grep -q "^$SLUG/assets/admin/build/"; then
+if ! grep -q -- "^$SLUG/assets/admin/build/" "$LISTE"; then
   echo "ERREUR: bundle admin compilé absent ($SLUG/assets/admin/build/) — npm run build n'a pas tourné ?"
   exit 1
 fi
@@ -65,7 +72,7 @@ forbidden=(
   "$SLUG/vendor"
 )
 for f in "${forbidden[@]}"; do
-  if unzip -Z1 "$ZIP" | grep -q "^$f"; then
+  if grep -q -- "^$f" "$LISTE"; then
     echo "ERREUR: contenu de dev présent dans le ZIP : $f"
     exit 1
   fi
