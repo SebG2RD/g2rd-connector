@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.15.0-rc.1
+Stable tag: 1.15.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -83,6 +83,22 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 2. Theme-integrated "Manager G2RD" tab in the G2RD theme console (requires `g2rd-theme` >= 1.19 as the theme or its parent theme).
 
 == Changelog ==
+
+= 1.15.0 =
+
+Stable release of the 1.15 line, piloted as 1.15.0-rc.1 on one site for five days (details in
+the entry below).
+
+* **New: long commands can run in the background (`async_commands`)**, so a command resent by
+  the host's CDN after about 60 seconds never runs twice. Two signed routes, announced only
+  when the server can finish a response early. Nothing changes for a site until the platform
+  turns the mode on: `/command` and the heartbeat queue are unchanged.
+* **New: server environment in the inventory (`environment` block):** PHP extensions and
+  limits, disk space, and the total sizes of `wp-content`, the media library and the database,
+  measured in the background with bounds (reported as `partial`, a minimum, when a bound is
+  reached). Only totals and flags are sent: no file name and no path.
+* **Fix: pending commands are fetched when the heartbeat is off but remote commands are on,
+  and the hourly task is rescheduled at startup if it disappeared.**
 
 = 1.15.0-rc.1 =
 
