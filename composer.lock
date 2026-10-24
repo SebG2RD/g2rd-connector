@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "56317ce5d539a8090df589bab226f206",
+    "content-hash": "784b203196c42e373ef4c9fe464210e2",
     "packages": [],
     "packages-dev": [
         {
@@ -527,16 +527,16 @@
         },
         {
             "name": "paragonie/sodium_compat",
-            "version": "v1.24.2",
+            "version": "v1.24.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/paragonie/sodium_compat.git",
-                "reference": "4524c98a826776c9a32d6ce06932563cb10f3995"
+                "reference": "2cb48f26130919f92f30650bdcc30e6f4ebe45ac"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/paragonie/sodium_compat/zipball/4524c98a826776c9a32d6ce06932563cb10f3995",
-                "reference": "4524c98a826776c9a32d6ce06932563cb10f3995",
+                "url": "https://api.github.com/repos/paragonie/sodium_compat/zipball/2cb48f26130919f92f30650bdcc30e6f4ebe45ac",
+                "reference": "2cb48f26130919f92f30650bdcc30e6f4ebe45ac",
                 "shasum": ""
             },
             "require": {
@@ -607,9 +607,9 @@
             ],
             "support": {
                 "issues": "https://github.com/paragonie/sodium_compat/issues",
-                "source": "https://github.com/paragonie/sodium_compat/tree/v1.24.2"
+                "source": "https://github.com/paragonie/sodium_compat/tree/v1.24.0"
             },
-            "time": "2026-08-18T23:44:07+00:00"
+            "time": "2025-12-30T16:16:35+00:00"
         },
         {
             "name": "phar-io/manifest",

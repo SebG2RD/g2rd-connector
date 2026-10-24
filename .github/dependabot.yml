@@ -17,6 +17,12 @@ updates:
     groups:
       dev-minor-patch:
         update-types: [minor, patch]
+    ignore:
+      # Épinglée sur la copie que WordPress livre au parc (1.24.0 dans WordPress 6.9
+      # à 7.1.3) : les cas « compat » des tests doivent voir le même code que les
+      # sites. Sa version suit WordPress, pas Packagist ; une montée ferait échouer
+      # tests/Backup/Crypto/SodiumCompatCopieTest.php et tout le groupe avec elle.
+      - dependency-name: paragonie/sodium_compat
 
   - package-ecosystem: npm
     directory: /
