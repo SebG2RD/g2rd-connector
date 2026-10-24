@@ -20,6 +20,11 @@
  * Une URL échue se reconnaît à l'horloge du STOCKAGE (en-tête `Date` d'une réponse
  * 403 comparé à `X-Amz-Date` + `X-Amz-Expires`), jamais à celle du site.
  *
+ * IPv4 forcée sur demande vers l'hôte de stockage (incident IPv6 du 25/09 : le CDN de
+ * l'hébergeur renvoyait 403 à l'adresse IPv6 sortante du serveur, et ManagerIpv4Guard
+ * ne couvre que l'hôte du manager) : un crochet `http_api_curl` posé pour la seule
+ * durée de la requête de la partie, qui ne touche que les requêtes vers cet hôte.
+ *
  * Non branché avant la phase 4 : aucun appelant, aucun réglage, aucune commande.
  * Aucun effet au chargement.
  *
@@ -29,6 +34,8 @@
 declare(strict_types=1);
 
 namespace G2RD\Connector\Backup\Upload;
+
+use G2RD\Connector\Outbound\ManagerIpv4Guard;
 
 final class PartUploader {
 
@@ -61,17 +68,18 @@ final class PartUploader {
 	 */
 	private const HTTP_DATE_FORMAT = 'D, d M Y H:i:s \G\M\T';
 
+	/** Priorité du crochet `http_api_curl`, la même à la pose et au retrait (sinon remove_action ne le trouve pas). */
+	private const IPV4_HOOK_PRIORITY = 10;
+
 	/**
-	 * @param bool $force_ipv4          IPv4 forcée vers l'hôte de stockage : signature du contrat,
-	 *                                  sans effet tant que la tâche 19 du plan de la phase 3 ne l'a
-	 *                                  pas branchée (aucun appelant d'ici là).
+	 * @param bool $force_ipv4          IPv4 forcée vers l'hôte de stockage, pour la seule durée de la
+	 *                                  requête (réglage reçu de l'appelant, phase 4).
 	 * @param bool $allow_insecure_http Accepte `http` et désactive `reject_unsafe_urls` : banc local seulement.
 	 */
 	public function __construct(
-		bool $force_ipv4 = false,
+		private readonly bool $force_ipv4 = false,
 		private readonly bool $allow_insecure_http = false,
 	) {
-		unset( $force_ipv4 );
 	}
 
 	/**
@@ -102,23 +110,36 @@ final class PartUploader {
 		}
 		$content_md5 = base64_encode( md5( $bytes, true ) );
 
-		$started  = microtime( true );
-		$response = wp_remote_request(
-			$url,
-			[
-				'method'              => 'PUT',
-				'body'                => $bytes,
-				'headers'             => [
-					'Content-MD5'  => $content_md5,
-					'Content-Type' => 'application/octet-stream',
-				],
-				'timeout'             => $timeout_seconds,
-				'redirection'         => 0,
-				'sslverify'           => true,
-				'reject_unsafe_urls'  => ! $this->allow_insecure_http,
-				'limit_response_size' => self::MAX_RESPONSE_BYTES,
-			]
-		);
+		// Posé après la lecture et le contrôle de l'URL, retiré dans le `finally` : le
+		// crochet ne vit que le temps de la requête, quelle qu'en soit l'issue (réponse,
+		// WP_Error ou exception levée pendant l'envoi).
+		$ipv4_hook = $this->force_ipv4 ? self::ipv4_hook( $expected_host ) : null;
+		if ( null !== $ipv4_hook ) {
+			add_action( 'http_api_curl', $ipv4_hook, self::IPV4_HOOK_PRIORITY, 3 );
+		}
+		$started = microtime( true );
+		try {
+			$response = wp_remote_request(
+				$url,
+				[
+					'method'              => 'PUT',
+					'body'                => $bytes,
+					'headers'             => [
+						'Content-MD5'  => $content_md5,
+						'Content-Type' => 'application/octet-stream',
+					],
+					'timeout'             => $timeout_seconds,
+					'redirection'         => 0,
+					'sslverify'           => true,
+					'reject_unsafe_urls'  => ! $this->allow_insecure_http,
+					'limit_response_size' => self::MAX_RESPONSE_BYTES,
+				]
+			);
+		} finally {
+			if ( null !== $ipv4_hook ) {
+				remove_action( 'http_api_curl', $ipv4_hook, self::IPV4_HOOK_PRIORITY );
+			}
+		}
 		$elapsed_ms = max( 0, (int) round( ( microtime( true ) - $started ) * 1000 ) );
 		// La partie (jusqu'à 64 Mio) n'a plus d'usage : libérée avant de lire la réponse.
 		unset( $bytes );
@@ -203,6 +224,49 @@ final class PartUploader {
 
 	private static function normalized_port( ?int $port, string $scheme ): ?int {
 		return ( null === $port || self::DEFAULT_PORTS[ $scheme ] === $port ) ? null : $port;
+	}
+
+	/**
+	 * Crochet `http_api_curl` (handle cURL, arguments et URL de la requête) qui force
+	 * l'IPv4 vers l'hôte de stockage annoncé. Une fermeture propre à cet envoi : c'est
+	 * elle, et elle seule, que remove_action() retire ensuite.
+	 *
+	 * @param string $expected_host Hôte de stockage annoncé, sans port (déjà comparé à celui de l'URL).
+	 * @return \Closure(mixed, mixed, mixed): void
+	 */
+	private static function ipv4_hook( string $expected_host ): \Closure {
+		$storage_url = 'https://' . $expected_host;
+
+		return static function ( $handle, $parsed_args, $url ) use ( $storage_url ): void {
+			unset( $parsed_args );
+			self::force_ipv4_to_storage( $handle, $url, $storage_url );
+		};
+	}
+
+	/**
+	 * Pose CURLOPT_IPRESOLVE (IPv4) sur le handle d'une requête vers l'hôte de stockage,
+	 * et d'aucune autre : une requête lancée pendant ce temps par un autre code, vers un
+	 * autre hôte, n'est pas touchée.
+	 *
+	 * La décision est celle de ManagerIpv4Guard::applies_to(), appelée avec l'hôte seul :
+	 * elle compare les hôtes, jamais les ports, donc `http://stockage:9000/…` est visé
+	 * par l'hôte `stockage`. Le port, lui, a déjà été contrôlé avant tout envoi.
+	 *
+	 * @param mixed  $handle      CurlHandle (PHP 8) de la requête ; tout autre chose (WordPress en fsockopen) est ignoré.
+	 * @param mixed  $url         URL de la requête.
+	 * @param string $storage_url `https://` suivi de l'hôte de stockage annoncé.
+	 * @return bool Vrai si l'IPv4 a été posée.
+	 */
+	private static function force_ipv4_to_storage( $handle, $url, string $storage_url ): bool {
+		if ( ! is_string( $url ) || ! defined( 'CURL_IPRESOLVE_V4' ) || ! ( $handle instanceof \CurlHandle ) ) {
+			return false;
+		}
+		if ( ! ManagerIpv4Guard::applies_to( $url, $storage_url ) ) {
+			return false;
+		}
+
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.curl_curl_setopt -- le crochet http_api_curl existe précisément pour ajuster le handle cURL de WP_Http.
+		return curl_setopt( $handle, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4 );
 	}
 
 	/**
