@@ -550,6 +550,13 @@
       "public_key": "7e94123fd8c3699b01d3ae9f2d71921d87469295bbe190b7a023b046306b29ee",
       "signature": "9279907fde48db353b451f84d7262e4f6a071e9a7642b3c39bae40506e275aa6976b864db04cd9114fb7a936c233295d1774492e90ffdf1f3c2d0af1fc56fa03",
       "expected_error": "index_signature_invalid"
+    },
+    {
+      "name": "cle_publique_d_ordre_2l",
+      "index": "{\"format\":\"g2bk-index\",\"version\":1,\"suite\":1,\"backup_id\":\"8985695e536befd8b249c869f62ee42b\",\"site_ref\":\"a5249f70814246f98358a6f092664dcb\",\"site_key_version\":1,\"signing_key_id\":\"2ceee2170bd536c2\",\"created_at\":\"2026-10-24T01:00:00Z\",\"type\":\"full\",\"parent_backup_id\":null,\"payload_format\":1,\"segments\":[{\"index\":0,\"kind\":\"db\",\"blocks\":3,\"bytes\":236,\"sha256\":\"bcf0ce9cf2b14893482c853886ff740e34589e3b42021d5bc708ddd315ebbd3a\"},{\"index\":1,\"kind\":\"files\",\"blocks\":3,\"bytes\":228,\"sha256\":\"48928f3b7b90f9f4b4847b75e703ce714a8fa49d70c91b111f6db73d170f933c\"},{\"index\":2,\"kind\":\"files\",\"blocks\":1,\"bytes\":164,\"sha256\":\"cb09d38d3e98b08992d0c9afe7a009148cfe2f3e8e217560dade438eafd6f76f\"},{\"index\":3,\"kind\":\"manifest\",\"blocks\":3,\"bytes\":234,\"sha256\":\"93f85eb42a601157dd46ff30751cf591f3d5e6d5ead26c7de3110cfe8f09eaf0\"}],\"manifest_segment\":3}",
+      "public_key": "afb1ce62206b999b17d1724af49defda9b336983e71290efa79338ff241a0959",
+      "signature": "0007afbc6ca8227efcc791197a5ac6fc76043979de6b599b1cbda78c03ccc39516c335e42c7d26c8bfcc413e545d6ac827ffce920630e4a24fbb9531a9e2dc0b",
+      "expected_error": "index_signature_invalid"
     }
   ],
   "index_malformed": [

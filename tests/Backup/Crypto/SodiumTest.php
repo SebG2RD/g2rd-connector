@@ -376,7 +376,7 @@ final class SodiumTest extends TestCase {
 		$s      = substr( $sig, 32 );
 
 		$cas = [];
-		foreach ( [ 'signature_s_non_canonique', 'cle_publique_d_ordre_faible', 'cle_publique_non_canonique', 'cle_publique_d_ordre_mixte' ] as $nom_cas ) {
+		foreach ( [ 'signature_s_non_canonique', 'cle_publique_d_ordre_faible', 'cle_publique_non_canonique', 'cle_publique_d_ordre_mixte', 'cle_publique_d_ordre_2l' ] as $nom_cas ) {
 			$vecteur         = VectorsFixture::named( 'index_tampering', $nom_cas );
 			$cas[ $nom_cas ] = [ VectorsFixture::bin( $vecteur['signature'] ), self::INDEX_DOMAIN . $vecteur['index'], VectorsFixture::bin( $vecteur['public_key'] ) ];
 		}
@@ -395,7 +395,8 @@ final class SodiumTest extends TestCase {
 		$cas['r_non_canonique'] = [ self::bin( 'f0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f' ) . $s, $msg, $cle ];
 		// clé hors de la courbe (n° 5) ;
 		$cas['cle_hors_courbe'] = [ $sig, $msg, self::bin( self::HORS_COURBE ) ];
-		// clé d'ordre 2·L (n° 5 : L·A = (0, −1), X nul mais pas le neutre).
+		// clé d'ordre 2·L (n° 5 : L·A = (0, −1), X nul mais pas le neutre), en plus du vecteur
+		// cle_publique_d_ordre_2l lu plus haut.
 		$cas['cle_d_ordre_2l'] = [ $sig, $msg, self::bin( self::ORDRE_2L ) ];
 
 		$appels   = 0;
@@ -455,33 +456,41 @@ final class SodiumTest extends TestCase {
 		if ( ! extension_loaded( 'sodium' ) ) {
 			self::markTestSkipped( 'Extension sodium absente : ce cas montre ce que sodium natif accepte seul, il ne se joue qu\'avec elle.' );
 		}
-		$cle       = self::bin( self::ORDRE_2L );
-		$signature = self::bin( self::SIGNATURE_2L );
-		$message   = self::bin( self::MESSAGE_2L );
+		// Deux clés d'ordre 2·L : celle construite ici (TEST 1 + (0, −1)) et le vecteur partagé
+		// cle_publique_d_ordre_2l ([a]B + (0, −1), h pair), que les quatre implémentations refusent.
+		$vecteur = VectorsFixture::named( 'index_tampering', 'cle_publique_d_ordre_2l' );
+		$cas     = [
+			'cle_d_ordre_2l'          => [ self::bin( self::SIGNATURE_2L ), self::bin( self::MESSAGE_2L ), self::bin( self::ORDRE_2L ) ],
+			'cle_publique_d_ordre_2l' => [ VectorsFixture::bin( $vecteur['signature'] ), self::INDEX_DOMAIN . $vecteur['index'], VectorsFixture::bin( $vecteur['public_key'] ) ],
+		];
 
-		// Le cas est réel : libsodium ne teste que X après la multiplication par L
-		// (ge25519_is_on_main_subgroup, ed25519_ref10.c), et L·A vaut ici (0, −1). La conversion
-		// accepte donc la clé, et la vérification la signature fabriquée.
-		try {
-			$conversion = 32 === strlen( sodium_crypto_sign_ed25519_pk_to_curve25519( $cle ) );
-		} catch ( \SodiumException ) {
-			$conversion = false;
-		}
-		if ( ! $conversion || ! sodium_crypto_sign_verify_detached( $signature, $message, $cle ) ) {
-			self::markTestSkipped( 'Le sodium natif de ce PHP (libsodium ' . SODIUM_LIBRARY_VERSION . ') refuse déjà seul la clé d\'ordre 2·L : le cas ne montre plus l\'écart. Action : relever ce que fait cette version et le reporter au § 8.1 de docs/backup-format.md.' );
-		}
-		// La copie du parc (vendor, 1.24.0) seule l'accepte aussi (avis PKSA-32g2-byr9-drtw) ; une
-		// copie rejouée peut la refuser (1.24.2) : rien n'est attendu d'elle seule.
 		$rejeu = getenv( 'G2RD_SODIUM_COMPAT_COPIE' );
-		if ( false === $rejeu || '' === $rejeu ) {
-			\ParagonIE_Sodium_Compat::$disableFallbackForUnitTests = true;
-			self::assertTrue( \ParagonIE_Sodium_Compat::crypto_sign_verify_detached( $signature, $message, $cle ), 'sodium_compat 1.24.0 seul accepte la clé d\'ordre 2·L.' );
+		foreach ( $cas as $nom_cas => [ $signature, $message, $cle ] ) {
+			// Le cas est réel : libsodium ne teste que X après la multiplication par L
+			// (ge25519_is_on_main_subgroup, ed25519_ref10.c), et L·A vaut ici (0, −1). La conversion
+			// accepte donc la clé, et la vérification la signature fabriquée.
+			try {
+				$conversion = 32 === strlen( sodium_crypto_sign_ed25519_pk_to_curve25519( $cle ) );
+			} catch ( \SodiumException ) {
+				$conversion = false;
+			}
+			if ( ! $conversion || ! sodium_crypto_sign_verify_detached( $signature, $message, $cle ) ) {
+				self::markTestSkipped( 'Le sodium natif de ce PHP (libsodium ' . SODIUM_LIBRARY_VERSION . ') refuse déjà seul la clé d\'ordre 2·L (' . $nom_cas . ') : le cas ne montre plus l\'écart. Action : relever ce que fait cette version et le reporter au § 8.1 de docs/backup-format.md.' );
+			}
+			// La copie du parc (vendor, 1.24.0) seule l'accepte aussi (avis PKSA-32g2-byr9-drtw) ;
+			// une copie rejouée peut la refuser (1.24.2) : rien n'est attendu d'elle seule.
+			if ( false === $rejeu || '' === $rejeu ) {
+				\ParagonIE_Sodium_Compat::$disableFallbackForUnitTests = true;
+				self::assertTrue( \ParagonIE_Sodium_Compat::crypto_sign_verify_detached( $signature, $message, $cle ), 'sodium_compat 1.24.0 seul accepte la clé d\'ordre 2·L (' . $nom_cas . ').' );
+			}
 		}
 
 		$ed = VectorsFixture::section( 'self_test' )['ed25519'][0];
 		foreach ( self::moteurs() as $nom => $sodium ) {
-			self::assertFalse( $sodium->ed25519_verify( $signature, $message, $cle ), 'clé d\'ordre 2·L, ' . $nom );
-			// Témoin : la clé du TEST 1, dont celle-ci dérive, reste acceptée.
+			foreach ( $cas as $nom_cas => [ $signature, $message, $cle ] ) {
+				self::assertFalse( $sodium->ed25519_verify( $signature, $message, $cle ), $nom_cas . ', ' . $nom );
+			}
+			// Témoin : la clé du TEST 1, dont la clé construite dérive, reste acceptée.
 			self::assertTrue( $sodium->ed25519_verify( VectorsFixture::bin( $ed['signature'] ), VectorsFixture::bin( $ed['message'] ), VectorsFixture::bin( $ed['public_key'] ) ), 'TEST 1, ' . $nom );
 		}
 	}
