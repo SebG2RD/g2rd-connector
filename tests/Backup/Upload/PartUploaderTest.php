@@ -30,6 +30,9 @@ final class PartUploaderTest extends TestCase {
 
 	private const VALIDITE = 900;
 
+	/** Date HTTP (RFC 7231) écrite en clair : DATE_RFC7231 est obsolète depuis PHP 8.5. */
+	private const DATE_HTTP = 'D, d M Y H:i:s \G\M\T';
+
 	private const ETAG = '"9e107d9d372bb6826bd81d3542a419d6"';
 
 	/** @var list<array{url: string, args: array<string, mixed>}> Appels à wp_remote_request, dans l'ordre. */
@@ -326,8 +329,13 @@ final class PartUploaderTest extends TestCase {
 		$fichier = $this->fichier( 'abcdefghij' );
 		$echeance = self::horodatage_signe() + self::VALIDITE;
 
-		foreach ( [ 'à l\'échéance' => $echeance, 'une heure après' => $echeance + 3600 ] as $cas => $date_stockage ) {
-			$this->reponse = self::reponse( 403, [ 'date' => gmdate( DATE_RFC7231, $date_stockage ) ], self::erreur_s3( 'AccessDenied' ) );
+		foreach ( [
+			// Écrite à la main : fixe la forme attendue sans passer par le format du code.
+			'à l\'échéance, date littérale' => 'Sat, 24 Oct 2026 12:15:00 GMT',
+			'à l\'échéance'                 => gmdate( self::DATE_HTTP, $echeance ),
+			'une heure après'               => gmdate( self::DATE_HTTP, $echeance + 3600 ),
+		] as $cas => $date_stockage ) {
+			$this->reponse = self::reponse( 403, [ 'date' => $date_stockage ], self::erreur_s3( 'AccessDenied' ) );
 
 			$resultat = ( new PartUploader() )->upload( self::url(), self::HOTE, null, $fichier, 0, 10, 30 );
 
@@ -345,12 +353,12 @@ final class PartUploaderTest extends TestCase {
 		$echeance = self::horodatage_signe() + self::VALIDITE;
 
 		foreach ( [
-			'une seconde avant'   => [ 'date' => gmdate( DATE_RFC7231, $echeance - 1 ) ],
+			'une seconde avant'   => [ 'date' => gmdate( self::DATE_HTTP, $echeance - 1 ) ],
 			'sans date'           => [],
 			'date illisible'      => [ 'date' => 'demain' ],
 			'jour de semaine faux' => [ 'date' => 'Mon, 24 Oct 2026 13:00:00 GMT' ],
 			'autre fuseau'        => [ 'date' => gmdate( 'D, d M Y H:i:s', $echeance + 3600 ) . ' +0000' ],
-			'plusieurs dates'     => [ 'date' => [ gmdate( DATE_RFC7231, $echeance + 3600 ), gmdate( DATE_RFC7231, $echeance + 7200 ) ] ],
+			'plusieurs dates'     => [ 'date' => [ gmdate( self::DATE_HTTP, $echeance + 3600 ), gmdate( self::DATE_HTTP, $echeance + 7200 ) ] ],
 		] as $cas => $entetes ) {
 			$this->reponse = self::reponse( 403, $entetes, self::erreur_s3( 'AccessDenied' ) );
 

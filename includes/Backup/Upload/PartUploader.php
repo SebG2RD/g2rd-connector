@@ -55,6 +55,13 @@ final class PartUploader {
 	private const STORAGE_CODE_PATTERN = '/^[A-Za-z]{1,64}$/D';
 
 	/**
+	 * Forme exacte d'une date HTTP (RFC 7231, IMF-fixdate), toujours en GMT. Écrite en
+	 * clair : DATE_RFC7231, qui vaut la même chose, est obsolète depuis PHP 8.5
+	 * (E_DEPRECATED sur les sites passés en 8.5).
+	 */
+	private const HTTP_DATE_FORMAT = 'D, d M Y H:i:s \G\M\T';
+
+	/**
 	 * @param bool $force_ipv4          IPv4 forcée vers l'hôte de stockage : signature du contrat,
 	 *                                  sans effet tant que la tâche 19 du plan de la phase 3 ne l'a
 	 *                                  pas branchée (aucun appelant d'ici là).
@@ -219,8 +226,9 @@ final class PartUploader {
 
 		$bytes = '';
 		try {
-			// Lecture bornée d'une partie ; WP_Filesystem n'a pas d'API de lecture par décalage
-			// (fseek n'est pas visé par WordPress.WP.AlternativeFunctions).
+			// fseek n'a pas de code d'erreur propre dans ce sniff : l'ignore vise le sniff
+			// entier, sur cette seule ligne, sans masquer les autres sniffs.
+			// phpcs:ignore WordPress.WP.AlternativeFunctions -- lecture bornée d'une partie ; WP_Filesystem n'a pas d'API de lecture par décalage.
 			if ( 0 !== fseek( $handle, $offset ) ) {
 				return null;
 			}
@@ -290,7 +298,7 @@ final class PartUploader {
 	 */
 	private static function storage_date( array $response ): ?int {
 		$date = wp_remote_retrieve_header( $response, 'date' );
-		return is_string( $date ) ? self::parse_utc( '!' . DATE_RFC7231, DATE_RFC7231, $date ) : null;
+		return is_string( $date ) ? self::parse_utc( '!' . self::HTTP_DATE_FORMAT, self::HTTP_DATE_FORMAT, $date ) : null;
 	}
 
 	/**
