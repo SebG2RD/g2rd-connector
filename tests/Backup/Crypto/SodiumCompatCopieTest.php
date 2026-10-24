@@ -45,11 +45,15 @@ use PHPUnit\Framework\TestCase;
  * Empreinte d'une copie : SHA-256 de la liste triée « chemin \0 SHA-256 du contenu \n » des
  * fichiers de src/, lib/, namespaced/, autoload.php et autoload-php7.php, fins de ligne en LF.
  *
- * Relevé à refaire (Dependabot ignore ce paquet, personne d'autre ne préviendra) : à chaque
- * nouvelle version majeure ou mineure de WordPress sur le parc, recalculer l'empreinte du
- * wp-includes/sodium_compat de son paquet officiel. Si elle change, mettre EMPREINTE_PARC,
- * EMPREINTES_CONNUES et l'épinglage de composer.json à jour, puis rejouer le groupe
- * sodium-compat contre l'ancienne copie (commande ci-dessus).
+ * Relevé à refaire : à chaque nouvelle version majeure ou mineure de WordPress sur le parc,
+ * recalculer l'empreinte du wp-includes/sodium_compat de son paquet officiel. Si elle change,
+ * mettre EMPREINTE_PARC, EMPREINTES_CONNUES et l'épinglage de composer.json à jour, puis rejouer
+ * le groupe sodium-compat contre l'ancienne copie (commande ci-dessus).
+ *
+ * Dependabot n'ignore que les montées majeures de ce paquet (.github/dependabot.yml : WordPress
+ * livre la ligne 1.x). Une PR de correctif (mineure, patch ou sécurité) arrive donc seule et fait
+ * échouer ce test : c'est voulu, elle rappelle de refaire le relevé. Elle ne se fusionne pas
+ * telle quelle, car l'épinglage suit la copie du parc, pas Packagist.
  */
 #[Group( 'sodium-compat' )]
 final class SodiumCompatCopieTest extends TestCase {
@@ -96,8 +100,9 @@ final class SodiumCompatCopieTest extends TestCase {
 				$empreinte,
 				'La copie de développement de sodium_compat (' . $nom . ') n\'est plus celle que WordPress livre au '
 				. 'parc (1.24.0 dans WordPress 6.9.10 à 7.1.3). Cause probable : une montée de version de '
-				. 'paragonie/sodium_compat dans composer.json. Action : la garder épinglée sur la copie du parc ; '
-				. 'ne la changer qu\'avec un nouveau relevé des versions de WordPress des sites.'
+				. 'paragonie/sodium_compat dans composer.json, par exemple une PR de Dependabot. Action : la garder '
+				. 'épinglée sur la copie du parc ; ne la changer qu\'avec un nouveau relevé des versions de WordPress '
+				. 'des sites (règle du docblock de ce test).'
 			);
 			return;
 		}
