@@ -38,10 +38,18 @@ use PHPUnit\Framework\TestCase;
  *   <dossier> est le wp-includes/sodium_compat d'un paquet officiel de WordPress, ou une
  *   étiquette de paragonie/sodium_compat, extrait dans un dossier temporaire. Le chargement
  *   anticipé est nécessaire : PHPUnit charge vendor/autoload.php, donc la copie de vendor, avant
- *   tests/bootstrap.php. Sans la variable, aucun rejeu : la suite ne connaît que vendor.
+ *   tests/bootstrap.php. Sans la variable, aucun rejeu : la suite ne connaît que vendor. En rejeu,
+ *   le test écrit sur la sortie d'erreur la copie rejouée (nom et empreinte), pour que la trace
+ *   le dise même quand tout passe.
  *
  * Empreinte d'une copie : SHA-256 de la liste triée « chemin \0 SHA-256 du contenu \n » des
  * fichiers de src/, lib/, namespaced/, autoload.php et autoload-php7.php, fins de ligne en LF.
+ *
+ * Relevé à refaire (Dependabot ignore ce paquet, personne d'autre ne préviendra) : à chaque
+ * nouvelle version majeure ou mineure de WordPress sur le parc, recalculer l'empreinte du
+ * wp-includes/sodium_compat de son paquet officiel. Si elle change, mettre EMPREINTE_PARC,
+ * EMPREINTES_CONNUES et l'épinglage de composer.json à jour, puis rejouer le groupe
+ * sodium-compat contre l'ancienne copie (commande ci-dessus).
  */
 #[Group( 'sodium-compat' )]
 final class SodiumCompatCopieTest extends TestCase {
@@ -57,18 +65,22 @@ final class SodiumCompatCopieTest extends TestCase {
 		'f35b98614d8e2acfaaa40083dbec159edc716391b71e46fb08107b637af2f94d' => 'sodium_compat 1.24.2',
 	];
 
-	/** Classes dont le code compte pour X25519 et Ed25519 : toutes doivent venir de la même copie. */
+	/**
+	 * Classes dont le code compte pour X25519 et Ed25519 : toutes doivent venir de la même copie.
+	 * Les classes Core32 n'y sont pas : sodium_compat ne les emploie qu'en PHP 32 bits.
+	 */
 	private const CLASSES = [
 		'ParagonIE_Sodium_Compat',
 		'ParagonIE_Sodium_Core_Ed25519',
 		'ParagonIE_Sodium_Core_Curve25519',
 		'ParagonIE_Sodium_Core_X25519',
+		'ParagonIE_Sodium_Core_Util',
 	];
 
 	public function test_la_copie_chargee_est_celle_attendue(): void {
 		$dossier   = self::dossier_charge();
 		$empreinte = self::empreinte( $dossier );
-		$nom       = self::EMPREINTES_CONNUES[ $empreinte ] ?? 'copie inconnue, empreinte ' . $empreinte;
+		$nom       = ( self::EMPREINTES_CONNUES[ $empreinte ] ?? 'copie inconnue' ) . ', empreinte ' . $empreinte;
 		$demandee  = getenv( 'G2RD_SODIUM_COMPAT_COPIE' );
 
 		if ( false === $demandee || '' === $demandee ) {
@@ -97,6 +109,12 @@ final class SodiumCompatCopieTest extends TestCase {
 			. '). Cause probable : la copie n\'est pas chargée avant vendor. Action : lancer '
 			. 'php -d auto_prepend_file=<dossier>/autoload.php vendor/bin/phpunit --group sodium-compat.'
 		);
+
+		// Trace du rejeu, même réussi : la sortie d'erreur n'est pas comptée comme une sortie du
+		// test (beStrictAboutOutputDuringTests ne regarde que la sortie standard).
+		if ( defined( 'STDERR' ) ) {
+			fwrite( STDERR, PHP_EOL . 'Rejeu sodium-compat : copie ' . $dossier . ' (' . $nom . ')' . PHP_EOL );
+		}
 	}
 
 	/**

@@ -22,6 +22,9 @@ updates:
       # à 7.1.3) : les cas « compat » des tests doivent voir le même code que les
       # sites. Sa version suit WordPress, pas Packagist ; une montée ferait échouer
       # tests/Backup/Crypto/SodiumCompatCopieTest.php et tout le groupe avec elle.
+      # Aucune alerte ne viendra donc d'ici : la montée se décide par le relevé à
+      # refaire à chaque version majeure ou mineure de WordPress sur le parc (règle
+      # écrite dans le docblock de ce test).
       - dependency-name: paragonie/sodium_compat
 
   - package-ecosystem: npm
