@@ -1,0 +1,21 @@
+#!/bin/sh
+# Banc de mesure (phase 3, tâche 20) : lancé dans un conteneur jetable de l'image
+# WordPress locale. Faux point d'accès S3 en arrière-plan, puis une mesure par
+# processus PHP (pics isolés).
+set -eu
+php -d post_max_size=0 -d memory_limit=-1 -S 127.0.0.1:9311 /mesure/serveur.php >/tmp/serveur.log 2>&1 &
+SERVEUR=$!
+until php -r 'exit(@fsockopen("127.0.0.1", 9311) ? 0 : 1);'; do :; done
+echo "# mesure brute (memory_limit 1G, sans lest), deux passages"
+for passage in 1 2; do
+  for taille in 1 16 64; do
+    php -d memory_limit=1G /mesure/mesure.php "$taille" 0
+  done
+done
+echo "# site simulé : 48 Mio déjà occupés avant l'envoi"
+for limite in 128M 256M; do
+  for taille in 16 24 32 64; do
+    php -d memory_limit="$limite" /mesure/mesure.php "$taille" 48 || true
+  done
+done
+kill "$SERVEUR"
