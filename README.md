@@ -41,6 +41,7 @@ g2rd-connector/
 │   ├── DirectLogin/            connexion directe : point d'entrée, contrôles, snapshot
 │   ├── CommandRuns/            commandes en arrière-plan : stockage, créneau, cycle de vie, exécution après la réponse
 │   ├── Environment/            mesure de l'environnement (bloc environment du snapshot)
+│   ├── Backup/Upload/          envoi d'une partie de sauvegarde vers une URL présignée ; non branché avant la phase 4
 │   ├── Security/
 │   │   ├── KeyDerivation       dérivation des clés du SiteToken (trois contextes)
 │   │   ├── RequestSignature    signature des requêtes du manager
