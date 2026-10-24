@@ -35,7 +35,15 @@ use PHPUnit\Framework\TestCase;
  * $disableFallbackForUnitTests. Depuis la relecture de la tâche 13, le contrôle n° 5 de la
  * vérification (sous-groupe principal) passe, dans les deux moteurs, par les classes Core de
  * sodium_compat : tout cas qui vérifie une signature porte donc le groupe sodium-compat (rejeu
- * contre une autre copie : commande du docblock de SodiumCompatCopieTest).
+ * contre une autre copie : commande du docblock de SodiumCompatCopieTest), sauf
+ * test_une_signature_fausse_ne_se_verifie_pas_avec_la_cle_du_site. Ce test tourne dans un
+ * processus à part, que PHPUnit 10.5 lance sans le `-d auto_prepend_file` du rejeu
+ * (AbstractPhpProcess::getCommand() ne transmet que les réglages de Xdebug et de PCOV ; sonde du
+ * 25/10 : chargement anticipé vide dans l'enfant, variable G2RD_SODIUM_COMPAT_COPIE présente).
+ * L'enfant charge donc toujours la copie de vendor : dans le groupe, il passerait au rejeu sans
+ * avoir essayé la copie rejouée. Son objet (la bibliothèque n'enchaîne pas sign() et verify())
+ * ne dépend pas de la copie ; le refus d'une signature altérée par chaque copie est rejoué par
+ * test_les_index_alteres_ne_se_verifient_pas_en_natif et …_en_compat.
  */
 final class BackupIndexTest extends TestCase {
 

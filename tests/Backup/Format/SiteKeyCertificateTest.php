@@ -154,6 +154,14 @@ final class SiteKeyCertificateTest extends TestCase {
 		self::assertFalse( self::verifier( VectorsFixture::named( 'site_key_certificate', 'version_1' ), [], $sans ) );
 	}
 
+	/**
+	 * Portée : les valeurs reçues (arguments hors du contrat de message(), certificat, identifiant
+	 * et entrées de la liste épinglée quelconques), avec un moteur. Aucune ne lève : chacune rend
+	 * faux. La seule exception de verify() n'est pas une valeur reçue mais une panne : sans moteur,
+	 * une clé épinglée étant à essayer, CRYPTO_UNAVAILABLE
+	 * (test_sans_moteur_une_panne_n_est_pas_un_certificat_invalide ; liste vide sans moteur : faux,
+	 * test_une_liste_epinglee_vide_refuse_tout).
+	 */
 	#[Group( 'sodium-compat' )]
 	public function test_la_verification_ne_leve_jamais(): void {
 		$cas         = VectorsFixture::named( 'site_key_certificate', 'version_1' );
@@ -207,6 +215,10 @@ final class SiteKeyCertificateTest extends TestCase {
 	public function test_sans_moteur_une_panne_n_est_pas_un_certificat_invalide(): void {
 		$cas  = VectorsFixture::named( 'site_key_certificate', 'version_1' );
 		$sans = new Sodium( static fn (): bool => false, static fn (): bool => false );
+
+		// Identifiant absent de la liste : rien n'est à vérifier, faux sans lever, même sans moteur.
+		$non_epinglee = VectorsFixture::named( 'site_key_certificate_tampering', 'cle_de_service_non_epinglee' );
+		self::assertFalse( self::verifier( $cas, [ VectorsFixture::bin( $non_epinglee['pinned_service_keys'][0]['public_key'] ) ], $sans ) );
 
 		try {
 			self::verifier( $cas, [ VectorsFixture::bin( $cas['service_public_key'] ) ], $sans );
