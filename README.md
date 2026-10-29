@@ -41,6 +41,9 @@ g2rd-connector/
 │   ├── DirectLogin/            connexion directe : point d'entrée, contrôles, snapshot
 │   ├── CommandRuns/            commandes en arrière-plan : stockage, créneau, cycle de vie, exécution après la réponse
 │   ├── Environment/            mesure de l'environnement (bloc environment du snapshot)
+│   ├── Backup/                 sauvegardes chiffrées : préparation, rien de branché
+│   │   ├── Crypto/             AES-256-GCM, HKDF, X25519 et Ed25519 (sodium ou sodium_compat), autotest
+│   │   └── Format/             format G2BK v1 : en-tête, HPKE, segments, index signé, certificat
 │   ├── Security/
 │   │   ├── KeyDerivation       dérivation des clés du SiteToken (trois contextes)
 │   │   ├── RequestSignature    signature des requêtes du manager
@@ -910,6 +913,62 @@ chacun s'additionne.
     sert jamais.
 
   Les champs JSON sont inchangés.
+
+## Sauvegardes chiffrées (préparation, rien de branché)
+
+`includes/Backup/` prépare les sauvegardes chiffrées de bout en bout (phase 2 du chantier) : c'est
+une bibliothèque **que rien n'appelle encore**. Aucune commande (`CommandExecutor::ALLOWED` et
+`SIGNED_ONLY` sont inchangées), aucun crochet, aucune option, aucune route, aucune tâche planifiée,
+aucun appel réseau, et rien ne s'exécute au chargement de ses fichiers. Rien n'est envoyé et rien
+ne change pour un site : `readme.txt` n'en dit donc rien. `tests/Backup/NoWiringTest.php` le
+contrôle sur le code. Les commandes `backup_*` et la capacité `encrypted_backup` viendront en
+phase 4.
+
+- `Backup/Crypto/` : les primitives. AES-256-GCM par OpenSSL (étiquette de 16 octets imposée),
+  HKDF-SHA256, X25519 et Ed25519 par l'extension sodium ou, sans elle, par la copie de
+  `sodium_compat` que livre WordPress (`wp-includes/sodium_compat`), choisie par
+  `extension_loaded( 'sodium' )`. La vérification Ed25519 est stricte : ses cinq contrôles sont
+  faits par le connecteur lui-même, avec le même code pour les deux moteurs. `SelfTest` est un
+  autotest à valeurs connues.
+- `Backup/Format/` : le format `G2BK v1`. En-tête de segment de 148 octets ; clé de données neuve
+  pour chaque segment, scellée par HPKE (RFC 9180 : X25519, HKDF-SHA256, AES-256-GCM) vers la clé
+  publique du site, jamais écrite ; écriture et lecture en flux, bloc par bloc (AES-256-GCM), sans
+  jamais tenir le segment entier en mémoire ; index signé Ed25519 ; certificat de la clé de site.
+  Les refus rendent des codes stables (`FormatError`) ; les phrases en français et en anglais
+  viendront avec les commandes (phase 4).
+
+Références, dans le dépôt de G2RD WP Manager : la spécification
+(`docs/superpowers/specs/2026-10-04-sauvegardes-chiffrees-design.md`) et le format, qui fait foi à
+l'octet (`docs/backup-format.md`). Les vecteurs partagés (`tests/fixtures/backup-format-vectors.json`)
+sont une copie à l'octet de ceux de la plateforme. Seul son générateur Python indépendant
+(`tools/backup-format-vectors/`) les produit : on les régénère par ce script, jamais à la main.
+
+### Relevé de `sodium_compat`
+
+Sans sodium natif, le connecteur calcule X25519 et Ed25519 avec la copie de `sodium_compat` que
+livre WordPress, défauts compris. Les tests du groupe `sodium-compat` doivent donc tourner contre
+cette copie-là. La dépendance de développement `paragonie/sodium_compat` est épinglée sur
+**1.24.0**, la copie de WordPress 6.9.10 à 7.1.3 (tout le parc au 24/10/2026), et non sur la
+dernière version publiée. L'avis PKSA-32g2-byr9-drtw qu'elle porte (contrôle du sous-groupe
+principal inopérant, que le connecteur fait lui-même) est ignoré par `composer audit`
+(`config.audit.ignore`) : en développement seulement, car `vendor/` n'est pas dans le ZIP.
+`tests/Backup/Crypto/SodiumCompatCopieTest.php` échoue si la copie chargée n'est pas celle-là.
+
+Dependabot ne prévient pas quand WordPress livre une autre copie au parc (1.24.1 ou plus, ou 2.x) :
+il suit Packagist, pas WordPress. Il n'ignore plus que les montées majeures du paquet
+(`.github/dependabot.yml`) : une PR de correctif (mineure, patch ou sécurité) fait échouer
+`SodiumCompatCopieTest`. Elle rappelle ce relevé et ne se fusionne pas telle quelle. À chaque
+nouvelle version majeure ou mineure de WordPress sur le parc :
+
+1. relever les versions de WordPress des sites (lecture seule) ;
+2. recalculer l'empreinte du `wp-includes/sodium_compat` du paquet officiel de WordPress (calcul
+   décrit dans le docblock de `tests/Backup/Crypto/SodiumCompatCopieTest.php`) ;
+3. si elle change, mettre à jour `EMPREINTE_PARC`, `EMPREINTES_CONNUES` et l'épinglage de
+   `composer.json` ;
+4. rejouer le groupe `sodium-compat` contre l'ancienne copie (variable `G2RD_SODIUM_COMPAT_COPIE`,
+   commande donnée dans le même docblock).
+
+La même règle est écrite dans le docblock de `SodiumCompatCopieTest`.
 
 ## Développement
 
