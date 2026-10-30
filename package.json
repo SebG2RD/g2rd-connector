@@ -11,7 +11,7 @@
 		"format": "wp-scripts format assets/admin/src"
 	},
 	"devDependencies": {
-		"@wordpress/scripts": "^36.0.0"
+		"@wordpress/scripts": "^37.0.0"
 	},
 	"dependencies": {
 		"@wordpress/element": "^10.0.0"
@@ -25,7 +25,7 @@
 		"markdownlint-cli": {
 			"js-yaml": "^5.4.1"
 		},
-		"qs": "^6.16.0",
+		"qs": "^6.17.1",
 		"katex": "^0.18.2",
 		"smol-toml": "^1.9.0",
 		"postcss-selector-parser": "^7.1.6"
