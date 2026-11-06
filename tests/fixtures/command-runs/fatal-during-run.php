@@ -16,7 +16,9 @@
  *   - « fatale-dans-la-reprise » : la même, puis une seconde erreur fatale, dans la reprise ;
  *   - « memoire » (1.16) : la commande épuise la mémoire de PHP (limite abaissée à 8 Mo de
  *     plus que l'usage du moment, puis allocations de 512 Ko jusqu'à l'erreur fatale
- *     « Allowed memory size … exhausted ») : le dernier filet doit passer quand même ;
+ *     « Allowed memory size … exhausted ») : le dernier filet doit passer quand même, sauf
+ *     sous un PHP qui n'appelle plus aucune fonction d'arrêt après la mémoire épuisée (cf.
+ *     oom-shutdown-probe.php) ;
  *   - « sortie » : exit pendant la commande (wp_die() d'une extension), après un simple
  *     avertissement, que error_get_last() rend encore à l'arrêt ;
  *   - « fin-normale » : la commande rend son résultat.

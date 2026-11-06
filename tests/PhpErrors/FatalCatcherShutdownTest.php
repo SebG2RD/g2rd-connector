@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace G2RD\Connector\Tests\PhpErrors;
 
 use G2RD\Connector\CommandRuns\AfterResponseRunner;
+use G2RD\Connector\CommandRuns\RunState;
 use G2RD\Connector\CommandRuns\RunStore;
 use G2RD\Connector\PhpErrors\Buffer;
+use G2RD\Connector\Tests\CommandRuns\OomShutdownProbe;
 use G2RD\Connector\Tests\TestCase;
 
 /**
@@ -77,8 +79,23 @@ final class FatalCatcherShutdownTest extends TestCase {
 	 * Mémoire épuisée, relevé armé : le dernier filet passe encore (le relevé lui laisse la
 	 * place). L'enregistrement du groupe, repoussé après lui, peut manquer de mémoire : il
 	 * n'est pas exigé ici, et le compte rendu de la tâche dit ce qui a été observé.
+	 *
+	 * Un PHP qui n'appelle plus aucune fonction d'arrêt après la mémoire épuisée (OomShutdownProbe :
+	 * PHP 8.1.34 du dépôt ondrej, celui de la CI) : ni le relevé ni le dernier filet ne passent,
+	 * le script à part n'écrit que le message de PHP lui-même, et l'exécution reste en cours ; le
+	 * ramassage la clôt (ShutdownOrderTest::test_memoire_epuisee_le_dernier_filet_passe_encore()).
 	 */
 	public function test_memoire_epuisee_le_dernier_filet_passe_avec_le_releve(): void {
+		if ( ! OomShutdownProbe::php_calls_shutdown_functions() ) {
+			$arret = $this->arret_reel( 'memoire', OomShutdownProbe::PHP_OWN_MESSAGE );
+
+			self::assertNotSame( 0, $arret['code'], 'Le processus meurt.' );
+			self::assertSame( self::DEMARRAGE, $arret['journal'], 'Aucune fonction d\'arrêt : ni relevé, ni dernier filet.' );
+			self::assertArrayNotHasKey( Buffer::OPTION, $arret['options'] );
+			self::assertSame( RunState::RUNNING, $arret['execution']['state'] ?? null );
+
+			return;
+		}
 		$arret = $this->arret_reel( 'memoire' );
 
 		self::assertSame( 255, $arret['code'], $arret['sortie'] );
@@ -89,9 +106,12 @@ final class FatalCatcherShutdownTest extends TestCase {
 	/**
 	 * Lance le script à part avec le relevé armé (même mise en œuvre que ShutdownOrderTest::arret_reel()).
 	 *
+	 * @param string $scenario       Scénario du script.
+	 * @param string $message_de_php '' : rien ne doit être écrit sur la sortie. Sinon, motif de
+	 *                               la seule sortie admise : le message de PHP lui-même.
 	 * @return array{code: int, sortie: string, journal: list<string>, options: array<string, mixed>, notices: list<string>, execution: array<string, mixed>}
 	 */
-	private function arret_reel( string $scenario ): array {
+	private function arret_reel( string $scenario, string $message_de_php = '' ): array {
 		if ( ! function_exists( 'exec' ) ) {
 			self::markTestSkipped( 'exec() est désactivée : impossible de lancer un processus PHP à part.' );
 		}
@@ -110,7 +130,11 @@ final class FatalCatcherShutdownTest extends TestCase {
 		}
 		$texte = implode( "\n", $sortie );
 		self::assertIsArray( $releve, 'Relevé du processus à part illisible. Sortie : ' . $texte );
-		self::assertSame( '', $texte, 'Rien d\'écrit sur la sortie du processus à part.' );
+		if ( '' === $message_de_php ) {
+			self::assertSame( '', $texte, 'Rien d\'écrit sur la sortie du processus à part.' );
+		} else {
+			self::assertMatchesRegularExpression( $message_de_php, $texte, 'Rien d\'écrit sur la sortie du processus à part, à part le message de PHP lui-même.' );
+		}
 		$ligne = $releve['lignes'][ RunStore::option_name( self::ID ) ]['value'] ?? null;
 
 		return [
