@@ -30,9 +30,10 @@
  *
  * Durée de vie (décision n° 7) : une exécution terminée est gardée 7 jours, 200
  * enregistrements au plus ; une exécution non terminée n'est jamais purgée (purge(),
- * branchée sur la tâche biquotidienne) : seul le ramassage (RunReaper) la clôt, après
- * l'avoir cherchée par unfinished(). Tout part à la désinstallation, créneau compris
- * (delete_all()).
+ * branchée sur la tâche biquotidienne et sur chaque acceptation) : seul le ramassage
+ * (RunReaper) la clôt, après l'avoir cherchée par unfinished(). La purge ne lit que le
+ * début de chaque valeur (numéro, état, dates), jamais le résultat. Tout part à la
+ * désinstallation, créneau compris (delete_all()).
  *
  * @package G2RD\Connector
  */
@@ -86,9 +87,34 @@ final class RunStore {
 	 * Options lues au plus par recherche (une purge, un lot de delete_all()). D'ordinaire :
 	 * 200 enregistrements et une ou deux exécutions en cours. La marge couvre une purge
 	 * longtemps empêchée ; au-delà, le passage suivant traite la suite. Borne aussi la
-	 * mémoire : un enregistrement fait 64 Ko au plus.
+	 * mémoire : un enregistrement fait 64 Ko au plus, et la purge n'en lit que le début
+	 * (HEAD_BYTES).
 	 */
 	private const SCAN_LIMIT = 500;
+
+	/**
+	 * Début de valeur lu par la purge pour chaque enregistrement (caractères, octets pour
+	 * les valeurs ASCII du connecteur) : les champs de tête, numéro, commande, empreinte,
+	 * état et dates, en font moins de 300. Lue à chaque acceptation, la valeur entière
+	 * (jusqu'à 64 Ko de résultat, 200 enregistrements gardés) pesait jusqu'à 12,8 Mo de
+	 * transfert et de décodage avant la réponse « reçue ». Une valeur plus courte est lue
+	 * entière.
+	 */
+	private const HEAD_BYTES = 1024;
+
+	/**
+	 * Dates d'une exécution, de celle qui date sa fin à celle qui la date à défaut :
+	 * fin, dernier signe de vie, démarrage, acceptation (finished_at()).
+	 */
+	private const AGE_DATES = [ 'finished_at', 'alive_at', 'started_at', 'accepted_at' ];
+
+	/**
+	 * Paires « clé: valeur simple » (texte, entier, null, booléen) qui ouvrent un objet
+	 * JSON, chacune suivie de sa virgule : une paire coupée par la fin du début lu n'est
+	 * jamais prise. S'arrête à la première valeur composée (résultat, interruption).
+	 * Quantificateurs possessifs : aucun retour en arrière sur le texte lu.
+	 */
+	private const HEAD_PAIRS_PATTERN = '/^\{((?:"[A-Za-z0-9_]++":(?:"(?:[^"\\\\]++|\\\\.)*+"|-?\d++|null|true|false),)*+)/';
 
 	/** Garde-fou de delete_all() : 100 lots de 500, très au-delà de ce qu'un site peut accumuler. */
 	private const DELETE_ALL_MAX_BATCHES = 100;
@@ -245,6 +271,15 @@ final class RunStore {
 	 *   - un enregistrement réécrit entre la lecture et la suppression (résultat tardif
 	 *     d'une exécution interrompue) : la suppression est conditionnelle, sur la valeur lue.
 	 *
+	 * Lecture bornée : la recherche ne lit que le début de chaque valeur (HEAD_BYTES), où
+	 * create() et les réécritures de RunLifecycle placent le numéro, l'état et les dates,
+	 * avant le résultat. Une valeur plus courte est lue entière par la recherche. Une
+	 * valeur plus longue n'est lue entière, une à la fois, que :
+	 *   - pour être supprimée : relue, elle ne l'est que si elle est encore terminée, à la
+	 *     même date ; puis la suppression conditionnelle porte sur la valeur relue ;
+	 *   - si son début ne suffit pas (champs écrits dans un autre ordre) : la règle reste
+	 *     celle de la valeur entière.
+	 *
 	 * Ménage seulement : si la base refuse la lecture ou une suppression, le passage
 	 * s'arrête sans erreur, et le suivant reprend.
 	 *
@@ -260,17 +295,29 @@ final class RunStore {
 
 		$records  = 0;
 		$finished = [];
-		foreach ( self::scan() as [ $name, $raw ] ) {
+		foreach ( self::scan_heads() as [ $name, $head ] ) {
 			if ( ! self::is_valid_id( substr( $name, strlen( self::OPTION_PREFIX ) ) ) ) {
 				continue;
 			}
-			$record = self::decode( $raw );
+			// Plus courte que le début lu : c'est la valeur entière.
+			$whole  = strlen( $head ) < self::HEAD_BYTES;
+			$record = $whole ? self::decode( $head ) : self::head_fields( $head );
+			if ( null === $record && ! $whole ) {
+				// Début insuffisant : la valeur entière, lue seule, décide.
+				try {
+					$record = self::decode( OptionRow::read_raw( $name ) );
+				} catch ( StoreUnavailable $e ) {
+					return 0;
+				}
+			}
 			if ( null === $record ) {
 				continue;
 			}
 			++$records;
 			if ( RunState::is_terminal( $record['state'] ) ) {
-				$finished[] = [ self::finished_at( $record ), $name, $raw ];
+				// Valeur gardée seulement si elle est courte : une longue est relue au moment
+				// de la supprimer, jamais retenue en mémoire.
+				$finished[] = [ self::finished_at( $record ), $name, $whole ? $head : null ];
 			}
 		}
 		// Les plus anciennes d'abord ; à date égale, par nom (ordre stable).
@@ -284,7 +331,14 @@ final class RunStore {
 			if ( $deleted >= $max_deletions || ( ! $expired && $records <= self::MAX_RECORDS ) ) {
 				break;
 			}
-			$result = OptionRow::delete_if_unchanged( $name, $raw );
+			if ( null === $raw ) {
+				try {
+					$raw = self::still_finished_at( $name, $finished_at );
+				} catch ( StoreUnavailable $e ) {
+					break;
+				}
+			}
+			$result = null === $raw ? 0 : OptionRow::delete_if_unchanged( $name, $raw );
 			if ( false === $result ) {
 				break;
 			}
@@ -553,7 +607,9 @@ final class RunStore {
 
 	/**
 	 * Options dont le nom commence par le préfixe (enregistrements, créneau…), SCAN_LIMIT
-	 * au plus, avec leur valeur brute. Vide si la base refuse la lecture.
+	 * au plus, avec leur valeur brute entière : un lot de delete_all() (désinstallation),
+	 * qui les supprime toutes. La purge n'en lit que le début (scan_heads()). Vide si la
+	 * base refuse la lecture.
 	 *
 	 * Le « _ » du préfixe est échappé : non échappé, il vaudrait n'importe quel caractère
 	 * dans LIKE, et la recherche attraperait les options d'une autre extension.
@@ -584,6 +640,85 @@ final class RunStore {
 	}
 
 	/**
+	 * Comme scan(), mais seulement les HEAD_BYTES premiers caractères de chaque valeur :
+	 * ce que la purge lit. SUBSTRING compte des caractères ; une valeur de moins de
+	 * HEAD_BYTES octets est donc toujours rendue entière. Vide si la base refuse la lecture.
+	 *
+	 * @return list<array{0: string, 1: string}> [ nom, début de la valeur ].
+	 */
+	private static function scan_heads(): array {
+		global $wpdb;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- recherche par préfixe d'options non autochargées, jamais lues par get_option() : aucun cache pertinent.
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT option_name, SUBSTRING(option_value, 1, %d) AS option_head FROM {$wpdb->options} WHERE option_name LIKE %s LIMIT %d",
+				self::HEAD_BYTES,
+				$wpdb->esc_like( self::OPTION_PREFIX ) . '%',
+				self::SCAN_LIMIT
+			),
+			ARRAY_A
+		);
+
+		$found = [];
+		foreach ( (array) $rows as $row ) {
+			if ( is_array( $row ) && is_string( $row['option_name'] ?? null ) && is_string( $row['option_head'] ?? null ) ) {
+				$found[] = [ $row['option_name'], $row['option_head'] ];
+			}
+		}
+
+		return $found;
+	}
+
+	/**
+	 * Champs de tête d'une valeur trop longue pour être lue entière (scan_heads()) : les
+	 * paires « clé: valeur simple » qui ouvrent l'objet JSON (HEAD_PAIRS_PATTERN). Rendues
+	 * seulement si elles suffisent à décider comme la valeur entière : numéro et état en
+	 * texte (cf. decode()), et les dates dont finished_at() a besoin. Null sinon (pas un
+	 * objet JSON, ou une date utile écrite plus loin) : l'appelant lit la valeur entière.
+	 *
+	 * @return array<string, mixed>|null
+	 */
+	private static function head_fields( string $head ): ?array {
+		if ( 1 !== preg_match( self::HEAD_PAIRS_PATTERN, $head, $matches ) ) {
+			return null;
+		}
+		$fields = json_decode( '{' . rtrim( $matches[1], ',' ) . '}', true );
+		if ( ! is_array( $fields ) || ! is_string( $fields['command_id'] ?? null ) || ! is_string( $fields['state'] ?? null ) ) {
+			return null;
+		}
+		// finished_at() prend la première date entière, dans cet ordre : une date absente du
+		// début avant elle peut être plus loin dans la valeur.
+		foreach ( self::AGE_DATES as $key ) {
+			if ( ! array_key_exists( $key, $fields ) ) {
+				return null;
+			}
+			if ( is_int( $fields[ $key ] ) ) {
+				break;
+			}
+		}
+
+		return $fields;
+	}
+
+	/**
+	 * Valeur entière de l'option `$name` (enregistrement long choisi par la purge), si elle
+	 * est encore celle d'une exécution terminée à `$finished_at` ; null sinon (supprimée,
+	 * illisible, ou réécrite entre-temps : résultat tardif d'une exécution interrompue).
+	 *
+	 * @throws StoreUnavailable Si la base refuse la lecture.
+	 */
+	private static function still_finished_at( string $name, int $finished_at ): ?string {
+		$raw    = OptionRow::read_raw( $name );
+		$record = self::decode( $raw );
+		if ( null === $record || ! RunState::is_terminal( $record['state'] ) || self::finished_at( $record ) !== $finished_at ) {
+			return null;
+		}
+
+		return $raw;
+	}
+
+	/**
 	 * Date à partir de laquelle compte l'âge d'une exécution terminée : sa fin ; à défaut,
 	 * la plus récente de ses dates connues (le dernier signe de vie suit le démarrage, qui
 	 * suit l'acceptation). Sans aucune date, 0 : la plus ancienne possible.
@@ -591,7 +726,7 @@ final class RunStore {
 	 * @param array<string, mixed> $record
 	 */
 	private static function finished_at( array $record ): int {
-		foreach ( [ 'finished_at', 'alive_at', 'started_at', 'accepted_at' ] as $key ) {
+		foreach ( self::AGE_DATES as $key ) {
 			if ( is_int( $record[ $key ] ?? null ) ) {
 				return $record[ $key ];
 			}

@@ -11,7 +11,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Commandes que la route `POST /g2rd/v1/command-runs` accepte d'exécuter en arrière-plan
- * (décision n° 5 du propriétaire : toutes, sauf les quatre instantanées qui restent sur
+ * (décision n° 5 du propriétaire : toutes, sauf les cinq instantanées qui restent sur
  * `/command`), et sonde de diagnostic dormante (décision n° 4).
  */
 final class AsyncCommandsTest extends TestCase {
@@ -33,7 +33,7 @@ final class AsyncCommandsTest extends TestCase {
 		self::assertSame( AsyncCommands::EXCLUDED, array_values( array_unique( AsyncCommands::EXCLUDED ) ) );
 	}
 
-	public function test_les_dix_commandes_longues_passent_en_arriere_plan_et_les_quatre_instantanees_restent_sur_command(): void {
+	public function test_les_dix_commandes_longues_passent_en_arriere_plan_et_les_cinq_instantanees_restent_sur_command(): void {
 		$admises = AsyncCommands::ADMITTED;
 		$exclues = AsyncCommands::EXCLUDED;
 		sort( $admises );
@@ -54,7 +54,7 @@ final class AsyncCommandsTest extends TestCase {
 			],
 			$admises
 		);
-		self::assertSame( [ 'check_updates', 'clear_cache', 'delete_restore_point', 'set_signature_policy' ], $exclues );
+		self::assertSame( [ 'check_updates', 'clear_cache', 'delete_restore_point', 'set_php_errors_capture', 'set_signature_policy' ], $exclues );
 	}
 
 	/**

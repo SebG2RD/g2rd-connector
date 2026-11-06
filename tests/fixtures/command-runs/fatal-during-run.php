@@ -14,9 +14,17 @@
  *     fois (« Cannot redeclare », erreur de compilation que rien ne rattrape), et le nom de
  *     sa fonction rend le message plus long que 2 Ko ;
  *   - « fatale-dans-la-reprise » : la même, puis une seconde erreur fatale, dans la reprise ;
+ *   - « memoire » (1.16) : la commande épuise la mémoire de PHP (limite abaissée à 8 Mo de
+ *     plus que l'usage du moment, puis allocations de 512 Ko jusqu'à l'erreur fatale
+ *     « Allowed memory size … exhausted ») : le dernier filet doit passer quand même ;
  *   - « sortie » : exit pendant la commande (wp_die() d'une extension), après un simple
  *     avertissement, que error_get_last() rend encore à l'arrêt ;
  *   - « fin-normale » : la commande rend son résultat.
+ *
+ * Troisième argument facultatif, « releve » (connecteur 1.16) : le relevé des erreurs PHP
+ * (PhpErrors\FatalCatcher) est armé avant tout le reste, comme dans g2rd-connector.php ; le
+ * journal note alors « erreurs PHP enregistrées » quand le tampon est écrit. Sans lui, le
+ * script fait exactement ce qu'il faisait.
  *
  * Charge l'amorce des tests (chargeur, doublures des classes WordPress), Brain Monkey pour
  * les quelques fonctions WordPress utilisées, et la fausse table d'options. Le coureur, son
@@ -52,7 +60,10 @@ use G2RD\Connector\CommandRuns\AfterResponseRunner;
 use G2RD\Connector\CommandRuns\ExecutionSlot;
 use G2RD\Connector\CommandRuns\RunState;
 use G2RD\Connector\CommandRuns\RunStore;
+use G2RD\Connector\PhpErrors\Buffer;
+use G2RD\Connector\PhpErrors\FatalCatcher;
 use G2RD\Connector\Rollback\PendingOutcomes;
+use G2RD\Connector\Settings;
 use G2RD\Connector\Tests\CommandRuns\FakeOptionsTable;
 
 require dirname( __DIR__, 2 ) . '/bootstrap.php';
@@ -88,12 +99,13 @@ final class G2rdTableRecopiee {
 	}
 }
 
-const G2RD_SCENARIOS = [ 'fatale', 'fatale-dans-la-reprise', 'sortie', 'fin-normale' ];
+const G2RD_SCENARIOS = [ 'fatale', 'fatale-dans-la-reprise', 'memoire', 'sortie', 'fin-normale' ];
 
 $g2rd_fichier  = (string) ( $argv[1] ?? '' );
 $g2rd_scenario = (string) ( $argv[2] ?? '' );
+$g2rd_releve   = 'releve' === (string) ( $argv[3] ?? '' );
 if ( '' === $g2rd_fichier || ! in_array( $g2rd_scenario, G2RD_SCENARIOS, true ) ) {
-	echo 'Usage : php -n fatal-during-run.php <fichier d’état> <' . implode( '|', G2RD_SCENARIOS ) . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- aide en ligne de commande, texte fixe.
+	echo 'Usage : php -n fatal-during-run.php <fichier d’état> <' . implode( '|', G2RD_SCENARIOS ) . '> [releve]'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- aide en ligne de commande, texte fixe.
 	exit( 2 );
 }
 
@@ -114,6 +126,7 @@ $g2rd_apres   = null;
 $g2rd_suivi   = [
 	'etat'    => null,
 	'creneau' => false,
+	'releve'  => false,
 ];
 $g2rd_table   = new FakeOptionsTable();
 
@@ -128,6 +141,11 @@ $g2rd_recopier = static function () use ( &$g2rd_journal, &$g2rd_options, &$g2rd
 	if ( $creneau !== $g2rd_suivi['creneau'] ) {
 		$g2rd_journal[]        = $creneau ? 'créneau pris' : 'créneau rendu';
 		$g2rd_suivi['creneau'] = $creneau;
+	}
+	$releve = isset( $g2rd_options[ Buffer::OPTION ] );
+	if ( $releve !== $g2rd_suivi['releve'] ) {
+		$g2rd_journal[]       = $releve ? 'erreurs PHP enregistrées' : 'erreurs PHP retirées';
+		$g2rd_suivi['releve'] = $releve;
 	}
 	file_put_contents(
 		$g2rd_fichier,
@@ -197,6 +215,18 @@ Functions\when( 'update_option' )->alias(
 );
 
 $GLOBALS['wpdb'] = new G2rdTableRecopiee( $g2rd_table, $g2rd_recopier );
+
+// Relevé des erreurs PHP (connecteur 1.16), seulement avec le troisième argument « releve » :
+// armé avant le coureur et ses filets, comme dans g2rd-connector.php (première fonction d'arrêt
+// du connecteur). Site enrôlé, relevé activé.
+if ( $g2rd_releve ) {
+	$g2rd_options[ Settings::OPTION_KEY ] = [
+		'site_id'            => 7,
+		'site_token'         => 'enc:v1:banc',
+		'php_errors_enabled' => true,
+	];
+	FatalCatcher::arm();
+}
 
 // Résultat de reprise consigné AVANT le démarrage, pour la même extension (une mise à jour
 // morte la veille) : il ne concerne pas cette exécution.
@@ -294,6 +324,14 @@ $g2rd_runner = new AfterResponseRunner(
 		if ( 'sortie' === $g2rd_scenario ) {
 			trigger_error( $g2rd_alerte, E_USER_WARNING ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_trigger_error, WordPress.Security.EscapeOutput.OutputNotEscaped -- avertissement voulu, texte fixe, que error_get_last() rend encore à l'arrêt.
 			exit;
+		}
+		if ( 'memoire' === $g2rd_scenario ) {
+			// Mémoire épuisée pendant la commande, comme une extension qui charge trop de données.
+			ini_set( 'memory_limit', (string) ( memory_get_usage( true ) + 8 * 1024 * 1024 ) );
+			$g2rd_tas = [];
+			while ( true ) {
+				$g2rd_tas[] = str_repeat( 'x', 512 * 1024 );
+			}
 		}
 		if ( 'fatale' === $g2rd_scenario || 'fatale-dans-la-reprise' === $g2rd_scenario ) {
 			$g2rd_fatale( 'commande', 'g2rd_extension_chargee_deux_fois_' . str_repeat( 'x', 3000 ) );

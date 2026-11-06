@@ -24,6 +24,8 @@ use G2RD\Connector\CommandRuns\Capability;
 use G2RD\Connector\Cron\UpdatesDiscoveryJob;
 use G2RD\Connector\DirectLogin\SnapshotFields;
 use G2RD\Connector\Environment\SnapshotBlock;
+use G2RD\Connector\PhpErrors\LoggingProbe;
+use G2RD\Connector\PhpErrors\SnapshotBlock as PhpErrorsBlock;
 use G2RD\Connector\Rollback\PendingOutcomes;
 use G2RD\Connector\Rollback\RestorePointInventory;
 use G2RD\Connector\Rollback\Services;
@@ -74,28 +76,37 @@ final class SnapshotController {
 		// muet. Non bloquant : la réponse ci-dessous n'attend pas.
 		$discovery_stale = UpdatesDiscoveryJob::request_if_stale();
 
-		return new WP_REST_Response(
-			[
-				'site'              => $this->site_info(),
-				'wp_core'           => $this->wp_core(),
-				'plugins'           => $this->plugins(),
-				'themes'            => $this->themes(),
-				'translations'      => $this->translations(),
-				'server'            => $this->server_info(),
-				// Calculé au plus une fois par jour ; `collected_at` dit de quand.
-				'db_health'         => DbHealth::get( $now ),
-				'updates_discovery' => $this->updates_discovery( $discovery_stale ),
-				// Rollback des plugins : ce que le site sait faire, les points qu'il
-				// détient, et ce qui s'est passé hors d'une réponse à la plateforme.
-				'capabilities'      => $this->capabilities(),
-				'restore_points'    => RestorePointInventory::describe(),
-				'pending_outcomes'  => PendingOutcomes::all(),
-				// Ce que le serveur du site permet (extensions natives, limites, disque) et les volumes
-				// mesurés au plus une fois par jour en tâche de fond : jamais calculés ici.
-				'environment'       => SnapshotBlock::build( $now ),
-			],
-			200
-		);
+		$data = [
+			'site'              => $this->site_info(),
+			'wp_core'           => $this->wp_core(),
+			'plugins'           => $this->plugins(),
+			'themes'            => $this->themes(),
+			'translations'      => $this->translations(),
+			'server'            => $this->server_info(),
+			// Calculé au plus une fois par jour ; `collected_at` dit de quand.
+			'db_health'         => DbHealth::get( $now ),
+			'updates_discovery' => $this->updates_discovery( $discovery_stale ),
+			// Rollback des plugins : ce que le site sait faire, les points qu'il
+			// détient, et ce qui s'est passé hors d'une réponse à la plateforme.
+			'capabilities'      => $this->capabilities(),
+			'restore_points'    => RestorePointInventory::describe(),
+			'pending_outcomes'  => PendingOutcomes::all(),
+			// Ce que le serveur du site permet (extensions natives, limites, disque) et les volumes
+			// mesurés au plus une fois par jour en tâche de fond : jamais calculés ici.
+			'environment'       => SnapshotBlock::build( $now ),
+		];
+
+		// Erreurs PHP relevées sur ce site (1.16) : lues dans le tampon, jamais calculées ici ;
+		// bloc absent si la lecture du tampon lève (valeur abîmée : lue comme vide). Puis les
+		// réglages de journalisation de PHP et de WordPress, sans aucun chemin.
+		$logging    = new LoggingProbe();
+		$php_errors = PhpErrorsBlock::build( $now, $logging );
+		if ( null !== $php_errors ) {
+			$data['php_errors'] = $php_errors;
+		}
+		$data['php_logging'] = $logging->describe();
+
+		return new WP_REST_Response( $data, 200 );
 	}
 
 	/**
@@ -241,6 +252,8 @@ final class SnapshotController {
 	 * arrière-plan (routes `command-runs` enregistrées, fonction de fin de réponse
 	 * présente, pas de constante d'arrêt, cf. CommandRuns\Capability) ; sinon, la
 	 * plateforme garde le mode actuel (`/command`) pour ce site.
+	 * `php_errors` (1.16) : le site sait relever ses erreurs PHP (bloc `php_errors`), même
+	 * collecte coupée ; le manager lit la capacité, jamais un numéro de version.
 	 *
 	 * Publique pour les tests.
 	 *
@@ -249,7 +262,7 @@ final class SnapshotController {
 	 * @return list<string>
 	 */
 	public function capabilities( ?\Closure $has_finisher = null ): array {
-		$capabilities = [ 'signed_commands', SnapshotFields::CAPABILITY ];
+		$capabilities = [ 'signed_commands', SnapshotFields::CAPABILITY, PhpErrorsBlock::CAPABILITY ];
 		if ( Services::supported() ) {
 			$capabilities[] = 'restore_points';
 		}

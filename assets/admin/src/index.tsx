@@ -59,6 +59,11 @@ export interface ConnectorBootData {
 	 */
 	allowDirectLogin: boolean;
 	/**
+	 * Relevé des erreurs PHP (1.16) : les erreurs fatales de PHP du site sont gardées 7 jours
+	 * et transmises au manager avec l'inventaire, message filtré sur le site. Décochée par défaut.
+	 */
+	phpErrorsEnabled: boolean;
+	/**
 	 * Politique de signature des commandes du manager : true = toute requête non
 	 * signée est refusée (`required`), false = vérifiée et remontée, mais acceptée
 	 * (`report`). Issue de secours locale si le manager cessait de signer.

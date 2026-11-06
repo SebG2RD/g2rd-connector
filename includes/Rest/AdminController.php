@@ -62,6 +62,12 @@ final class AdminController {
 				'required' => false,
 				'type'     => 'boolean',
 			],
+			// Relevé des erreurs PHP (1.16) : décoché par défaut. La lecture du journal
+			// n'a pas de case : elle ne se règle que par le manager (commande signée).
+			'php_errors_enabled'      => [
+				'required' => false,
+				'type'     => 'boolean',
+			],
 		];
 
 		$url_arg = [
@@ -199,11 +205,15 @@ final class AdminController {
 	public function collect_settings( WP_REST_Request $request ): array {
 		$settings = [ 'manager_url' => (string) $request->get_param( 'manager_url' ) ];
 
-		foreach ( [ 'heartbeat_enabled', 'events_enabled', 'remote_commands_enabled', 'force_ipv4_to_manager', 'allow_direct_login' ] as $flag ) {
+		foreach ( [ 'heartbeat_enabled', 'events_enabled', 'remote_commands_enabled', 'force_ipv4_to_manager', 'allow_direct_login', 'php_errors_enabled' ] as $flag ) {
 			$value = $request->get_param( $flag );
 			if ( null !== $value ) {
 				$settings[ $flag ] = (bool) $value;
 			}
+		}
+		// Relevé décoché : la lecture du journal suit (cf. Settings::sanitize()).
+		if ( false === ( $settings['php_errors_enabled'] ?? null ) ) {
+			$settings['php_errors_log_tail'] = false;
 		}
 
 		$signature_required = $request->get_param( 'signature_required' );

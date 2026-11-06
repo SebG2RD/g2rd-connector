@@ -21,6 +21,8 @@ use G2RD\Connector\DirectLogin\UsedTickets;
 use G2RD\Connector\Environment\SizeReport;
 use G2RD\Connector\Events\Listener;
 use G2RD\Connector\Outbound\ManagerIpv4Guard;
+use G2RD\Connector\PhpErrors\Buffer;
+use G2RD\Connector\PhpErrors\LogTail;
 use G2RD\Connector\Rest\AdminController;
 use G2RD\Connector\Rest\Auth;
 use G2RD\Connector\Rest\CommandController;
@@ -85,6 +87,13 @@ final class Plugin {
 		if ( Settings::get( 'force_ipv4_to_manager' ) ) {
 			( new ManagerIpv4Guard() )->register();
 		}
+
+		// Erreurs PHP relevées (1.16) : groupes de plus de 7 jours purgés sur la tâche
+		// biquotidienne. AVANT le gate d'enrôlement : après une déconnexion du manager, la tâche
+		// reste planifiée mais rien de ce qui suit le gate ne passe, et le tampon resterait en base
+		// au-delà des 7 jours annoncés par le readme. Ne fait rien sans tampon : aucune écriture
+		// sur un site jamais enrôlé (cf. PhpErrors\Buffer::purge()).
+		add_action( RestorePointPurgeJob::HOOK, [ Buffer::class, 'purge_now' ] );
 
 		// ── Gate "site enrôlé" : RIEN n'est exposé / envoyé tant que l'utilisateur
 		// n'a pas explicitement enrôlé le site via la page admin. Conforme
@@ -168,6 +177,11 @@ final class Plugin {
 		// plus une fois par 20 h, sous verrou et bornés ; le snapshot ne lit que ce cache
 		// (cf. Environment\SizeReport). Aucune nouvelle tâche planifiée.
 		add_action( RestorePointPurgeJob::HOOK, [ SizeReport::class, 'refresh_now' ] );
+		// Erreurs PHP relevées (1.16) : fin du journal PHP lue, seulement si le relevé ET la
+		// lecture du journal sont activés (désactivés par défaut), sur la même tâche
+		// biquotidienne, après le gate d'enrôlement (elle écrit dans le tampon). La purge, elle,
+		// est branchée avant le gate. Aucune nouvelle tâche planifiée.
+		add_action( RestorePointPurgeJob::HOOK, [ LogTail::class, 'run_now' ] );
 
 		// Endpoints REST sécurisés Bearer SiteToken (consommés par le manager).
 		add_action( 'rest_api_init', [ new SnapshotController(), 'register' ] );
@@ -222,6 +236,10 @@ final class Plugin {
 	 * On signale donc « ne pas cacher » via l'action officielle LSCWP et l'en-tête
 	 * lu par LiteSpeed Web Server, dès qu'une route du namespace est servie.
 	 *
+	 * Espace reconnu sans tenir compte de la casse, comme WordPress reconnaît les
+	 * routes (WP_REST_Server::match_request_to_handler()) : `/G2RD/v1/…` est servie
+	 * par les mêmes routes, elle n'est pas davantage mise en cache.
+	 *
 	 * @param mixed            $result  Court-circuit éventuel du dispatch (inchangé).
 	 * @param \WP_REST_Server  $server  Serveur REST (non utilisé).
 	 * @param \WP_REST_Request $request Requête REST courante.
@@ -229,7 +247,7 @@ final class Plugin {
 	 */
 	public function prevent_rest_cache( $result, \WP_REST_Server $server, \WP_REST_Request $request ) {
 		unset( $server );
-		if ( 0 === strpos( (string) $request->get_route(), '/' . G2RD_CONNECTOR_REST_NS ) ) {
+		if ( 0 === stripos( (string) $request->get_route(), '/' . G2RD_CONNECTOR_REST_NS ) ) {
 			// API officielle LiteSpeed Cache : opt-out de cette réponse.
 			do_action( 'litespeed_control_set_nocache', 'g2rd-connector dynamic REST response' );
 			// Défense en profondeur : en-têtes lus au niveau LiteSpeed Web Server.

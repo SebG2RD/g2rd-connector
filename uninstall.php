@@ -18,13 +18,16 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
 // compteur des connexions échouées de la minute (cf. Events\LoginFailedThrottle :
 // il expire seul en 120 s, mais sans cache objet sa ligne resterait jusqu'au
 // ménage quotidien de WordPress). Puis le marqueur de la répartition des tâches
-// WP-Cron (cf. Cron\Phase), propre à chaque blog comme les tâches elles-mêmes, et la
+// WP-Cron (cf. Cron\Phase), propre à chaque blog comme les tâches elles-mêmes, la
 // santé de la base gardée 24 h par l'inventaire (cf. Rest\DbHealth), propre à chaque
-// blog comme son inventaire.
+// blog comme son inventaire, et les erreurs PHP relevées (1.16).
 delete_option( 'g2rd_connector_settings' );
 delete_transient( 'g2rd_connector_login_failed_window' );
 delete_option( 'g2rd_connector_cron_phase' );
 delete_option( 'g2rd_connector_db_health' );
+// Erreurs PHP relevées et décalage de lecture du journal (1.16, cf. PhpErrors\Buffer et PhpErrors\LogTail).
+delete_option( 'g2rd_php_errors' );
+delete_option( 'g2rd_php_errors_log_cursor' );
 
 // Si multisite, suppression sur chaque blog. 'number' => 0 : tous les blogs
 // (get_sites() n'en rend que 100 par défaut ; au-delà, les réglages, dont le jeton
@@ -42,6 +45,8 @@ if ( is_multisite() ) {
 		delete_transient( 'g2rd_connector_login_failed_window' );
 		delete_option( 'g2rd_connector_cron_phase' );
 		delete_option( 'g2rd_connector_db_health' );
+		delete_option( 'g2rd_php_errors' );
+		delete_option( 'g2rd_php_errors_log_cursor' );
 		restore_current_blog();
 	}
 }

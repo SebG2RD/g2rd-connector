@@ -4,8 +4,9 @@
  * `POST /g2rd/v1/command-runs`), pour qu'un renvoi de la requête par le CDN de
  * l'hébergeur ne les exécute jamais deux fois.
  *
- * Toutes les commandes du site y passent, sauf les quatre instantanées, dont les
- * appelants attendent une réponse immédiate : elles restent sur `/command`
+ * Toutes les commandes du site y passent, sauf les instantanées (quatre jusqu'à la 1.15,
+ * cinq avec `set_php_errors_capture`), dont les appelants attendent une réponse
+ * immédiate : elles restent sur `/command`
  * (décision n° 5 du propriétaire). Chaque commande de CommandExecutor::ALLOWED est
  * rangée dans l'une des deux listes, jamais dans les deux (cf. AsyncCommandsTest).
  *
@@ -46,6 +47,7 @@ final class AsyncCommands {
 		'check_updates',
 		'delete_restore_point',
 		'set_signature_policy',
+		'set_php_errors_capture',
 	];
 
 	/**

@@ -46,6 +46,8 @@ final class BootData {
 			'remoteCommandsEnabled' => (bool) $s['remote_commands_enabled'],
 			'forceIpv4ToManager'    => (bool) ( $s['force_ipv4_to_manager'] ?? false ),
 			'allowDirectLogin'      => (bool) ( $s['allow_direct_login'] ?? true ),
+			// Relevé des erreurs PHP (1.16) : décoché par défaut.
+			'phpErrorsEnabled'      => true === ( $s['php_errors_enabled'] ?? false ),
 			'signatureRequired'     => 'required' === ( $s['signature_policy'] ?? 'report' ),
 			'signatureFailures'     => SignatureState::stats(),
 			'restorePoints'         => RestorePointInventory::describe(),

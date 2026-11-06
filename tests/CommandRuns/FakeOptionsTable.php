@@ -6,7 +6,7 @@ namespace G2RD\Connector\Tests\CommandRuns;
 
 /**
  * Faux $wpdb : la table des options en mémoire, avec sa clé unique sur option_name,
- * réduite aux six requêtes des exécutions en arrière-plan (RunStore, puis le créneau,
+ * réduite aux sept requêtes des exécutions en arrière-plan (RunStore, puis le créneau,
  * la purge et le ramassage) :
  *   - « INSERT IGNORE » : une ligne ajoutée si le nom est libre, aucune sinon ;
  *   - « SELECT option_value … WHERE option_name = %s LIMIT 1 » ;
@@ -15,7 +15,9 @@ namespace G2RD\Connector\Tests\CommandRuns;
  *   - « DELETE … WHERE option_name = %s AND option_value = %s », sur le même principe ;
  *   - « SELECT option_name, option_value … WHERE option_name LIKE %s LIMIT %d » ;
  *   - la même, avec en plus « AND ( option_value LIKE %s OR option_value LIKE %s ) »
- *     (exécutions non terminées, cherchées par le ramassage).
+ *     (exécutions non terminées, cherchées par le ramassage) ;
+ *   - « SELECT option_name, SUBSTRING(option_value, 1, %d) AS option_head … WHERE
+ *     option_name LIKE %s LIMIT %d » : le début de chaque valeur seulement (purge).
  * Plus la recherche de noms des tickets consommés (« SELECT option_name … LIKE »), que
  * uninstall.php lance avant de retirer les exécutions.
  *
@@ -32,7 +34,9 @@ namespace G2RD\Connector\Tests\CommandRuns;
  *     souvent insensible à la casse) : les valeurs du connecteur sont du JSON en ASCII,
  *     wp_json_encode() échappant tout le reste ;
  *   - un UPDATE qui écrit la valeur déjà en place ne compte aucune ligne, comme MySQL,
- *     qui compte les lignes changées et non les lignes trouvées.
+ *     qui compte les lignes changées et non les lignes trouvées ;
+ *   - SUBSTRING compte ici des octets, MySQL des caractères : les valeurs du connecteur
+ *     sont en ASCII (cf. plus haut).
  */
 final class FakeOptionsTable {
 
@@ -84,6 +88,18 @@ final class FakeOptionsTable {
 	 * processus qui écrit entre la lecture et l'écriture de celui qu'on observe.
 	 */
 	public ?\Closure $before_write = null;
+
+	/**
+	 * Appelée une fois, juste avant la prochaine lecture d'une valeur (get_var()), puis
+	 * oubliée : un autre processus qui écrit entre la recherche et cette lecture.
+	 */
+	public ?\Closure $before_read = null;
+
+	/**
+	 * Octets de valeurs rendus par les lectures (valeurs entières et débuts de valeur) :
+	 * ce que la base transfère au processus PHP.
+	 */
+	public int $bytes_read = 0;
 
 	/**
 	 * Requête préparée → [ modèle, valeurs ].
@@ -170,20 +186,28 @@ final class FakeOptionsTable {
 		[ $template, $args ] = $this->receive( $sql );
 
 		if ( $this->is( 'SELECT option_value FROM {options} WHERE option_name = %s LIMIT 1', $template ) ) {
+			if ( null !== $this->before_read ) {
+				$other             = $this->before_read;
+				$this->before_read = null;
+				$other();
+			}
 			if ( $this->read_refused() ) {
 				return null;
 			}
-			return $this->rows[ $args[0] ]['value'] ?? null;
+			$value             = $this->rows[ $args[0] ]['value'] ?? null;
+			$this->bytes_read += strlen( (string) $value );
+			return $value;
 		}
 
 		throw new \LogicException( 'Lecture non prévue par le faux $wpdb : ' . $sql );
 	}
 
 	/**
-	 * Recherche par préfixe, dans l'ordre des noms (parcours de l'index option_name) ; et
-	 * la même, restreinte aux valeurs qui suivent l'un de deux motifs LIKE.
+	 * Recherche par préfixe, dans l'ordre des noms (parcours de l'index option_name) ; la
+	 * même, restreinte aux valeurs qui suivent l'un de deux motifs LIKE ; et la même, qui ne
+	 * rend que le début de chaque valeur (`option_head`).
 	 *
-	 * @return list<array{option_name: string, option_value: string}>
+	 * @return list<array<string, string>>
 	 */
 	public function get_results( string $sql, string $output = 'OBJECT' ): array {
 		[ $template, $args ] = $this->receive( $sql );
@@ -202,6 +226,23 @@ final class FakeOptionsTable {
 			}
 			[ $pattern, $value_pattern, $other_value_pattern, $limit ] = $args;
 			return $this->find( (string) $pattern, (int) $limit, [ (string) $value_pattern, (string) $other_value_pattern ] );
+		}
+
+		if ( ARRAY_A === $output && $this->is( 'SELECT option_name, SUBSTRING(option_value, 1, %d) AS option_head FROM {options} WHERE option_name LIKE %s LIMIT %d', $template ) ) {
+			if ( $this->read_refused() ) {
+				return [];
+			}
+			[ $length, $pattern, $limit ] = $args;
+			$heads                        = [];
+			foreach ( $this->find( (string) $pattern, (int) $limit, [], false ) as $row ) {
+				$head              = substr( $this->rows[ $row['option_name'] ]['value'], 0, (int) $length );
+				$this->bytes_read += strlen( $head );
+				$heads[]           = [
+					'option_name' => $row['option_name'],
+					'option_head' => $head,
+				];
+			}
+			return $heads;
 		}
 
 		throw new \LogicException( 'Recherche non prévue par le faux $wpdb : ' . $sql );
@@ -227,17 +268,19 @@ final class FakeOptionsTable {
 		}
 
 		[ $pattern, $limit ] = $args;
-		return array_column( $this->find( (string) $pattern, (int) $limit ), 'option_name' );
+		return array_column( $this->find( (string) $pattern, (int) $limit, [], false ), 'option_name' );
 	}
 
 	/**
 	 * Lignes dont le nom suit le motif LIKE, `$limit` au plus, dans l'ordre des noms ; si
 	 * des motifs de valeur sont donnés, seulement celles dont la valeur suit l'un d'eux.
+	 * Les valeurs rendues sont comptées dans `bytes_read`, sauf si `$values_read` est faux
+	 * (l'appelant n'en rend que le début, ou que le nom).
 	 *
 	 * @param list<string> $value_patterns
 	 * @return list<array{option_name: string, option_value: string}>
 	 */
-	private function find( string $pattern, int $limit, array $value_patterns = [] ): array {
+	private function find( string $pattern, int $limit, array $value_patterns = [], bool $values_read = true ): array {
 		$names = array_keys( $this->rows );
 		sort( $names, SORT_STRING );
 
@@ -254,6 +297,9 @@ final class FakeOptionsTable {
 					'option_name'  => $name,
 					'option_value' => $this->rows[ $name ]['value'],
 				];
+				if ( $values_read ) {
+					$this->bytes_read += strlen( $this->rows[ $name ]['value'] );
+				}
 			}
 		}
 

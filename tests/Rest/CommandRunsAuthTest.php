@@ -176,6 +176,49 @@ final class CommandRunsAuthTest extends TestCase {
 	}
 
 	/**
+	 * La tolérance du renvoi ne vaut que pour la méthode et la route exactes de
+	 * l'acceptation, `POST /g2rd/v1/command-runs` : WordPress met la méthode en capitales
+	 * (WP_REST_Request::set_method()), la plateforme écrit la route en minuscules, et le
+	 * CDN renvoie la requête à l'identique. Une autre écriture, même acceptée par WordPress
+	 * (il reconnaît les routes sans tenir compte de la casse), n'en profite pas : son
+	 * renvoi est refusé comme n'importe quel rejeu, et la plateforme vérifie le numéro.
+	 *
+	 * Rien de secret dans ces comparaisons (état, code, méthode, route) : comparaison
+	 * exacte, pas besoin de temps constant ; la signature elle-même est comparée par
+	 * hash_equals() (RequestSignature::verify()).
+	 *
+	 * @return array<string, array{0: string, 1: string}>
+	 */
+	public static function acceptations_ecrites_autrement(): array {
+		return [
+			'route dans une autre casse' => [ 'POST', '/G2RD/v1/Command-Runs' ],
+			'méthode en minuscules'      => [ 'post', self::ACCEPTATION ],
+			'route et méthode autrement' => [ 'Post', '/g2rd/V1/command-runs' ],
+		];
+	}
+
+	#[DataProvider( 'acceptations_ecrites_autrement' )]
+	public function test_renvoi_tolere_seulement_pour_la_methode_et_la_route_exactes( string $methode, string $route ): void {
+		$nonce = bin2hex( random_bytes( 16 ) );
+		self::assertTrue( Auth::require_signed_run_access( $this->signer( $this->requete( $methode, $route, self::CORPS ), $nonce ) ), 'L’original, bien signé, passe.' );
+
+		$renvoi = $this->signer( $this->requete( $methode, $route, self::CORPS ), $nonce );
+		$result = Auth::require_signed_run_access( $renvoi );
+
+		self::assertInstanceOf( WP_Error::class, $result );
+		self::assertSame( 'g2rd_connector_signature_replayed', $result->get_error_code() );
+		self::assertSame( [ 'status' => 401 ], $result->get_error_data() );
+		self::assertFalse( Auth::is_replayed_acceptance( $renvoi ) );
+
+		// Témoin : écrite exactement, la même acceptation renvoyée est tolérée.
+		$nonce = bin2hex( random_bytes( 16 ) );
+		self::assertTrue( Auth::require_signed_run_access( $this->acceptation( $nonce ) ) );
+		$renvoi_exact = $this->acceptation( $nonce );
+		self::assertTrue( Auth::require_signed_run_access( $renvoi_exact ) );
+		self::assertTrue( Auth::is_replayed_acceptance( $renvoi_exact ) );
+	}
+
+	/**
 	 * `signature_replayed` n'est rendu qu'après une signature reconnue valide : le nonce
 	 * d'une vraie requête, repris avec une signature fausse, ne profite pas de la
 	 * tolérance du renvoi.

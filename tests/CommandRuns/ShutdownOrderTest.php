@@ -145,6 +145,33 @@ final class ShutdownOrderTest extends TestCase {
 		self::assertStringContainsString( 'Action', $erreur );
 		self::assertStringContainsString( 'Cannot redeclare', $erreur, 'Le message de l\'erreur est gardé.' );
 		self::assertStringContainsString( 'g2rd_extension_chargee_deux_fois_xxx', $erreur );
+		foreach ( [ sys_get_temp_dir(), str_replace( '\\', '/', sys_get_temp_dir() ) ] as $dossier ) {
+			self::assertStringNotContainsString( $dossier, $erreur, 'Aucun chemin du serveur (1.16).' );
+		}
+	}
+
+	/**
+	 * Mémoire épuisée pendant la commande (1.16) : le dernier filet, qui rend maintenant le
+	 * fichier relatif et filtre le message, passe encore. L'exécution est déclarée interrompue
+	 * sur l'erreur fatale à l'arrêt même, pas 600 s plus tard au ramassage.
+	 */
+	public function test_memoire_epuisee_le_dernier_filet_passe_encore(): void {
+		$arret = $this->arret_reel( 'memoire' );
+
+		self::assertSame( 255, $arret['code'], $arret['sortie'] );
+		self::assertContains( 'exécution interrupted', $arret['journal'] );
+		self::assertSame( AfterResponseRunner::REASON_FATAL_ERROR, $arret['execution']['interruption']['reason'] ?? null );
+		$erreur = (string) ( $arret['execution']['interruption']['error'] ?? '' );
+		self::assertStringContainsString( 'Allowed memory size of', $erreur );
+		foreach ( [ sys_get_temp_dir(), str_replace( '\\', '/', sys_get_temp_dir() ) ] as $dossier ) {
+			self::assertStringNotContainsString( $dossier, $erreur );
+		}
+		// L'erreur est levée dans le script à part, rangé dans le dépôt (et non dans le dossier
+		// temporaire) : son dossier ne sort pas, le fichier hors de WordPress est masqué.
+		foreach ( [ dirname( __DIR__, 2 ), str_replace( '\\', '/', dirname( __DIR__, 2 ) ) ] as $dossier ) {
+			self::assertStringNotContainsString( $dossier, $erreur, 'Aucun dossier du serveur (1.16).' );
+		}
+		self::assertStringContainsString( '([path]/fatal-during-run.php, ligne ', $erreur );
 	}
 
 	/**
@@ -152,7 +179,8 @@ final class ShutdownOrderTest extends TestCase {
 	 * @ (WP_Filesystem pendant la restauration, fichier de l'extension inclus par
 	 * activate_plugin()) : error_get_last() les rend, et à l'arrêt elles remplacent l'erreur
 	 * fatale. Le dernier filet, qui passe après elles, ne doit pas les prendre pour la cause :
-	 * l'erreur est relevée avant elles, dans la première fonction d'arrêt du connecteur.
+	 * l'erreur est relevée avant elles, dans la fonction d'arrêt armée par arm_last_net() (le
+	 * relevé des erreurs PHP de la 1.16 passe avant elle sans modifier error_get_last()).
 	 * L'exécution reste déclarée interrompue sur l'erreur fatale, avec son message.
 	 */
 	public function test_une_erreur_masquee_dans_les_filets_ne_remplace_pas_l_erreur_fatale(): void {

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Tests\Rest;
 
+use G2RD\Connector\PhpErrors\LoggingProbe;
+
 /**
  * Forme de l'inventaire (GET /snapshot) : ce que lit la plateforme ne change pas
  * avec l'allègement du connecteur. Test de caractérisation, écrit sur le code
@@ -140,6 +142,27 @@ final class SnapshotInventoryTest extends SnapshotTestCase {
 					'db_status'        => 'null',
 					'scan_ms'          => 'null',
 				],
+			],
+			'php_errors'        => [
+				'version'      => 'int',
+				'enabled'      => 'bool',
+				'coverage'     => 'string',
+				'sources'      => 'list',
+				'collected_at' => 'null',
+				'truncated'    => 'bool',
+				'groups'       => 'list',
+			],
+			// Lu dans le PHP qui joue le test : seule la taille du journal dépend du poste.
+			'php_logging'       => [
+				'version'            => 'int',
+				'log_errors'         => self::shape( ( new LoggingProbe() )->describe()['log_errors'] ?? null ),
+				'display_errors'     => self::shape( ( new LoggingProbe() )->describe()['display_errors'] ?? null ),
+				'wp_debug'           => 'bool',
+				'wp_debug_log'       => 'bool',
+				'wp_debug_display'   => 'null',
+				'error_log'          => 'string',
+				'error_log_readable' => self::shape( ( new LoggingProbe() )->describe()['error_log_readable'] ?? null ),
+				'error_log_bytes'    => self::shape( ( new LoggingProbe() )->describe()['error_log_bytes'] ?? null ),
 			],
 		];
 	}

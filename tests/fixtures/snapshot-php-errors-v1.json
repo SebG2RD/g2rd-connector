@@ -1,0 +1,136 @@
+{
+  "description": "Contrat du bloc php_errors du snapshot (version 1 de la forme), fixé au lot E0 du manager avant tout code : backend/tests/fixtures/snapshot-php-errors-v1.json du manager et tests/fixtures/snapshot-php-errors-v1.json du connecteur, identiques à l'octet. Bornes (limits) et valeurs admises (values) comprises. Ne pas modifier sans mettre à jour les deux dépôts.",
+  "limits": {
+    "max_bytes": 16384,
+    "max_groups": 50,
+    "message_max_chars": 500,
+    "file_max_chars": 255
+  },
+  "values": {
+    "level": ["fatal", "error", "warning", "deprecated", "notice"],
+    "component_type": ["plugin", "theme", "core", "mu", "unknown"],
+    "coverage": ["after_connector_load", "none"],
+    "sources": ["fatal_catcher", "log_tail"]
+  },
+  "examples": {
+    "collecte_complete": {
+      "version": 1,
+      "enabled": true,
+      "coverage": "after_connector_load",
+      "sources": ["fatal_catcher"],
+      "collected_at": "2026-10-25T06:00:12+00:00",
+      "truncated": false,
+      "groups": [
+        {
+          "fp": "bdbd665cabbcff0661071a012cb8a56ca2476185ce90017ba94669418c81fc5e",
+          "level": "fatal",
+          "component": {
+            "type": "plugin",
+            "slug": "exemple-formulaire",
+            "version": "2.4.1"
+          },
+          "file": "wp-content/plugins/exemple-formulaire/includes/class-envoi.php",
+          "line": 87,
+          "message": "Uncaught Error: Call to undefined function exemple_formulaire_journal() in wp-content/plugins/exemple-formulaire/includes/class-envoi.php:87",
+          "first_seen": "2026-10-24T21:14:03+00:00",
+          "last_seen": "2026-10-25T05:47:51+00:00",
+          "count": 12
+        },
+        {
+          "fp": "1afd2d2b2f4318cf1a2d4f502f4fff1023c775beb7952e251312058f9e42affc",
+          "level": "fatal",
+          "component": {
+            "type": "theme",
+            "slug": "exemple-theme",
+            "version": "1.9.0"
+          },
+          "file": "wp-content/themes/exemple-theme/functions.php",
+          "line": 214,
+          "message": "syntax error, unexpected token \"}\", expecting \";\"",
+          "first_seen": "2026-10-25T02:03:40+00:00",
+          "last_seen": "2026-10-25T02:03:40+00:00",
+          "count": 1
+        }
+      ]
+    },
+    "collecte_desactivee": {
+      "version": 1,
+      "enabled": false,
+      "coverage": "none",
+      "sources": [],
+      "collected_at": null,
+      "truncated": false,
+      "groups": []
+    },
+    "journal_lu_tronque": {
+      "version": 1,
+      "enabled": true,
+      "coverage": "after_connector_load",
+      "sources": ["fatal_catcher", "log_tail"],
+      "collected_at": "2026-10-25T12:00:05+02:00",
+      "truncated": true,
+      "groups": [
+        {
+          "fp": "743024eb36512a2dddc8ff64f0d3fcda8f8d5fc780f6634942a0f1213478a67c",
+          "level": "warning",
+          "component": {
+            "type": "plugin",
+            "slug": "exemple-cache",
+            "version": "3.0.2"
+          },
+          "file": "wp-content/plugins/exemple-cache/exemple-cache.php",
+          "line": 42,
+          "message": "Undefined array key \"reglages\"",
+          "first_seen": "2026-10-19T08:30:00+02:00",
+          "last_seen": "2026-10-25T11:58:44+02:00",
+          "count": 4310
+        },
+        {
+          "fp": "a8ef7af221dc74201bfa35bb6b9649f4d16d09eb267a079a756e8bcef0fd03d8",
+          "level": "deprecated",
+          "component": {
+            "type": "core",
+            "slug": null,
+            "version": "6.6.2"
+          },
+          "file": "wp-includes/functions.php",
+          "line": 6114,
+          "message": "Function get_page_by_title is deprecated since version 6.2.0! Use WP_Query instead.",
+          "first_seen": "2026-10-20T14:02:11+02:00",
+          "last_seen": "2026-10-25T11:59:02+02:00",
+          "count": 268
+        },
+        {
+          "fp": "4386ee4b20407e3d79618cc45d2944fb450119bd7dab836ea1e3545ffb61fcf5",
+          "level": "notice",
+          "component": {
+            "type": "mu",
+            "slug": "exemple-hebergeur",
+            "version": null
+          },
+          "file": "wp-content/mu-plugins/exemple-hebergeur.php",
+          "line": 19,
+          "message": "Only variables should be assigned by reference",
+          "first_seen": "2026-10-22T09:15:27+02:00",
+          "last_seen": "2026-10-25T10:41:09+02:00",
+          "count": 57
+        },
+        {
+          "fp": "c450abfed5d6d59009b12331be6469a4552818cade113e063a3083cba19829e5",
+          "level": "warning",
+          "component": {
+            "type": "unknown",
+            "slug": null,
+            "version": null
+          },
+          "file": "wp-config.php",
+          "line": 96,
+          "message": "Constant WP_MEMORY_LIMIT already defined",
+          "first_seen": "2026-10-18T23:00:01+02:00",
+          "last_seen": "2026-10-25T11:00:00+02:00",
+          "count": 912
+        }
+      ]
+    }
+  }
+}

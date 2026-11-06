@@ -125,6 +125,53 @@ final class PageTest extends TestCase {
 		self::assertTrue( $this->options[ Settings::OPTION_KEY ]['allow_direct_login'] );
 	}
 
+	public function test_la_case_du_releve_est_affichee_decochee_par_defaut(): void {
+		$html = $this->render();
+
+		self::assertStringContainsString( 'Relevé des erreurs PHP', $html );
+		self::assertStringContainsString( 'name="g2rd_php_errors_enabled"', $html );
+		self::assertDoesNotMatchRegularExpression( '/name="g2rd_php_errors_enabled" value="1"\s+checked/', $html );
+	}
+
+	public function test_enregistrer_avec_la_case_du_releve_la_coche(): void {
+		$_POST = $this->saved_form() + [ 'g2rd_php_errors_enabled' => '1' ];
+
+		$this->render();
+
+		self::assertTrue( $this->options[ Settings::OPTION_KEY ]['php_errors_enabled'] );
+	}
+
+	public function test_enregistrer_sans_la_case_du_releve_coupe_aussi_le_journal(): void {
+		$this->options[ Settings::OPTION_KEY ] = [
+			'php_errors_enabled'  => true,
+			'php_errors_log_tail' => true,
+		];
+		$_POST                                 = $this->saved_form();
+
+		$this->render();
+
+		self::assertFalse( $this->options[ Settings::OPTION_KEY ]['php_errors_enabled'] );
+		self::assertFalse( $this->options[ Settings::OPTION_KEY ]['php_errors_log_tail'] );
+	}
+
+	/**
+	 * La lecture du journal ne se règle que par le manager (commande signée) : la
+	 * page n'a pas de case pour elle, et l'enregistrer avec le relevé coché la
+	 * laisse telle que le manager l'a mise.
+	 */
+	public function test_enregistrer_avec_la_case_du_releve_garde_la_lecture_du_journal(): void {
+		$this->options[ Settings::OPTION_KEY ] = [
+			'php_errors_enabled'  => true,
+			'php_errors_log_tail' => true,
+		];
+		$_POST                                 = $this->saved_form() + [ 'g2rd_php_errors_enabled' => '1' ];
+
+		$this->render();
+
+		self::assertTrue( $this->options[ Settings::OPTION_KEY ]['php_errors_enabled'] );
+		self::assertTrue( $this->options[ Settings::OPTION_KEY ]['php_errors_log_tail'] );
+	}
+
 	/**
 	 * Cas de g2rd.fr : le thème actif est l'enfant « g2rd-child » (1.0.0) ; c'est la
 	 * version du thème parent, celui qui fournit la console, qui compte.
@@ -272,7 +319,7 @@ final class PageTest extends TestCase {
 		];
 		$html = $this->render();
 
-		foreach ( [ 'g2rd_heartbeat_enabled', 'g2rd_events_enabled', 'g2rd_remote_commands_enabled', 'g2rd_force_ipv4_to_manager' ] as $case ) {
+		foreach ( [ 'g2rd_heartbeat_enabled', 'g2rd_events_enabled', 'g2rd_remote_commands_enabled', 'g2rd_force_ipv4_to_manager', 'g2rd_php_errors_enabled' ] as $case ) {
 			self::assertMatchesRegularExpression( '/<th scope="row" id="' . $case . '_titre">/', $html, "Titre de « {$case} » sans identifiant." );
 			self::assertMatchesRegularExpression(
 				'/<input type="checkbox" aria-labelledby="' . $case . '_titre" aria-describedby="' . $case . '_aide"\s+name="' . $case . '"/',
@@ -525,6 +572,7 @@ final class PageTest extends TestCase {
 			'Commandes à distance',
 			'IPv4 vers le manager',
 			'Connexion directe depuis G2RD',
+			'Relevé des erreurs PHP',
 			'Site enrôlé.',
 			'Manager : https://wp-manager.g2rd.fr — site n° 7.',
 			'Dernière capture des mises à jour tierces',
@@ -538,7 +586,7 @@ final class PageTest extends TestCase {
 		foreach ( [ 'URL du manager', 'Token d', 'Heartbeat horaire', 'Webhook events', 'Commandes distantes', 'Connecté à', 'site ID', 'MAJ tierces' ] as $ancien ) {
 			self::assertStringNotContainsString( $ancien, $enrole . $non_enrole, "Ancien libellé « {$ancien} » encore présent dans la page." );
 		}
-		foreach ( [ 'g2rd_manager_url', 'g2rd_invitation_token', 'g2rd_heartbeat_enabled', 'g2rd_events_enabled', 'g2rd_remote_commands_enabled', 'g2rd_force_ipv4_to_manager', 'g2rd_allow_direct_login' ] as $champ ) {
+		foreach ( [ 'g2rd_manager_url', 'g2rd_invitation_token', 'g2rd_heartbeat_enabled', 'g2rd_events_enabled', 'g2rd_remote_commands_enabled', 'g2rd_force_ipv4_to_manager', 'g2rd_allow_direct_login', 'g2rd_php_errors_enabled' ] as $champ ) {
 			self::assertStringContainsString( 'name="' . $champ . '"', $enrole . $non_enrole, "Champ « {$champ} » absent du formulaire." );
 		}
 	}

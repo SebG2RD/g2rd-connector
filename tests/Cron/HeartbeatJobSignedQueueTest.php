@@ -136,6 +136,7 @@ final class HeartbeatJobSignedQueueTest extends TestCase {
 		yield 'rollback_plugin' => [ 'rollback_plugin', [ 'file' => 'akismet/akismet.php' ] ];
 		yield 'delete_restore_point' => [ 'delete_restore_point', [ 'all' => true ] ];
 		yield 'set_signature_policy' => [ 'set_signature_policy', [ 'policy' => 'report' ] ];
+		yield 'set_php_errors_capture' => [ 'set_php_errors_capture', [ 'capture' => true ] ];
 	}
 
 	public function test_le_fournisseur_couvre_toutes_les_commandes_signed_only(): void {
@@ -181,6 +182,7 @@ final class HeartbeatJobSignedQueueTest extends TestCase {
 		self::assertSame( 'signature_missing', SignatureState::stats()['last_code'] );
 		self::assertArrayHasKey( 'rp_1', $this->options[ RestorePointStore::OPTION_KEY ], 'aucun point supprimé' );
 		self::assertSame( 'required', Settings::get( 'signature_policy' ) );
+		self::assertNotTrue( Settings::get( 'php_errors_enabled' ), 'relevé jamais activé sans signature' );
 	}
 
 	// ── Le chemin légitime futur : SIGNED_ONLY signée ───────────────────────────
