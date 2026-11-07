@@ -165,6 +165,25 @@ final class FileWalkerTest extends TestCase {
 		}
 	}
 
+	public function test_un_fichier_supprime_pendant_le_parcours_n_est_pas_un_dossier_illisible(): void {
+		// Aucun droit retiré : l'essai tourne aussi sous Windows. « a » reste lisible, seul « a/z.txt » disparaît.
+		$parcours = new FileWalker( $this->racine );
+		$chemins  = [];
+		foreach ( $parcours->walk() as $entree ) {
+			$chemins[] = $entree['path'];
+			if ( 'a/b/c.php' === $entree['path'] ) {
+				unlink( $this->racine . '/a/z.txt' );
+			}
+		}
+
+		self::assertSame(
+			[ 'B.txt', 'a', 'a/b', 'a/b/c.php', 'a.txt', 'a.txt.d', 'wp-content', 'wp-content/cache', 'wp-content/cache/x', 'wp-content/cache/x/y', 'wp-content/uploads', 'wp-content/uploads/m.jpg' ],
+			$chemins
+		);
+		self::assertSame( [], $parcours->unlisted(), 'un dossier encore lisible n\'est jamais inscrit comme illisible' );
+		self::assertFalse( $parcours->within_unlisted( 'a/z.txt' ), 'la vraie disparition reste une suppression' );
+	}
+
 	public function test_des_droits_retires_a_un_parent_pendant_le_parcours_designent_ce_parent(): void {
 		// « p » ne contient que « q » : seul lost_access() depuis « p/q » peut désigner « p ».
 		mkdir( $this->racine . '/p/q', 0777, true );

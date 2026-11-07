@@ -86,7 +86,8 @@ final class FileWalker {
 
 	/**
 	 * Dossiers dont le contenu a été refusé pendant le parcours en cours ou le dernier, dans l'ordre
-	 * du parcours ('' : la racine).
+	 * de découverte ('' : la racine). Cet ordre n'est pas celui du parcours, et la liste peut contenir
+	 * un dossier et l'un de ses descendants (refusé avant que l'ancêtre ne perde ses droits).
 	 *
 	 * @return list<string>
 	 */
