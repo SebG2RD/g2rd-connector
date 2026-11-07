@@ -63,7 +63,9 @@ final class PayloadReader {
 				throw new PayloadError();
 			}
 			$data = self::data( $h['comp'], $stored, $h['raw'] );
-			if ( PayloadFormat::T_FILE === $h['type'] && $h['offset'] + $h['raw'] > $h['total'] ) {
+			// offset + raw_length ≤ total_size, sans addition : près de 2^63, la somme deviendrait un
+			// flottant arrondi comme total_size. offset et total sont dans [0, 2^63 − 1] : pas de débordement.
+			if ( PayloadFormat::T_FILE === $h['type'] && $h['raw'] > $h['total'] - $h['offset'] ) {
 				throw new PayloadError();
 			}
 			$records[] = [

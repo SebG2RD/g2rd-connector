@@ -133,6 +133,72 @@ final class PayloadVectorsTest extends TestCase {
 	}
 
 	/**
+	 * Morceaux qui finissent après leur taille déclarée, près de 2^63 : offset + raw_length y dépasse
+	 * PHP_INT_MAX. Une somme calculée deviendrait un flottant arrondi à 2^63, comme total_size, et le
+	 * dépassement passerait. Le lecteur Python de référence, en entiers exacts, refuse ces flux.
+	 *
+	 * @return array<string, array{int, int, string}> Décalage, taille déclarée, données.
+	 */
+	private static function morceaux_au_dela_de_2_63(): array {
+		return [
+			'1 octet en PHP_INT_MAX'  => [ PHP_INT_MAX, PHP_INT_MAX, 'x' ],
+			'1 Mio qui finit en 2^63' => [ PHP_INT_MAX - PayloadFormat::MAX_RAW_BYTES + 1, PHP_INT_MAX, str_repeat( 'a', PayloadFormat::MAX_RAW_BYTES ) ],
+		];
+	}
+
+	public function test_un_morceau_qui_finit_au_dela_de_sa_taille_pres_de_2_63_est_refuse_par_le_lecteur(): void {
+		foreach ( self::morceaux_au_dela_de_2_63() as $nom => [ $decalage, $taille, $donnees ] ) {
+			// Construit à la main : l'écrivain refuse ce morceau, et les vecteurs ne se modifient pas.
+			$flux = PayloadFormat::MAGIC
+				. PayloadFormat::header( PayloadFormat::T_FILE, PayloadFormat::C_STORED, 5, strlen( $donnees ), strlen( $donnees ), $decalage, $taille, 0, 0644 ) . 'a.txt' . $donnees
+				. PayloadFormat::header( PayloadFormat::T_END, 0, 0, 0, 0, 0, 0, 0, 0 );
+			try {
+				PayloadReader::parse( $flux );
+				self::fail( $nom . ' : devait être refusé' );
+			} catch ( PayloadError $e ) {
+				self::assertSame( PayloadError::MALFORMED, $e->reason(), $nom );
+			}
+		}
+	}
+
+	public function test_un_morceau_qui_finit_au_dela_de_sa_taille_pres_de_2_63_est_refuse_par_l_ecrivain(): void {
+		foreach ( self::morceaux_au_dela_de_2_63() as $nom => [ $decalage, $taille, $donnees ] ) {
+			$recu     = '';
+			$ecrivain = new PayloadWriter( static function ( string $octets ) use ( &$recu ): void {
+				$recu .= $octets;
+			} );
+			try {
+				$ecrivain->file_chunk( 'a.txt', $decalage, $taille, 0, 0644, $donnees, false );
+				self::fail( $nom . ' : devait être refusé' );
+			} catch ( \InvalidArgumentException $e ) {
+				self::assertSame( PayloadFormat::MAGIC, $recu, $nom . ' : rien après la magie, le morceau refusé n\'est pas écrit' );
+			}
+		}
+	}
+
+	public function test_un_morceau_qui_finit_pile_a_sa_taille_pres_de_2_63_est_ecrit_et_relu(): void {
+		// Bord accepté : offset + raw_length = total_size = PHP_INT_MAX. Le contrôle ne doit pas être plus strict que le format.
+		$cas = [
+			'1 octet' => [ PHP_INT_MAX - 1, 'x' ],
+			'1 Mio'   => [ PHP_INT_MAX - PayloadFormat::MAX_RAW_BYTES, str_repeat( 'a', PayloadFormat::MAX_RAW_BYTES ) ],
+			'0 octet' => [ PHP_INT_MAX, '' ],
+		];
+		foreach ( $cas as $nom => [ $decalage, $donnees ] ) {
+			$flux     = '';
+			$ecrivain = new PayloadWriter( static function ( string $octets ) use ( &$flux ): void {
+				$flux .= $octets;
+			} );
+			$ecrivain->file_chunk( 'a.txt', $decalage, PHP_INT_MAX, 0, 0644, $donnees, false );
+			$ecrivain->end();
+			$lus = PayloadReader::parse( $flux );
+			self::assertCount( 1, $lus, $nom );
+			self::assertSame( $decalage, $lus[0]['offset'], $nom );
+			self::assertSame( PHP_INT_MAX, $lus[0]['total_size'], $nom );
+			self::assertSame( $donnees, $lus[0]['data'], $nom );
+		}
+	}
+
+	/**
 	 * @param array<string, mixed> $e
 	 */
 	private static function ecrire( PayloadWriter $ecrivain, array $e ): void {

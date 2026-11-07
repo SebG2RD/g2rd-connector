@@ -38,7 +38,8 @@ final class PayloadWriter {
 	}
 
 	public function file_chunk( string $path, int $offset, int $total_size, int $mtime, int $mode, string $data, bool $compress ): int {
-		if ( $offset < 0 || $offset + strlen( $data ) > $total_size ) {
+		// offset + longueur ≤ taille, sans addition (près de 2^63, la somme deviendrait un flottant arrondi).
+		if ( $offset < 0 || $total_size < 0 || $offset > $total_size - strlen( $data ) ) {
 			throw new \InvalidArgumentException( 'Charge utile G2P1 : morceau de fichier hors de sa taille déclarée. Cause probable : erreur de programmation (décalage négatif, ou taille lue au début du fichier plus petite que ses morceaux). Action : écrire chaque morceau dans la taille déclarée ; un fichier qui grandit pendant sa copie se relit.' );
 		}
 		return $this->record( PayloadFormat::T_FILE, $path, $offset, $total_size, $mtime, $mode, $data, $compress );
