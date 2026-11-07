@@ -43,6 +43,8 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Environment;
 
+use G2RD\Connector\Support\PathRules;
+
 final class SizeMeter {
 
 	/** Base mesurée. */
@@ -363,27 +365,7 @@ final class SizeMeter {
 	 * @throws \ValueError Si PHP refuse le chemin.
 	 */
 	private static function crosses_link( string $base, string $rest ): bool {
-		$path = $base . '/' . $rest;
-		// is_dir() avant is_link() : sous Windows, après is_link() sur une jonction, PHP
-		// resert le lstat() en cache et is_dir() rendrait faux.
-		if ( ! is_dir( $path ) ) {
-			// Absent : rien à suivre, sauf un lien dont la cible manque.
-			return is_link( $path );
-		}
-		if ( is_link( $path ) ) {
-			return true;
-		}
-		// Une racine retrouve son `/` : `C:` seul serait le dossier courant du lecteur.
-		$base_dir  = self::is_root( $base ) ? $base . '/' : $base;
-		$real_base = is_dir( $base_dir ) ? realpath( $base_dir ) : false;
-		$real_path = realpath( $path );
-		if ( false === $real_base || false === $real_path ) {
-			return false;
-		}
-		$expected = self::normalize( $real_base ) . '/' . $rest;
-		$actual   = self::normalize( $real_path );
-		// Windows ne distingue pas la casse, et realpath() y rend celle du disque.
-		return '\\' === DIRECTORY_SEPARATOR ? 0 !== strcasecmp( $actual, $expected ) : $actual !== $expected;
+		return PathRules::crosses_link( $base, $rest );
 	}
 
 	/**
@@ -392,7 +374,7 @@ final class SizeMeter {
 	 * COURANT du lecteur).
 	 */
 	private static function is_root( string $path ): bool {
-		return '' === $path || 1 === preg_match( '#^[A-Za-z]:$#', $path );
+		return PathRules::is_root( $path );
 	}
 
 	/**
@@ -401,7 +383,7 @@ final class SizeMeter {
 	 * réseau Windows), sans `/` final. Sans dépendre de wp_normalize_path().
 	 */
 	private static function normalize( string $path ): string {
-		return rtrim( (string) preg_replace( '#(?<=.)/{2,}#', '/', str_replace( '\\', '/', $path ) ), '/' );
+		return PathRules::normalize( $path );
 	}
 
 	/**
@@ -409,6 +391,6 @@ final class SizeMeter {
 	 * `wp-content/uploads-old` passerait pour un sous-dossier de `wp-content/uploads`.
 	 */
 	private static function is_inside( string $path, string $dir ): bool {
-		return str_starts_with( $path, $dir . '/' );
+		return PathRules::is_inside( $path, $dir );
 	}
 }
