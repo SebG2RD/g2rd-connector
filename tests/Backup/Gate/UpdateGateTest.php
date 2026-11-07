@@ -165,6 +165,20 @@ final class UpdateGateTest extends BackupTestCase {
 		self::assertSame( [], $this->wpdb->held_here, 'leave() idempotent' );
 	}
 
+	public function test_passage_transparent_ouvert_par_la_route_en_arriere_plan_non_repris(): void {
+		self::assertNull( UpdateGate::enter( 'update_plugin', time() ) );
+		self::assertTrue( UpdateGate::transparent() );
+		$requetes = count( $this->wpdb->queries );
+
+		self::assertSame( self::DONE, UpdateGate::around( 'update_plugin', static fn (): array => self::DONE ) );
+		self::assertSame( $requetes, count( $this->wpdb->queries ), 'aucune seconde lecture de l\'état (au plus deux par mise à jour, P4-2)' );
+		self::assertTrue( UpdateGate::transparent(), 'le passage reste à la requête qui l\'a ouvert' );
+		self::assertSame( [], $this->wpdb->locks_and_writes(), 'ni verrou, ni témoin, ni écriture' );
+
+		UpdateGate::leave();
+		self::assertFalse( UpdateGate::transparent() );
+	}
+
 	public function test_une_commande_qui_leve_rend_le_verrou_et_retire_son_entree(): void {
 		$this->settings( [ 'backup_enabled' => true ] );
 

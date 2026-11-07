@@ -134,15 +134,18 @@ final class UpdateGate {
 	}
 
 	/**
-	 * Exécute $run à travers la porte. Un passage déjà ouvert par la route en arrière-plan n'est ni
-	 * repris ni fermé ici : la requête qui l'a ouvert le ferme.
+	 * Exécute $run à travers la porte. Un passage déjà ouvert par la route en arrière-plan (verrou
+	 * tenu, sans verrou, ou porte transparente) n'est ni repris ni fermé ici : la requête qui l'a
+	 * ouvert le ferme (AfterResponseRunner::clean_up()). Sans quoi une porte transparente relirait
+	 * l'état et s'oublierait avant la fin de la mise à jour : trois lectures au lieu de deux au plus
+	 * (P4-2, rappel transverse n° 2).
 	 *
 	 * @template T of array<string, mixed>
 	 * @param \Closure(): T $run
 	 * @return T|array{status: string, error: string, error_code: string, retry_after?: int}
 	 */
 	public static function around( string $command, \Closure $run ): array {
-		if ( null !== self::$current ) {
+		if ( null !== self::$current || self::$transparent ) {
 			return $run();
 		}
 		$refusal = self::enter( $command, time() );
