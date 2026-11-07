@@ -80,6 +80,7 @@ final class NoWiringTest extends TestCase {
 		'includes/Commands/CommandExecutor.php',
 		'includes/Rest/CommandRunsController.php',
 		'includes/CommandRuns/AfterResponseRunner.php',
+		'includes/Plugin.php',
 	];
 
 	/**

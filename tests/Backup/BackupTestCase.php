@@ -32,12 +32,17 @@ abstract class BackupTestCase extends TestCase {
 		// Passage de la porte des mises à jour laissé ouvert par un test précédent : état statique.
 		( new \ReflectionProperty( \G2RD\Connector\Backup\Gate\UpdateGate::class, 'current' ) )->setValue( null, null );
 		( new \ReflectionProperty( \G2RD\Connector\Backup\Gate\UpdateGate::class, 'transparent' ) )->setValue( null, false );
+		// Mise à jour vue par le second filet dans un test précédent : état statique du processus.
+		( new \ReflectionProperty( \G2RD\Connector\Backup\Gate\UpdateWatcher::class, 'started_at' ) )->setValue( null, null );
+		( new \ReflectionProperty( \G2RD\Connector\Backup\Gate\UpdateWatcher::class, 'entries' ) )->setValue( null, [] );
 	}
 
 	protected function tearDown(): void {
 		unset( $GLOBALS['wpdb'] );
 		( new \ReflectionProperty( \G2RD\Connector\Backup\Gate\UpdateGate::class, 'current' ) )->setValue( null, null );
 		( new \ReflectionProperty( \G2RD\Connector\Backup\Gate\UpdateGate::class, 'transparent' ) )->setValue( null, false );
+		( new \ReflectionProperty( \G2RD\Connector\Backup\Gate\UpdateWatcher::class, 'started_at' ) )->setValue( null, null );
+		( new \ReflectionProperty( \G2RD\Connector\Backup\Gate\UpdateWatcher::class, 'entries' ) )->setValue( null, [] );
 		parent::tearDown();
 	}
 
