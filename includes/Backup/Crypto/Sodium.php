@@ -465,6 +465,8 @@ final class Sodium {
 	/**
 	 * Paire Ed25519 native ; la paire concaténée de sodium est effacée.
 	 *
+	 * @param non-empty-string $seed Graine de 32 octets, longueur contrôlée par l'appelant.
+	 *
 	 * @return array{public: string, secret: string}
 	 *
 	 * @throws \SodiumException Échec de l'extension.
@@ -484,6 +486,9 @@ final class Sodium {
 	/**
 	 * Signature Ed25519 native.
 	 *
+	 * @param string           $message Octets signés.
+	 * @param non-empty-string $secret  Clé secrète de 64 octets, longueur contrôlée par l'appelant.
+	 *
 	 * @throws \SodiumException Échec de l'extension.
 	 */
 	private static function sign_native( string $message, string $secret ): string {
@@ -493,6 +498,10 @@ final class Sodium {
 	/**
 	 * Vérificateur natif (ou celui des tests), appelé après le contrôle n° 5. Toute exception rend
 	 * faux.
+	 *
+	 * @param non-empty-string $signature  Signature de 64 octets, longueur contrôlée par l'appelant.
+	 * @param string           $message    Octets signés.
+	 * @param non-empty-string $public_key Clé publique de 32 octets, longueur contrôlée par l'appelant.
 	 */
 	private function verify_native( string $signature, string $message, string $public_key ): bool {
 		try {

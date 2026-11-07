@@ -145,7 +145,10 @@ final class SegmentWriter {
 	 */
 	public function __construct( Hpke $hpke, ?\Closure $random = null ) {
 		$this->hpke   = $hpke;
-		$this->random = $random ?? static fn ( int $length ): string => random_bytes( $length );
+		$this->random = $random ?? static function ( int $length ): string {
+			/** @var int<1, max> $length Seul appelant : la clé de données, DATA_KEY_BYTES (32). */
+			return random_bytes( $length );
+		};
 	}
 
 	/**
