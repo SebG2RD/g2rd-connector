@@ -760,7 +760,7 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 						title="Relevé des erreurs PHP"
 						description={
 							state.phpErrorsEnabled
-								? 'Les erreurs fatales de PHP de ce site sont gardées 7 jours au plus et transmises au manager avec l’inventaire. Le message est filtré sur le site avant tout envoi : chemins du serveur, adresses e-mail, adresses IP, mots de passe et jetons sont retirés.'
+								? 'Les erreurs fatales de PHP de ce site sont gardées 7 jours au plus et transmises au manager avec l’inventaire. Le message est filtré sur le site avant tout envoi : chemins du serveur, adresses e-mail, adresses IP, mots de passe et jetons sont retirés. Pour l’arrêter, coupez l’interrupteur puis enregistrez ; le manager peut aussi l’activer ou la couper.'
 								: 'Désactivé : aucune erreur PHP n’est relevée ni transmise. Le manager peut aussi l’activer ou le couper.'
 						}
 						checked={ state.phpErrorsEnabled }
