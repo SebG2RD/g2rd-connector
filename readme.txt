@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.16.0-rc.1
+Stable tag: 1.16.0-rc.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -87,6 +87,19 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 2. Theme-integrated "Manager G2RD" tab in the G2RD theme console (requires `g2rd-theme` >= 1.19 as the theme or its parent theme).
 
 == Changelog ==
+
+= 1.16.0-rc.2 =
+
+* **Security: the cause of an interrupted background command no longer carries the call stack**,
+  which could contain call arguments; the message is still filtered as before.
+* **Security: the PHP error filter now also masks the database password by its value**, like the
+  database name, user and host.
+* **Performance: with PHP error monitoring on, a site that fails on every request no longer pays
+  for the component version lookup and the lock** before the one-write-per-minute rule applies.
+* **Fix: reading the end of the PHP error log can no longer stay on while PHP error monitoring is
+  off.**
+* **Settings: the "Relevé des erreurs PHP" option has a short label, its explanation as grey help
+  text, and says how to turn it off.**
 
 = 1.16.0-rc.1 =
 
