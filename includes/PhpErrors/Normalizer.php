@@ -55,6 +55,14 @@ final class Normalizer {
 	public const MESSAGE_MAX_BYTES = 16000;
 
 	/**
+	 * Pile d'appels d'une exception non rattrapée, du saut de ligne qui précède « Stack trace: »
+	 * jusqu'à la fin du message : elle porte des chemins et les arguments des appels quand PHP les
+	 * affiche (zend.exception_ignore_args à Off). Retirée du bloc php_errors (occurrence()) et de
+	 * la cause d'interruption d'une commande (CommandRuns\AfterResponseRunner) avant le filtre.
+	 */
+	public const STACK_TRACE = '/\R\s*+Stack trace:.*\z/s';
+
+	/**
 	 * Types d'erreur qui arrêtent le script : `fatal`. E_USER_ERROR en fait partie (trigger_error()
 	 * l'arrête aussi, et CommandRuns\AfterResponseRunner le compte déjà comme fatal).
 	 */
@@ -167,7 +175,7 @@ final class Normalizer {
 		// du journal le perd au découpage (LogTail::LINE) ; sans ce retrait, une même erreur vue
 		// par les deux sources ferait deux groupes. Le fichier et la ligne ont leurs champs.
 		$message       = substr( $message, 0, self::MESSAGE_MAX_BYTES );
-		$without_trace = (string) preg_replace( '/\R\s*+Stack trace:.*\z/s', '', $message );
+		$without_trace = (string) preg_replace( self::STACK_TRACE, '', $message );
 		$without_where = (string) preg_replace( '/\s++in\s++\S+?(?::\d++|\s++on\s++line\s++\d++)\s*+\z/', '', $without_trace );
 		$clean         = Redactor::redact( '' === trim( $without_where ) ? $without_trace : $without_where );
 

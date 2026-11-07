@@ -729,7 +729,9 @@ final class AfterResponseRunner {
 	 * renvoie au journal d'erreurs PHP du site.
 	 *
 	 * Depuis la 1.16, le message et le fichier sont filtrés (PhpErrors\Redactor,
-	 * PhpErrors\Normalizer::relative_file()) : la cause ne porte plus de chemin du serveur. Le
+	 * PhpErrors\Normalizer::relative_file()) : la cause ne porte plus de chemin du serveur. La pile
+	 * d'appels d'une exception non rattrapée est retirée avant le filtre, comme pour le bloc
+	 * php_errors : elle porte les arguments des appels (noms, mots de passe…). Le
 	 * message fixe de PHP pour la mémoire épuisée, qui ne porte que des nombres, est gardé sans
 	 * passer par le filtre : c'est le moment où le dernier filet a le moins de mémoire (prouvé
 	 * par le scénario « memoire » de ShutdownOrderTest).
@@ -740,17 +742,26 @@ final class AfterResponseRunner {
 	 */
 	private static function interruption_cause( ?array $last ): array {
 		if ( null !== $last && in_array( $last['type'], self::FATAL_ERROR_TYPES, true ) ) {
+			// Filtrés (1.16) : chemin relatif à WordPress, chemins du serveur, e-mails, IP et
+			// jetons retirés du message ; 2 000 caractères au plus, RunStore coupe à 2 Ko.
+			// Mémoire épuisée : message fixe de PHP gardé tel quel, sans charger le filtre.
+			if ( 1 === preg_match( self::MEMORY_EXHAUSTED, $last['message'] ) ) {
+				$detail = (string) preg_replace( '/ at \S+?:\d+(?= \(tried)/', '', $last['message'] );
+			} else {
+				// Pile d'appels d'une exception non rattrapée (chemins, arguments des appels) retirée
+				// avant le filtre, comme pour le bloc php_errors (Normalizer::occurrence()), sur le
+				// message borné à ce que le filtre lit ; message entier gardé s'il ne reste rien.
+				$message       = substr( $last['message'], 0, Normalizer::MESSAGE_MAX_BYTES );
+				$without_trace = (string) preg_replace( Normalizer::STACK_TRACE, '', $message );
+				$detail        = Redactor::redact( '' === trim( $without_trace ) ? $message : $without_trace, null, 2000 );
+			}
+
 			return [
 				self::REASON_FATAL_ERROR,
 				sprintf(
 					/* translators: 1: message de l'erreur PHP ; 2: fichier où elle s'est produite ; 3: ligne. */
 					__( 'La commande s’est arrêtée sur une erreur fatale de PHP avant d’avoir rendu son résultat : son travail est peut-être partiel. Cause probable : erreur d’une extension, du thème ou du connecteur, ou limite de mémoire ou de durée de PHP atteinte (détail en fin de message). Action : aucune pour cette opération, la plateforme vérifie l’état réel du site ; si l’erreur se répète, corriger ou désactiver l’extension en cause. Erreur : %1$s (%2$s, ligne %3$d)', 'g2rd-connector' ),
-					// Filtrés (1.16) : chemin relatif à WordPress, chemins du serveur, e-mails, IP et
-					// jetons retirés du message ; 2 000 caractères au plus, RunStore coupe à 2 Ko.
-					// Mémoire épuisée : message fixe de PHP gardé tel quel, sans charger le filtre.
-					1 === preg_match( self::MEMORY_EXHAUSTED, $last['message'] )
-						? (string) preg_replace( '/ at \S+?:\d+(?= \(tried)/', '', $last['message'] )
-						: Redactor::redact( $last['message'], null, 2000 ),
+					$detail,
 					Normalizer::relative_file( $last['file'] ),
 					$last['line']
 				),
