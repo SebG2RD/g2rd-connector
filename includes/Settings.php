@@ -153,17 +153,32 @@ final class Settings {
 				$clean[ $flag ] = (bool) $value[ $flag ];
 			}
 		}
-		// Lecture du journal sans relevé : jamais (même règle que PhpErrors\CaptureCommand).
-		if ( false === ( $clean['php_errors_enabled'] ?? null ) ) {
-			$clean['php_errors_log_tail'] = false;
-		}
 		if ( isset( $value['signature_policy'] ) ) {
 			// Toute valeur inconnue retombe sur la politique la plus permissive : une
 			// saisie erronée ne doit jamais pouvoir couper le site du manager.
 			$clean['signature_policy'] = 'required' === $value['signature_policy'] ? 'required' : 'report';
 		}
 
-		return array_replace_recursive( self::all(), $clean );
+		return self::align_php_errors( array_replace_recursive( self::all(), $clean ) );
+	}
+
+	/**
+	 * Lecture du journal sans relevé : jamais (même règle que PhpErrors\CaptureCommand).
+	 *
+	 * Appliquée aux réglages complets, après fusion avec ceux de la base : une valeur partielle
+	 * qui ne porte que `php_errors_log_tail`, relevé coupé, ne l'active pas, et une lecture du
+	 * journal restée active en base sans le relevé est coupée à l'écriture suivante. Relevé actif
+	 * veut dire `true` strictement, comme pour FatalCatcher, LogTail et SnapshotBlock.
+	 *
+	 * @param array<string, mixed> $settings
+	 * @return array<string, mixed>
+	 */
+	private static function align_php_errors( array $settings ): array {
+		if ( true !== ( $settings['php_errors_enabled'] ?? false ) ) {
+			$settings['php_errors_log_tail'] = false;
+		}
+
+		return $settings;
 	}
 
 	/**
@@ -219,7 +234,9 @@ final class Settings {
 	 */
 	private static function persist( array $partial ): void {
 		$current = self::all();
-		$merged  = array_replace_recursive( $current, $partial );
+		// Hors de l'administration, register_setting() n'est pas posé et sanitize() ne passe pas
+		// (API REST, commandes) : la règle du relevé est donc aussi appliquée ici.
+		$merged = self::align_php_errors( array_replace_recursive( $current, $partial ) );
 		update_option( self::OPTION_KEY, $merged, true );
 	}
 
