@@ -96,4 +96,34 @@ final class SettingsSanitizeTest extends TestCase {
 
 		self::assertFalse( Settings::sanitize( [ 'heartbeat_enabled' => true ] )['allow_direct_login'] );
 	}
+
+	/** Relevé des erreurs PHP (1.16) : éteint par défaut, lecture du journal aussi. */
+	public function test_le_releve_des_erreurs_php_est_desactive_par_defaut(): void {
+		self::assertFalse( Settings::defaults()['php_errors_enabled'] );
+		self::assertFalse( Settings::defaults()['php_errors_log_tail'] );
+	}
+
+	public function test_relever_coupe_coupe_aussi_la_lecture_du_journal(): void {
+		$saved = Settings::sanitize(
+			[
+				'php_errors_enabled'  => false,
+				'php_errors_log_tail' => true,
+			]
+		);
+
+		self::assertFalse( $saved['php_errors_enabled'] );
+		self::assertFalse( $saved['php_errors_log_tail'] );
+	}
+
+	public function test_les_deux_cases_du_releve_sont_enregistrables(): void {
+		$saved = Settings::sanitize(
+			[
+				'php_errors_enabled'  => true,
+				'php_errors_log_tail' => true,
+			]
+		);
+
+		self::assertTrue( $saved['php_errors_enabled'] );
+		self::assertTrue( $saved['php_errors_log_tail'] );
+	}
 }

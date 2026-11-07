@@ -1,0 +1,44 @@
+{
+  "description": "Exemples du bloc php_logging du snapshot (version 1 de la forme), créés par le connecteur 1.16 (PhpErrors\\LoggingProbe) : réglages de journalisation de PHP et de WordPress, emplacement du journal PHP (jamais son chemin), lisibilité et taille quand il est rangé dans WordPress. error_log_readable : true ou false seulement si le connecteur l'a vérifié (inside_wordpress), false pour missing, null (inconnu, non vérifié) pour unset, outside_wordpress, refused et network_shared. network_shared : site secondaire d'un réseau multisite, dont le journal PHP, commun au réseau, n'est lu que par le site principal. Le manager (lot E1) recopie ce fichier à l'octet dans backend/tests/fixtures/. Ne pas modifier sans mettre à jour les deux dépôts.",
+  "values": {
+    "error_log": ["unset", "inside_wordpress", "outside_wordpress", "missing", "refused", "network_shared"]
+  },
+  "examples": {
+    "journal_dans_wordpress": {
+      "version": 1,
+      "log_errors": true,
+      "display_errors": false,
+      "wp_debug": true,
+      "wp_debug_log": true,
+      "wp_debug_display": false,
+      "error_log": "inside_wordpress",
+      "error_log_readable": true,
+      "error_log_bytes": 1048576
+    },
+    "journal_hors_wordpress": {
+      "version": 1,
+      "log_errors": true,
+      "display_errors": false,
+      "wp_debug": false,
+      "wp_debug_log": false,
+      "wp_debug_display": true,
+      "error_log": "outside_wordpress",
+      "error_log_readable": null,
+      "error_log_bytes": null
+    },
+    "journal_non_defini": {
+      "version": 1,
+      "log_errors": false,
+      "display_errors": null,
+      "wp_debug": false,
+      "wp_debug_log": false,
+      "wp_debug_display": null,
+      "error_log": "unset",
+      "error_log_readable": null,
+      "error_log_bytes": null
+    },
+    "illisible": {
+      "version": 1
+    }
+  }
+}

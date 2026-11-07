@@ -11,7 +11,8 @@ use G2RD\Connector\Tests\TestCase;
 /**
  * Capacités annoncées au manager : `direct_login` lui dit, site par site, que la
  * connexion directe est possible (sinon refus `connector_outdated` côté manager) ;
- * `async_commands` lui dit que les commandes longues peuvent s'exécuter en arrière-plan.
+ * `async_commands` lui dit que les commandes longues peuvent s'exécuter en arrière-plan ;
+ * `php_errors` (1.16) : le site sait relever ses erreurs PHP, même collecte coupée.
  */
 final class SnapshotCapabilitiesTest extends TestCase {
 
@@ -20,7 +21,7 @@ final class SnapshotCapabilitiesTest extends TestCase {
 		// liste ne dépend plus que de ce qui est toujours vrai.
 		Functions\when( 'get_filesystem_method' )->justReturn( 'ftpext' );
 
-		self::assertSame( [ 'signed_commands', 'direct_login' ], ( new SnapshotController() )->capabilities() );
+		self::assertSame( [ 'signed_commands', 'direct_login', 'php_errors' ], ( new SnapshotController() )->capabilities() );
 	}
 
 	/**
@@ -33,7 +34,7 @@ final class SnapshotCapabilitiesTest extends TestCase {
 		$litespeed = static fn ( string $name ): bool => 'litespeed_finish_request' === $name;
 
 		self::assertSame(
-			[ 'signed_commands', 'direct_login', 'async_commands' ],
+			[ 'signed_commands', 'direct_login', 'php_errors', 'async_commands' ],
 			( new SnapshotController() )->capabilities( $litespeed )
 		);
 	}

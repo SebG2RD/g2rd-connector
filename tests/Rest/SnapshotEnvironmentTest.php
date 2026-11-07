@@ -38,7 +38,7 @@ final class SnapshotEnvironmentTest extends SnapshotTestCase {
 
 		$snapshot = $this->snapshot();
 
-		self::assertSame( 'environment', array_key_last( $snapshot ), 'dernière clé, après pending_outcomes' );
+		self::assertSame( [ 'pending_outcomes', 'environment' ], array_slice( array_keys( $snapshot ), -4, 2 ), 'après pending_outcomes, avant les blocs de la 1.16' );
 		$environment = $snapshot['environment'];
 		self::assertSame(
 			[ 'version', 'php_sapi', 'extensions', 'sodium_library_version', 'exec_available', 'memory_limit_bytes', 'max_execution_seconds', 'disk', 'sizes' ],
@@ -122,7 +122,7 @@ final class SnapshotEnvironmentTest extends SnapshotTestCase {
 			],
 			$snapshot['server']
 		);
-		self::assertSame( [ 'signed_commands', 'direct_login' ], $snapshot['capabilities'], 'aucune capacité nouvelle' );
+		self::assertSame( [ 'signed_commands', 'direct_login', 'php_errors' ], $snapshot['capabilities'], 'seule capacité nouvelle : php_errors (1.16)' );
 
 		$collected_at = $snapshot['db_health']['collected_at'];
 		self::assertSame(

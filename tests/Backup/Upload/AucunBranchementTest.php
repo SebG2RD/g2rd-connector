@@ -14,7 +14,10 @@ use G2RD\Connector\Tests\TestCase;
  * commande : une version publiée par erreur avec cette branche ne change rien au site.
  *
  * Les listes de référence sont celles d'origin/main (993d729), recopiées en dur : lues
- * dans le code, elles suivraient ce qu'elles doivent surveiller. La phase 4, qui
+ * dans le code, elles suivraient ce qu'elles doivent surveiller. Elles sont recalées sur
+ * la 1.16.0-rc.1 (origin/main 666f084 : réglages `php_errors_enabled` et
+ * `php_errors_log_tail`, commande signée `set_php_errors_capture`) dans le commit qui
+ * fusionne main dans le module (plan de la phase 4, « Piste concurrente C1 »). La phase 4, qui
  * branchera l'envoi (commande, réglage `force_ipv4_to_storage`), met ces listes à jour
  * dans le même commit que le branchement, sciemment.
  */
@@ -36,6 +39,8 @@ final class AucunBranchementTest extends TestCase {
 		'force_ipv4_to_manager'   => false,
 		'allow_direct_login'      => true,
 		'signature_policy'        => 'report',
+		'php_errors_enabled'      => false,
+		'php_errors_log_tail'     => false,
 	];
 
 	/** CommandExecutor::ALLOWED d'origin/main, dans son ordre. */
@@ -54,6 +59,7 @@ final class AucunBranchementTest extends TestCase {
 		'rollback_plugin',
 		'delete_restore_point',
 		'set_signature_policy',
+		'set_php_errors_capture',
 	];
 
 	/** CommandExecutor::SIGNED_ONLY d'origin/main, dans son ordre. */
@@ -61,6 +67,7 @@ final class AucunBranchementTest extends TestCase {
 		'rollback_plugin',
 		'delete_restore_point',
 		'set_signature_policy',
+		'set_php_errors_capture',
 	];
 
 	/**

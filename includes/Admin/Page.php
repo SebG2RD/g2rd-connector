@@ -384,6 +384,17 @@ final class Page {
 							<p class="description" id="g2rd_allow_direct_login_aide"><?php echo esc_html__( 'G2RD WP Manager peut ouvrir l\'administration de ce site sans mot de passe, avec le compte administrateur choisi dans la fiche du site (lien à usage unique valable une minute, réservé aux comptes protégés par double authentification). Décochée : le manager ouvre la page de connexion habituelle.', 'g2rd-connector' ); ?></p>
 						</td>
 					</tr>
+					<tr>
+						<th scope="row" id="g2rd_php_errors_enabled_titre"><?php echo esc_html__( 'Relevé des erreurs PHP', 'g2rd-connector' ); ?></th>
+						<td>
+							<label>
+								<input type="checkbox" aria-labelledby="g2rd_php_errors_enabled_titre" aria-describedby="g2rd_php_errors_enabled_aide"
+									name="g2rd_php_errors_enabled" value="1"
+									<?php checked( (bool) ( $settings['php_errors_enabled'] ?? false ) ); ?>>
+								<span id="g2rd_php_errors_enabled_aide"><?php echo esc_html__( 'Garde les erreurs fatales de PHP de ce site pendant 7 jours au plus et les transmet au manager avec l’inventaire. Le message est filtré sur le site avant tout envoi : chemins du serveur, adresses e-mail, adresses IP, mots de passe et jetons sont retirés. Désactivé par défaut ; le manager peut aussi l’activer ou le couper.', 'g2rd-connector' ); ?></span>
+							</label>
+						</td>
+					</tr>
 				</table>
 
 				<p class="submit">
@@ -424,6 +435,9 @@ final class Page {
 				'remote_commands_enabled' => ! empty( $_POST['g2rd_remote_commands_enabled'] ),
 				'force_ipv4_to_manager'   => ! empty( $_POST['g2rd_force_ipv4_to_manager'] ),
 				'allow_direct_login'      => ! empty( $_POST['g2rd_allow_direct_login'] ),
+				'php_errors_enabled'      => ! empty( $_POST['g2rd_php_errors_enabled'] ),
+				// La lecture du journal ne se règle que par le manager ; relevé décoché, elle est coupée.
+				'php_errors_log_tail'     => ! empty( $_POST['g2rd_php_errors_enabled'] ) && true === Settings::get( 'php_errors_log_tail' ),
 			]
 		);
 

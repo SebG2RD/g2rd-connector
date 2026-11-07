@@ -10,6 +10,8 @@ use G2RD\Connector\Cron\Phase;
 use G2RD\Connector\Cron\RestorePointPurgeJob;
 use G2RD\Connector\Environment\SizeReport;
 use G2RD\Connector\Events\LoginFailedThrottle;
+use G2RD\Connector\PhpErrors\Buffer;
+use G2RD\Connector\PhpErrors\LogTail;
 use G2RD\Connector\Rest\DbHealth;
 use G2RD\Connector\Rollback\UpdateTransaction;
 use G2RD\Connector\Settings;
@@ -288,6 +290,25 @@ final class UninstallTest extends TestCase {
 		$this->uninstall();
 
 		self::assertContains( SizeReport::OPTION, $deleted );
+	}
+
+	/** Erreurs PHP relevées et décalage de lecture du journal (1.16), sur chaque blog. */
+	public function test_les_erreurs_php_relevees_sont_retirees_sur_chaque_blog(): void {
+		$deleted = [];
+		Functions\when( 'delete_option' )->alias(
+			function ( string $key ) use ( &$deleted ): bool {
+				$deleted[] = $this->blog . ':' . $key;
+				unset( $this->options[ $key ] );
+				return true;
+			}
+		);
+
+		$this->uninstall();
+
+		foreach ( [ 1, 2 ] as $blog ) {
+			self::assertContains( $blog . ':' . Buffer::OPTION, $deleted );
+			self::assertContains( $blog . ':' . LogTail::CURSOR_OPTION, $deleted );
+		}
 	}
 
 	private function uninstall(): void {

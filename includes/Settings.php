@@ -109,6 +109,13 @@ final class Settings {
 			// `report` : signature vérifiée, échec remonté, requête acceptée.
 			// `required` : toute requête non signée ou mal signée est refusée.
 			'signature_policy'        => 'report',
+			// Relevé des erreurs PHP (1.16) : erreurs fatales gardées 7 jours et remises au manager
+			// avec l'inventaire. Désactivé par défaut ; activé site par site par la commande signée
+			// `set_php_errors_capture` ou par la case « Relevé des erreurs PHP ».
+			'php_errors_enabled'      => false,
+			// Lecture de la fin du journal PHP (1.16), seulement avec le relevé et seulement pour
+			// un journal rangé dans WordPress (cf. PhpErrors\LogTail). Désactivée par défaut.
+			'php_errors_log_tail'     => false,
 		];
 	}
 
@@ -141,10 +148,14 @@ final class Settings {
 		}
 		// Toute case à cocher déclarée dans defaults() doit figurer ici : une clé absente
 		// est jetée à chaque enregistrement (défaut de la 1.12.0-rc.3 sur l'option IPv4).
-		foreach ( [ 'heartbeat_enabled', 'events_enabled', 'remote_commands_enabled', 'force_ipv4_to_manager', 'allow_direct_login' ] as $flag ) {
+		foreach ( [ 'heartbeat_enabled', 'events_enabled', 'remote_commands_enabled', 'force_ipv4_to_manager', 'allow_direct_login', 'php_errors_enabled', 'php_errors_log_tail' ] as $flag ) {
 			if ( isset( $value[ $flag ] ) ) {
 				$clean[ $flag ] = (bool) $value[ $flag ];
 			}
+		}
+		// Lecture du journal sans relevé : jamais (même règle que PhpErrors\CaptureCommand).
+		if ( false === ( $clean['php_errors_enabled'] ?? null ) ) {
+			$clean['php_errors_log_tail'] = false;
 		}
 		if ( isset( $value['signature_policy'] ) ) {
 			// Toute valeur inconnue retombe sur la politique la plus permissive : une

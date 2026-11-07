@@ -8,6 +8,7 @@ use G2RD\Connector\Admin\Page;
 use G2RD\Connector\Security\QueueSignature;
 use G2RD\Connector\Security\RequestSignature;
 use G2RD\Connector\Tests\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 use ReflectionClass;
 use ReflectionMethod;
 
@@ -24,6 +25,10 @@ use ReflectionMethod;
  * ajoutée pour cela) : ces tests lisent les sources du panneau et de sa feuille.
  * La base de test (Brain Monkey) fournit les fonctions de traduction dont a
  * besoin l'explication PHP du jeton (Page::token_problem), comparée au panneau.
+ *
+ * Les sources sont lues en LF (source()) : le dépôt et la CI les ont en LF, une
+ * copie Windows (core.autocrlf) en CRLF, et les expressions régulières de ces
+ * tests sont écrites pour « \n ».
  */
 final class ConnectorPanelTest extends TestCase {
 
@@ -97,6 +102,7 @@ final class ConnectorPanelTest extends TestCase {
 				'Commandes à distance',
 				'IPv4 vers le manager',
 				'Connexion directe depuis G2RD',
+				'Relevé des erreurs PHP',
 				'Exiger des commandes signées',
 			],
 			$lignes[1],
@@ -197,13 +203,22 @@ final class ConnectorPanelTest extends TestCase {
 	 * actif, alors que seul « Enregistrer » (en haut, dans « Connexion au
 	 * manager ») l'applique, et que quitter l'onglet le perd : sous le dernier
 	 * réglage, un rappel annoncé (aria-live) le dit, avec un second bouton
-	 * « Enregistrer ». Le rappel compare les sept réglages envoyés par
+	 * « Enregistrer ». Le rappel compare les huit réglages envoyés par
 	 * l'enregistrement à leur valeur enregistrée.
 	 */
 	public function test_les_modifications_non_enregistrees_sont_signalees_sous_les_reglages(): void {
 		$panneau = self::panneau();
 
 		self::assertMatchesRegularExpression( '/function hasPendingChanges\(.*?settingsPayload\( current \).*?settingsPayload\( stored \)/s', $panneau );
+		preg_match( '/function settingsPayload\(.*?return \{(.*?)\};/s', $panneau, $charge );
+		self::assertArrayHasKey( 1, $charge, 'settingsPayload introuvable dans le panneau.' );
+		preg_match_all( '/^\s*(\w+):/m', $charge[1], $cles );
+		self::assertSame(
+			[ 'manager_url', 'heartbeat_enabled', 'events_enabled', 'remote_commands_enabled', 'force_ipv4_to_manager', 'allow_direct_login', 'php_errors_enabled', 'signature_required' ],
+			$cles[1],
+			'« Enregistrer » doit envoyer les huit réglages, relevé des erreurs PHP compris.'
+		);
+		self::assertStringContainsString( 'Mêmes huit réglages', $panneau );
 		self::assertStringContainsString( 'const pending = hasPendingChanges( state, saved );', $panneau );
 		self::assertMatchesRegularExpression(
 			'/aria-live="polite"\s*>\s*\{ pending && \(\s*<Status cx=\{ cx \} tone="warn">\s*Modifications non enregistrées\s*<\/Status>/',
@@ -248,14 +263,30 @@ final class ConnectorPanelTest extends TestCase {
 	}
 
 	/**
+	 * Fins de ligne d'une copie du dépôt.
+	 *
+	 * @return array<string, array{0: string}>
+	 */
+	public static function fins_de_ligne(): array {
+		return [
+			'LF (dépôt, CI)'                      => [ "\n" ],
+			'CRLF (copie Windows, core.autocrlf)' => [ "\r\n" ],
+		];
+	}
+
+	/**
 	 * Échec d'enrôlement : une cause et une action par famille d'erreur. Problème
 	 * de réseau ou blocage en chemin (CDN, pare-feu) : « IPv4 vers le manager »
 	 * puis « Enregistrer », et jamais de nouvelle invitation, inutile tant que la
 	 * requête n'atteint pas le manager. Invitation refusée par le manager : nouvelle
 	 * invitation.
+	 *
+	 * Vérifié sur les sources en LF et en CRLF, quelle que soit la copie : la fin de
+	 * enrollFailureKind se repère par « \n}\n », que le CRLF faisait manquer.
 	 */
-	public function test_chaque_echec_d_enrolement_a_sa_cause_et_son_action(): void {
-		$connexion = self::source( 'assets/admin/src/connection.ts' );
+	#[DataProvider( 'fins_de_ligne' )]
+	public function test_chaque_echec_d_enrolement_a_sa_cause_et_son_action( string $fin ): void {
+		$connexion = self::en_lf( self::avec_fins( self::source( 'assets/admin/src/connection.ts' ), $fin ) );
 
 		preg_match( '/export type EnrollFailure =((?:\s*\|\s*\'[a-z-]+\')+);/', $connexion, $union );
 		self::assertArrayHasKey( 1, $union, 'Type EnrollFailure introuvable dans connection.ts.' );
@@ -307,7 +338,7 @@ final class ConnectorPanelTest extends TestCase {
 		}
 
 		// Le panneau affiche ce message, et reprend les réglages joints à l'erreur.
-		$panneau = self::panneau();
+		$panneau = self::en_lf( self::avec_fins( self::panneau(), $fin ) );
 		self::assertStringContainsString( 'ENROLL_FAILURES[ enrollFailureKind( error ) ]', $panneau );
 		self::assertMatchesRegularExpression( '/const kept = savedDataOf\( e \);\s*if \( null !== kept \) \{\s*accept\( kept \);/', $panneau );
 	}
@@ -566,10 +597,21 @@ final class ConnectorPanelTest extends TestCase {
 		return self::source( 'assets/admin/src/ConnectorPanel.tsx' );
 	}
 
+	/** Source du dépôt, lue en LF quelles que soient les fins de ligne de la copie. */
 	private static function source( string $chemin ): string {
 		$source = is_readable( dirname( __DIR__, 2 ) . '/' . $chemin ) ? file_get_contents( dirname( __DIR__, 2 ) . '/' . $chemin ) : false;
 		self::assertIsString( $source, "{$chemin} est absent ou illisible." );
-		return $source;
+		return self::en_lf( $source );
+	}
+
+	/** Fins de ligne CRLF (ou CR seul) ramenées à LF. */
+	private static function en_lf( string $source ): string {
+		return str_replace( [ "\r\n", "\r" ], "\n", $source );
+	}
+
+	/** La source telle qu'une copie aux fins de ligne `$fin` la donnerait. */
+	private static function avec_fins( string $source, string $fin ): string {
+		return str_replace( "\n", $fin, self::en_lf( $source ) );
 	}
 
 	private static function sans_commentaires( string $source ): string {

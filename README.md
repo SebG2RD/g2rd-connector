@@ -41,6 +41,7 @@ g2rd-connector/
 │   ├── DirectLogin/            connexion directe : point d'entrée, contrôles, snapshot
 │   ├── CommandRuns/            commandes en arrière-plan : stockage, créneau, cycle de vie, exécution après la réponse
 │   ├── Environment/            mesure de l'environnement (bloc environment du snapshot)
+│   ├── PhpErrors/              relevé des erreurs PHP (1.16) : arrêt de PHP, filtre, tampon, journal, commande, blocs php_errors et php_logging
 │   ├── Backup/                 sauvegardes chiffrées : préparation, rien de branché
 │   │   ├── Crypto/             AES-256-GCM, HKDF, X25519 et Ed25519 (sodium ou sodium_compat), autotest
 │   │   └── Format/             format G2BK v1 : en-tête, HPKE, segments, index signé, certificat
@@ -283,7 +284,7 @@ Politique, réglable dans la page d'administration (« Exiger des commandes sign
   `signature_check`, en-tête `X-G2RD-Signature-Check`), mais une requête non signée reste acceptée ;
 - `required` : toute requête non signée ou mal signée est refusée (401).
 
-Les commandes `rollback_plugin`, `delete_restore_point` et `set_signature_policy` exigent une
+Les commandes `rollback_plugin`, `delete_restore_point`, `set_signature_policy` et `set_php_errors_capture` exigent une
 signature valide quelle que soit la politique.
 
 #### Registre anti-rejeu
@@ -635,7 +636,7 @@ est celle de `/command` pour chaque commande.
   `rollback_plugin`, `optimize_database`, `delete_spam_comments`, `delete_post_revisions`,
   `empty_trashed_posts`, `delete_expired_transients`, et la sonde `async_probe` (ci-dessous).
 - Commandes instantanées, refusées ici : elles restent sur `/command` (`clear_cache`,
-  `check_updates`, `delete_restore_point`, `set_signature_policy`).
+  `check_updates`, `delete_restore_point`, `set_signature_policy`, `set_php_errors_capture`).
 
 | Situation à l'arrivée | Réponse | Exécution |
 | --- | --- | --- |

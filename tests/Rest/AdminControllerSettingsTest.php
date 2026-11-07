@@ -33,6 +33,36 @@ final class AdminControllerSettingsTest extends TestCase {
 		self::assertArrayNotHasKey( 'allow_direct_login', ( new AdminController() )->collect_settings( $this->request() ) );
 	}
 
+	public function test_la_case_du_releve_envoyee_par_le_panneau_est_retenue(): void {
+		$request = $this->request();
+		$request->set_param( 'php_errors_enabled', true );
+
+		self::assertTrue( ( new AdminController() )->collect_settings( $request )['php_errors_enabled'] );
+	}
+
+	public function test_releve_decoche_dans_le_panneau_coupe_aussi_le_journal(): void {
+		$request = $this->request();
+		$request->set_param( 'php_errors_enabled', false );
+
+		$settings = ( new AdminController() )->collect_settings( $request );
+
+		self::assertFalse( $settings['php_errors_enabled'] );
+		self::assertFalse( $settings['php_errors_log_tail'] );
+	}
+
+	/**
+	 * La lecture du journal ne se règle que par le manager : relevé coché (ou
+	 * absent de la requête), le panneau n'y touche pas.
+	 */
+	public function test_releve_coche_ou_absent_laisse_la_lecture_du_journal_au_manager(): void {
+		$request = $this->request();
+		$request->set_param( 'php_errors_enabled', true );
+
+		self::assertArrayNotHasKey( 'php_errors_log_tail', ( new AdminController() )->collect_settings( $request ) );
+		self::assertArrayNotHasKey( 'php_errors_log_tail', ( new AdminController() )->collect_settings( $this->request() ) );
+		self::assertArrayNotHasKey( 'php_errors_enabled', ( new AdminController() )->collect_settings( $this->request() ) );
+	}
+
 	private function request(): WP_REST_Request {
 		$request = new WP_REST_Request( 'POST', '/g2rd/v1/admin/save' );
 		$request->set_param( 'manager_url', 'https://wp-manager.g2rd.fr' );

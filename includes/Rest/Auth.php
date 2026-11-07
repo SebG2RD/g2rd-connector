@@ -207,6 +207,17 @@ final class Auth {
 	 * valide : check_signature() ne consulte le registre des nonces que sur `ok`.
 	 * Le marquage est cette vérification mémorisée, lue dans le même WeakMap ; une
 	 * requête jamais contrôlée n'est pas marquée.
+	 *
+	 * Comparaisons exactes, casse comprise : la tolérance est une exception au refus des
+	 * rejeux, elle ne vaut que pour l'écriture exacte de l'acceptation. WordPress met la
+	 * méthode en capitales (WP_REST_Request::set_method()), la plateforme écrit la route
+	 * en minuscules, et le CDN renvoie la requête à l'identique ; une autre écriture de la
+	 * route, que WordPress sert aussi (il compare les routes sans tenir compte de la
+	 * casse), voit son renvoi refusé comme tout rejeu. Rien de secret ici (état, code,
+	 * méthode, route) : pas de temps constant ; la signature, elle, est comparée par
+	 * hash_equals() (RequestSignature::verify()). Le garde de taille, lui, reconnaît la
+	 * route sans tenir compte de la casse (CommandRunsController::is_accept_route()) :
+	 * un refus doit couvrir toutes les écritures que WordPress sert.
 	 */
 	public static function is_replayed_acceptance( WP_REST_Request $request ): bool {
 		if ( null === self::$checked || ! isset( self::$checked[ $request ] ) ) {
@@ -216,7 +227,7 @@ final class Auth {
 
 		return RequestSignature::STATUS_FAILED === $check['status']
 			&& RequestSignature::CODE_REPLAYED === ( $check['code'] ?? null )
-			&& 'POST' === strtoupper( (string) $request->get_method() )
+			&& 'POST' === (string) $request->get_method()
 			&& '/' . G2RD_CONNECTOR_REST_NS . '/command-runs' === (string) $request->get_route();
 	}
 

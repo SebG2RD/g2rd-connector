@@ -145,6 +145,50 @@ final class ShutdownOrderTest extends TestCase {
 		self::assertStringContainsString( 'Action', $erreur );
 		self::assertStringContainsString( 'Cannot redeclare', $erreur, 'Le message de l\'erreur est gardé.' );
 		self::assertStringContainsString( 'g2rd_extension_chargee_deux_fois_xxx', $erreur );
+		foreach ( [ sys_get_temp_dir(), str_replace( '\\', '/', sys_get_temp_dir() ) ] as $dossier ) {
+			self::assertStringNotContainsString( $dossier, $erreur, 'Aucun chemin du serveur (1.16).' );
+		}
+	}
+
+	/**
+	 * Mémoire épuisée pendant la commande (1.16) : le dernier filet, qui rend maintenant le
+	 * fichier relatif et filtre le message, passe encore. L'exécution est déclarée interrompue
+	 * sur l'erreur fatale à l'arrêt même, pas 600 s plus tard au ramassage. Erreur fatale
+	 * d'exécution : sous toutes les versions de PHP, 8.5 comprise, la dépréciation masquée de la
+	 * réactivation la remplace dans error_get_last() juste avant le dernier filet, qui la garde
+	 * quand même pour cause.
+	 *
+	 * Un PHP qui n'appelle plus aucune fonction d'arrêt après la mémoire épuisée (OomShutdownProbe :
+	 * PHP 8.1.34 du dépôt ondrej, celui de la CI) : aucun filet ne peut passer, le script à part
+	 * n'écrit que le message de PHP lui-même, et le ramassage prend le relais.
+	 */
+	public function test_memoire_epuisee_le_dernier_filet_passe_encore(): void {
+		if ( ! OomShutdownProbe::php_calls_shutdown_functions() ) {
+			$arret = $this->arret_reel( 'memoire', OomShutdownProbe::PHP_OWN_MESSAGE );
+
+			self::assertNotSame( 0, $arret['code'], 'Le processus meurt.' );
+			self::assertSame( self::DEMARRAGE, $arret['journal'], 'Aucune fonction d\'arrêt : ni reprise, ni réactivation, ni dernier filet.' );
+			$this->le_ramassage_prend_le_relais( $arret );
+
+			return;
+		}
+		$arret = $this->arret_reel( 'memoire' );
+
+		self::assertSame( 255, $arret['code'], $arret['sortie'] );
+		self::assertContains( 'exécution interrupted', $arret['journal'] );
+		self::assertSame( E_USER_DEPRECATED, $arret['apres_les_filets'], 'Juste avant le dernier filet, error_get_last() rend la dépréciation masquée de la réactivation, plus l\'erreur fatale.' );
+		self::assertSame( AfterResponseRunner::REASON_FATAL_ERROR, $arret['execution']['interruption']['reason'] ?? null );
+		$erreur = (string) ( $arret['execution']['interruption']['error'] ?? '' );
+		self::assertStringContainsString( 'Allowed memory size of', $erreur );
+		foreach ( [ sys_get_temp_dir(), str_replace( '\\', '/', sys_get_temp_dir() ) ] as $dossier ) {
+			self::assertStringNotContainsString( $dossier, $erreur );
+		}
+		// L'erreur est levée dans le script à part, rangé dans le dépôt (et non dans le dossier
+		// temporaire) : son dossier ne sort pas, le fichier hors de WordPress est masqué.
+		foreach ( [ dirname( __DIR__, 2 ), str_replace( '\\', '/', dirname( __DIR__, 2 ) ) ] as $dossier ) {
+			self::assertStringNotContainsString( $dossier, $erreur, 'Aucun dossier du serveur (1.16).' );
+		}
+		self::assertStringContainsString( '([path]/fatal-during-run.php, ligne ', $erreur );
 	}
 
 	/**
@@ -152,13 +196,30 @@ final class ShutdownOrderTest extends TestCase {
 	 * @ (WP_Filesystem pendant la restauration, fichier de l'extension inclus par
 	 * activate_plugin()) : error_get_last() les rend, et à l'arrêt elles remplacent l'erreur
 	 * fatale. Le dernier filet, qui passe après elles, ne doit pas les prendre pour la cause :
-	 * l'erreur est relevée avant elles, dans la première fonction d'arrêt du connecteur.
+	 * l'erreur est relevée avant elles, dans la fonction d'arrêt armée par arm_last_net() (le
+	 * relevé des erreurs PHP de la 1.16 passe avant elle sans modifier error_get_last()).
 	 * L'exécution reste déclarée interrompue sur l'erreur fatale, avec son message.
+	 *
+	 * L'erreur fatale de ce scénario est une erreur de COMPILATION (« Cannot redeclare »). Depuis
+	 * PHP 8.5, compile_file() enregistre les erreurs pendant la compilation, et une erreur fatale
+	 * en sort avant d'arrêter l'enregistrement : les erreurs non fatales levées ensuite, jusqu'à
+	 * la fin du processus, sont enregistrées sans être traitées (zend_error_zstr_at()) ; ni
+	 * error_get_last() ni le gestionnaire d'erreurs ne les voient, et error_get_last() garde
+	 * l'erreur fatale. Avant 8.5, la dépréciation masquée la remplace. La cause relevée par le
+	 * dernier filet est vérifiée sous les deux ; le remplacement par une erreur masquée sous
+	 * 8.5, après une erreur fatale d'exécution, l'est par
+	 * test_memoire_epuisee_le_dernier_filet_passe_encore().
 	 */
 	public function test_une_erreur_masquee_dans_les_filets_ne_remplace_pas_l_erreur_fatale(): void {
 		$arret = $this->arret_reel( 'fatale' );
 
-		self::assertSame( E_USER_DEPRECATED, $arret['apres_les_filets'], 'Juste avant le dernier filet, error_get_last() rend la dépréciation masquée de la réactivation, plus l\'erreur fatale.' );
+		self::assertSame(
+			PHP_VERSION_ID >= 80500 ? E_COMPILE_ERROR : E_USER_DEPRECATED,
+			$arret['apres_les_filets'],
+			PHP_VERSION_ID >= 80500
+				? 'PHP 8.5 et suivants : juste avant le dernier filet, error_get_last() rend encore l\'erreur fatale de compilation.'
+				: 'Juste avant le dernier filet, error_get_last() rend la dépréciation masquée de la réactivation, plus l\'erreur fatale.'
+		);
 		self::assertSame( [ 'reprise', 'réactivation', 'exécution interrupted' ], array_slice( $arret['journal'], 3, 3 ) );
 		$interruption = (array) ( $arret['execution']['interruption'] ?? [] );
 		self::assertSame( AfterResponseRunner::REASON_FATAL_ERROR, $interruption['reason'] ?? null, 'Cause : l\'erreur fatale, pas l\'arrêt sans erreur fatale.' );
@@ -197,20 +258,7 @@ final class ShutdownOrderTest extends TestCase {
 
 		self::assertSame( 255, $arret['code'], $arret['sortie'] );
 		self::assertSame( array_merge( self::DEMARRAGE, [ 'reprise' ] ), $arret['journal'], 'Rien ne passe après la reprise.' );
-		self::assertSame( RunState::RUNNING, $arret['execution']['state'] ?? null );
-
-		// La table laissée par le processus mort, reprise par un autre processus (le ramassage).
-		$this->table->rows = $arret['lignes'];
-		self::assertSame( self::ID, ExecutionSlot::holder()['command_id'] ?? null, 'Créneau resté pris.' );
-
-		RunReaper::sweep_one( self::ID, self::NOW + RunReaper::SILENCE_TIMEOUT_SECONDS );
-		self::assertSame( RunState::RUNNING, RunStore::read( self::ID )['state'] ?? null, 'Pas avant 600 s de silence.' );
-
-		RunReaper::sweep_one( self::ID, self::NOW + RunReaper::SILENCE_TIMEOUT_SECONDS + 1 );
-		$execution = (array) RunStore::read( self::ID );
-		self::assertSame( RunState::INTERRUPTED, $execution['state'] ?? null );
-		self::assertSame( RunReaper::REASON_NO_SIGN_OF_LIFE, $execution['interruption']['reason'] ?? null );
-		self::assertNull( ExecutionSlot::holder(), 'Créneau rendu par le ramassage.' );
+		$this->le_ramassage_prend_le_relais( $arret );
 	}
 
 	/**
@@ -319,9 +367,13 @@ final class ShutdownOrderTest extends TestCase {
 	 * Debian, Ubuntu (CI) ou Alpine, elle est chargée par l'ini, et `-n` l'enlèverait. Seuls
 	 * les messages de démarrage de PHP sont tus : ils ne disent rien du connecteur.
 	 *
+	 * @param string $scenario       Scénario du script (cf. son en-tête).
+	 * @param string $message_de_php '' : rien ne doit être écrit sur la sortie. Sinon, motif de
+	 *                               la seule sortie admise : le message de PHP lui-même, quand
+	 *                               ce PHP s'arrête sans fonction d'arrêt (OomShutdownProbe).
 	 * @return array{code: int, sortie: string, journal: list<string>, lignes: array<string, array{value: string, autoload: string}>, options: array<string, mixed>, notices: list<string>, apres_les_filets: int|null, execution: array<string, mixed>}
 	 */
-	private function arret_reel( string $scenario ): array {
+	private function arret_reel( string $scenario, string $message_de_php = '' ): array {
 		if ( ! function_exists( 'exec' ) ) {
 			self::markTestSkipped( 'exec() est désactivée : impossible de lancer un processus PHP à part.' );
 		}
@@ -340,7 +392,11 @@ final class ShutdownOrderTest extends TestCase {
 		}
 		$texte = implode( "\n", $sortie );
 		self::assertIsArray( $releve, 'Relevé du processus à part illisible. Sortie : ' . $texte );
-		self::assertSame( '', $texte, 'Rien d\'écrit sur la sortie du processus à part.' );
+		if ( '' === $message_de_php ) {
+			self::assertSame( '', $texte, 'Rien d\'écrit sur la sortie du processus à part.' );
+		} else {
+			self::assertMatchesRegularExpression( $message_de_php, $texte, 'Rien d\'écrit sur la sortie du processus à part, à part le message de PHP lui-même.' );
+		}
 		$ligne = $releve['lignes'][ RunStore::option_name( self::ID ) ]['value'] ?? null;
 
 		return [
@@ -353,6 +409,31 @@ final class ShutdownOrderTest extends TestCase {
 			'apres_les_filets' => $releve['apres_les_filets'] ?? null,
 			'execution'        => is_string( $ligne ) ? (array) json_decode( $ligne, true ) : [],
 		];
+	}
+
+	/**
+	 * Aucun filet n'est passé à l'arrêt du processus à part (erreur fatale dans un filet
+	 * précédent, ou PHP mort sans appeler les fonctions d'arrêt) : l'exécution reste en cours,
+	 * créneau pris. Le ramassage, dans un autre processus, la déclare interrompue 600 s après
+	 * son dernier signe de vie, pas avant, et rend le créneau.
+	 *
+	 * @param array{lignes: array<string, array{value: string, autoload: string}>, execution: array<string, mixed>} $arret Relevé d'arret_reel().
+	 */
+	private function le_ramassage_prend_le_relais( array $arret ): void {
+		self::assertSame( RunState::RUNNING, $arret['execution']['state'] ?? null );
+
+		// La table laissée par le processus mort, reprise par un autre processus (le ramassage).
+		$this->table->rows = $arret['lignes'];
+		self::assertSame( self::ID, ExecutionSlot::holder()['command_id'] ?? null, 'Créneau resté pris.' );
+
+		RunReaper::sweep_one( self::ID, self::NOW + RunReaper::SILENCE_TIMEOUT_SECONDS );
+		self::assertSame( RunState::RUNNING, RunStore::read( self::ID )['state'] ?? null, 'Pas avant 600 s de silence.' );
+
+		RunReaper::sweep_one( self::ID, self::NOW + RunReaper::SILENCE_TIMEOUT_SECONDS + 1 );
+		$execution = (array) RunStore::read( self::ID );
+		self::assertSame( RunState::INTERRUPTED, $execution['state'] ?? null );
+		self::assertSame( RunReaper::REASON_NO_SIGN_OF_LIFE, $execution['interruption']['reason'] ?? null );
+		self::assertNull( ExecutionSlot::holder(), 'Créneau rendu par le ramassage.' );
 	}
 
 	/**

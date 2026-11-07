@@ -30,4 +30,14 @@ final class BootDataTest extends TestCase {
 
 		self::assertFalse( BootData::build()['allowDirectLogin'] );
 	}
+
+	public function test_la_case_du_releve_est_transmise_decochee_par_defaut(): void {
+		self::assertFalse( BootData::build()['phpErrorsEnabled'] );
+	}
+
+	public function test_la_case_du_releve_cochee_est_transmise_cochee(): void {
+		$this->options[ Settings::OPTION_KEY ] = [ 'php_errors_enabled' => true ];
+
+		self::assertTrue( BootData::build()['phpErrorsEnabled'] );
+	}
 }

@@ -83,13 +83,14 @@ function settingsPayload( d: ConnectorBootData ) {
 		remote_commands_enabled: d.remoteCommandsEnabled,
 		force_ipv4_to_manager: d.forceIpv4ToManager,
 		allow_direct_login: d.allowDirectLogin,
+		php_errors_enabled: d.phpErrorsEnabled,
 		signature_required: d.signatureRequired,
 	};
 }
 
 /**
  * Un réglage du panneau diffère-t-il de sa valeur enregistrée sur le serveur ?
- * Mêmes sept réglages que ceux qu'envoie « Enregistrer » (settingsPayload).
+ * Mêmes huit réglages que ceux qu'envoie « Enregistrer » (settingsPayload).
  *
  * @param current État du panneau.
  * @param stored  Derniers réglages connus du serveur.
@@ -749,6 +750,22 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 						checked={ state.allowDirectLogin }
 						onChange={ ( allowDirectLogin ) =>
 							update( { allowDirectLogin } )
+						}
+						disabled={ anyBusy }
+					/>
+					<SettingRow
+						cx={ cx }
+						id="g2rd-connector-php-errors"
+						icon="alert"
+						title="Relevé des erreurs PHP"
+						description={
+							state.phpErrorsEnabled
+								? 'Les erreurs fatales de PHP de ce site sont gardées 7 jours au plus et transmises au manager avec l’inventaire. Le message est filtré sur le site avant tout envoi : chemins du serveur, adresses e-mail, adresses IP, mots de passe et jetons sont retirés.'
+								: 'Désactivé : aucune erreur PHP n’est relevée ni transmise. Le manager peut aussi l’activer ou le couper.'
+						}
+						checked={ state.phpErrorsEnabled }
+						onChange={ ( phpErrorsEnabled ) =>
+							update( { phpErrorsEnabled } )
 						}
 						disabled={ anyBusy }
 					/>

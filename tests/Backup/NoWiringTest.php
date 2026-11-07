@@ -29,14 +29,18 @@ use PHPUnit\Framework\TestCase;
  *   interdiction totale à une liste fermée de fichiers autorisés à citer le module, écrite dans le
  *   test ; test_aucune_fonction_wordpress_dans_le_module est restreint à includes/Backup/Crypto/
  *   et includes/Backup/Format/ (la bibliothèque reste pure, le module parle à WordPress) ;
- * - lot 4-C : test_les_listes_de_commandes_sont_exactement_celles_ecrites_ici passe à 18 et
- *   7 commandes (valeurs écrites dans le test), et la liste fermée du premier test est complétée.
+ * - lot 4-C : test_les_listes_de_commandes_sont_exactement_celles_ecrites_ici passe à 19 et
+ *   8 commandes (valeurs écrites dans le test), et la liste fermée du premier test est complétée.
+ * Les deux listes relevées sont recalées sur la 1.16.0-rc.1 (set_php_errors_capture) dans le
+ * commit qui fusionne main dans le module (plan de la phase 4, « Piste concurrente C1 ») : d'où
+ * 19 et 8 au lieu de 18 et 7.
  * test_aucun_effet_au_chargement reste tel quel.
  */
 final class NoWiringTest extends TestCase {
 
 	/**
-	 * CommandExecutor::ALLOWED relevée le 24/10/2026 sur 64560ac (1.15.0), dans cet ordre.
+	 * CommandExecutor::ALLOWED relevée le 24/10/2026 sur 64560ac (1.15.0), dans cet ordre ;
+	 * recalée le 07/11/2026 sur 666f084 (1.16.0-rc.1 : set_php_errors_capture).
 	 */
 	private const COMMANDES_ADMISES = [
 		'clear_cache',
@@ -53,15 +57,18 @@ final class NoWiringTest extends TestCase {
 		'rollback_plugin',
 		'delete_restore_point',
 		'set_signature_policy',
+		'set_php_errors_capture',
 	];
 
 	/**
-	 * CommandExecutor::SIGNED_ONLY relevée le 24/10/2026 sur 64560ac (1.15.0), dans cet ordre.
+	 * CommandExecutor::SIGNED_ONLY relevée le 24/10/2026 sur 64560ac (1.15.0), dans cet ordre ;
+	 * recalée le 07/11/2026 sur 666f084 (1.16.0-rc.1 : set_php_errors_capture).
 	 */
 	private const COMMANDES_SIGNEES_SEULEMENT = [
 		'rollback_plugin',
 		'delete_restore_point',
 		'set_signature_policy',
+		'set_php_errors_capture',
 	];
 
 	/**
@@ -183,25 +190,25 @@ final class NoWiringTest extends TestCase {
 	}
 
 	public function test_les_listes_de_commandes_sont_exactement_celles_ecrites_ici(): void {
-		self::assertCount( 14, self::COMMANDES_ADMISES );
-		self::assertCount( 3, self::COMMANDES_SIGNEES_SEULEMENT );
+		self::assertCount( 15, self::COMMANDES_ADMISES );
+		self::assertCount( 4, self::COMMANDES_SIGNEES_SEULEMENT );
 
 		self::assertSame(
 			self::COMMANDES_ADMISES,
 			CommandExecutor::ALLOWED,
-			"CommandExecutor::ALLOWED n'est plus la liste relevée sur 64560ac (14 commandes).\n"
+			"CommandExecutor::ALLOWED n'est plus la liste relevée sur 666f084 (15 commandes).\n"
 			. "Cause probable : une commande ajoutée, retirée ou déplacée, par exemple une commande backup_* "
 			. "arrivée avant la phase 4.\n"
-			. 'Action : la phase 2 n\'ajoute aucune commande ; si le changement est voulu (lot 4-C : 18 '
+			. 'Action : la phase 2 n\'ajoute aucune commande ; si le changement est voulu (lot 4-C : 19 '
 			. 'commandes), mettre la liste écrite dans ce test à jour dans le même commit.'
 		);
 		self::assertSame(
 			self::COMMANDES_SIGNEES_SEULEMENT,
 			CommandExecutor::SIGNED_ONLY,
-			"CommandExecutor::SIGNED_ONLY n'est plus la liste relevée sur 64560ac (3 commandes).\n"
+			"CommandExecutor::SIGNED_ONLY n'est plus la liste relevée sur 666f084 (4 commandes).\n"
 			. "Cause probable : une commande signée ajoutée, retirée ou déplacée avant la phase 4.\n"
 			. 'Action : la phase 2 n\'ajoute aucune commande ; si le changement est voulu (lot 4-C : '
-			. '7 commandes), mettre la liste écrite dans ce test à jour dans le même commit.'
+			. '8 commandes), mettre la liste écrite dans ce test à jour dans le même commit.'
 		);
 	}
 

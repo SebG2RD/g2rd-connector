@@ -133,6 +133,31 @@ final class AfterResponseRunnerTest extends TestCase {
 	}
 
 	/**
+	 * La réponse « reçue » écrite par le connecteur garde les en-têtes anti-cache posés plus
+	 * tôt par Plugin::prevent_rest_cache() (cf. Rest\CommandRunsNoCacheTest) : ni l'écriture,
+	 * ni la fin de la réponse, ni l'exécution n'en posent aucun. header() et headers_sent()
+	 * sont simulés (patchwork.json).
+	 */
+	public function test_la_reponse_recue_ecrite_par_le_connecteur_ne_touche_a_aucun_en_tete(): void {
+		$en_tetes = [];
+		Functions\when( 'headers_sent' )->justReturn( false );
+		Functions\when( 'header' )->alias(
+			static function ( string $header ) use ( &$en_tetes ): void {
+				$en_tetes[] = $header;
+			}
+		);
+		$this->accepte();
+		$runner = $this->coureur();
+		$runner->queue( self::ID, 'update_plugin', [ 'file' => 'akismet/akismet.php' ] );
+
+		self::assertTrue( $runner->maybe_serve( false, $this->reponse(), $this->requete(), null ) );
+
+		self::assertSame( [ 'réponse', 'fin de réponse', 'commande update_plugin' ], $this->journal );
+		self::assertSame( json_encode( self::ACCEPTEE ), $this->ecrit );
+		self::assertSame( [], $en_tetes, 'Aucun en-tête posé, ni remplacé, par le connecteur en servant la réponse « reçue ».' );
+	}
+
+	/**
 	 * Le filtre passe sur toutes les requêtes REST du site, éditeur de blocs compris : sans
 	 * exécution en attente, il rend sa valeur telle quelle, sans rien lire (ni la réponse,
 	 * ni la base).

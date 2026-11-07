@@ -5,7 +5,7 @@
  */
 
 export type IconName =
-	'pulse' | 'bolt' | 'terminal' | 'globe' | 'login' | 'shield';
+	'pulse' | 'bolt' | 'terminal' | 'globe' | 'login' | 'shield' | 'alert';
 
 const PATHS: Record< IconName, JSX.Element > = {
 	// Signe de vie horaire : tracé de pouls.
@@ -34,6 +34,14 @@ const PATHS: Record< IconName, JSX.Element > = {
 			<path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4" />
 			<path d="M4 12h11" />
 			<path d="M11 8l4 4-4 4" />
+		</>
+	),
+	// Relevé des erreurs PHP : triangle d'alerte.
+	alert: (
+		<>
+			<path d="M12 4l9 16H3z" />
+			<path d="M12 10v4" />
+			<path d="M12 17h.01" />
 		</>
 	),
 	// Exiger des commandes signées : bouclier (même tracé que la console).

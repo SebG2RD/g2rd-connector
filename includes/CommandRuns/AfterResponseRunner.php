@@ -49,13 +49,16 @@
  * dernier signe de vie (RunReaper). Le travail lui-même ne passe jamais par une fonction
  * d'arrêt.
  *
- * La cause est relevée (error_get_last()) dans la première fonction d'arrêt du connecteur,
- * AVANT la reprise et la réactivation, pas dans le dernier filet : leurs erreurs sans gravité,
- * même masquées par @ (WP_Filesystem pendant la restauration, fichier de l'extension inclus
- * par activate_plugin()), remplacent l'erreur fatale dans error_get_last(). Passent encore
- * avant ce relevé les fonctions d'arrêt enregistrées au chargement de WordPress
+ * La cause est relevée (error_get_last()) dans la fonction d'arrêt armée juste avant la
+ * commande, AVANT la reprise et la réactivation, pas dans le dernier filet : leurs erreurs sans
+ * gravité, même masquées par @ (WP_Filesystem pendant la restauration, fichier de l'extension
+ * inclus par activate_plugin()), remplacent l'erreur fatale dans error_get_last(). Passent
+ * encore avant ce relevé les fonctions d'arrêt enregistrées au chargement de WordPress
  * (wp-settings.php) : son gestionnaire d'erreurs fatales, puis l'action `shutdown` des
- * extensions. Une erreur sans gravité levée là cacherait l'erreur fatale : la cause dit
+ * extensions ; et, depuis la 1.16, le premier passage du relevé des erreurs PHP
+ * (PhpErrors\FatalCatcher::on_shutdown(), armé à l'inclusion du connecteur), qui lit seulement
+ * error_get_last(), sans le modifier ni rien lever : ce relevé reste juste. Une erreur sans
+ * gravité levée par WordPress ou par une extension cacherait l'erreur fatale : la cause dit
  * alors seulement qu'aucune erreur fatale n'a été relevée (REASON_SCRIPT_EXIT), sans
  * affirmer qu'il n'y en a pas eu, et le journal d'erreurs PHP du site garde l'erreur fatale.
  *
@@ -123,6 +126,8 @@ declare(strict_types=1);
 namespace G2RD\Connector\CommandRuns;
 
 use G2RD\Connector\Commands\CommandExecutor;
+use G2RD\Connector\PhpErrors\Normalizer;
+use G2RD\Connector\PhpErrors\Redactor;
 use G2RD\Connector\Rollback\PendingOutcomes;
 use WP_REST_Request;
 
@@ -160,6 +165,13 @@ final class AfterResponseRunner {
 	 * (wp_should_handle_error()), plus E_CORE_ERROR.
 	 */
 	private const FATAL_ERROR_TYPES = [ E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR, E_RECOVERABLE_ERROR ];
+
+	/**
+	 * Messages fixes de PHP pour la mémoire épuisée (Zend/zend_alloc.c) : que des nombres, rien à
+	 * filtrer. Reconnus, ils évitent le filtre dans le dernier filet, au moment où la mémoire
+	 * manque. Ancré au début et à la fin : tout autre texte passe par le filtre.
+	 */
+	private const MEMORY_EXHAUSTED = '/\A(?:Allowed memory size of \d{1,20} bytes exhausted|Out of memory \(allocated \d{1,20}\))(?: at \S{1,300}?:\d{1,10})? \(tried to allocate \d{1,20} bytes\)\z/';
 
 	/** Instance partagée par la route d'acceptation et le filtre. */
 	private static ?self $instance = null;
@@ -209,8 +221,9 @@ final class AfterResponseRunner {
 
 	/**
 	 * Dernier filet armé : l'exécution en cours, son extension (résultat de reprise à
-	 * rattacher), son démarrage et, à l'arrêt, l'erreur relevée par la première fonction
-	 * d'arrêt du connecteur (`last_error`, absente avant l'arrêt). Null : aucune exécution en
+	 * rattacher), son démarrage et, à l'arrêt, l'erreur relevée par la fonction d'arrêt armée
+	 * avec lui (`last_error`, absente avant l'arrêt ; PhpErrors\FatalCatcher passe avant elle
+	 * sans toucher à error_get_last()). Null : aucune exécution en
 	 * cours, ou fin normale.
 	 *
 	 * @var array{command_id: string, plugin_file: string|null, started_at: int, last_error?: array{type: int, message: string, file: string, line: int}|null}|null
@@ -376,8 +389,9 @@ final class AfterResponseRunner {
 	 * Dernier filet, à l'arrêt de PHP, après les filets existants. Ne fait rien si
 	 * l'exécution a fini normalement (filet désarmé) : aucune lecture, aucune écriture.
 	 * Sinon, déclare l'exécution interrompue (RunLifecycle::interrupt(), seulement si elle
-	 * est encore en cours), avec la cause relevée par error_get_last() dans la première
-	 * fonction d'arrêt du connecteur, avant la reprise et la réactivation (à défaut, appelée
+	 * est encore en cours), avec la cause relevée par error_get_last() dans la fonction d'arrêt
+	 * armée par arm_last_net(), avant la reprise et la réactivation (PhpErrors\FatalCatcher,
+	 * armé plus tôt, passe avant elle et ne modifie pas error_get_last() ; à défaut, appelée
 	 * hors de cette chaîne : relevée ici), et le résultat de reprise de son extension
 	 * consigné depuis son démarrage, s'il existe ; puis détache le signe de vie et rend le
 	 * créneau. Ne lève jamais.
@@ -714,6 +728,12 @@ final class AfterResponseRunner {
 	 * n'exclut pas une erreur fatale cachée avant le relevé (cf. l'en-tête de la classe) : il
 	 * renvoie au journal d'erreurs PHP du site.
 	 *
+	 * Depuis la 1.16, le message et le fichier sont filtrés (PhpErrors\Redactor,
+	 * PhpErrors\Normalizer::relative_file()) : la cause ne porte plus de chemin du serveur. Le
+	 * message fixe de PHP pour la mémoire épuisée, qui ne porte que des nombres, est gardé sans
+	 * passer par le filtre : c'est le moment où le dernier filet a le moins de mémoire (prouvé
+	 * par le scénario « memoire » de ShutdownOrderTest).
+	 *
 	 * @param array{type: int, message: string, file: string, line: int}|null $last Erreur
 	 *        relevée à l'arrêt, avant la reprise et la réactivation.
 	 * @return array{0: string, 1: string}
@@ -725,8 +745,13 @@ final class AfterResponseRunner {
 				sprintf(
 					/* translators: 1: message de l'erreur PHP ; 2: fichier où elle s'est produite ; 3: ligne. */
 					__( 'La commande s’est arrêtée sur une erreur fatale de PHP avant d’avoir rendu son résultat : son travail est peut-être partiel. Cause probable : erreur d’une extension, du thème ou du connecteur, ou limite de mémoire ou de durée de PHP atteinte (détail en fin de message). Action : aucune pour cette opération, la plateforme vérifie l’état réel du site ; si l’erreur se répète, corriger ou désactiver l’extension en cause. Erreur : %1$s (%2$s, ligne %3$d)', 'g2rd-connector' ),
-					$last['message'],
-					$last['file'],
+					// Filtrés (1.16) : chemin relatif à WordPress, chemins du serveur, e-mails, IP et
+					// jetons retirés du message ; 2 000 caractères au plus, RunStore coupe à 2 Ko.
+					// Mémoire épuisée : message fixe de PHP gardé tel quel, sans charger le filtre.
+					1 === preg_match( self::MEMORY_EXHAUSTED, $last['message'] )
+						? (string) preg_replace( '/ at \S+?:\d+(?= \(tried)/', '', $last['message'] )
+						: Redactor::redact( $last['message'], null, 2000 ),
+					Normalizer::relative_file( $last['file'] ),
 					$last['line']
 				),
 			];

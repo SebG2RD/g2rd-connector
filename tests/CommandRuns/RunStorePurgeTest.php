@@ -94,14 +94,152 @@ final class RunStorePurgeTest extends TestCase {
 			end( $this->table->queries ),
 			'Suppression conditionnelle, sur la valeur lue.'
 		);
+		self::assertSame( [], $this->value_reads(), 'Valeur courte, lue entière par la recherche : aucune relecture.' );
 	}
 
-	public function test_une_execution_terminee_depuis_moins_de_7_jours_est_gardee(): void {
+	/**
+	 * À chaque acceptation (20 suppressions au plus) comme sur la tâche biquotidienne, la
+	 * recherche ne lit que le début de chaque valeur : de quoi avoir l'état et les dates,
+	 * jamais le résultat (jusqu'à 64 Ko par enregistrement, 200 enregistrements gardés).
+	 * Seules les valeurs des enregistrements supprimés sont lues entières, une à la fois,
+	 * pour la suppression conditionnelle.
+	 */
+	public function test_la_purge_ne_lit_que_le_debut_des_valeurs(): void {
+		// 205 exécutions terminées dans la semaine, de la plus récente (0) à la plus ancienne
+		// (204), chacune avec un résultat de 60 Ko, écrit après les dates comme le fait
+		// RunLifecycle::finish().
+		for ( $i = 0; $i < 205; $i++ ) {
+			$this->put_long( self::id( $i ), RunState::DONE, self::dates_de_fin( self::NOW - 60 * ( $i + 1 ) ), 60000 );
+		}
+		$taille = strlen( $this->raw( self::id( 0 ) ) );
+
+		self::assertSame( 5, RunStore::purge( self::NOW, 20 ), '205 enregistrements : 5 de trop.' );
+
+		self::assertCount( RunStore::MAX_RECORDS, $this->table->rows );
+		$supprimees = [];
+		for ( $i = 204; $i >= 200; $i-- ) {
+			self::assertArrayNotHasKey( RunStore::option_name( self::id( $i ) ), $this->table->rows, 'Les 5 plus anciennes partent : ' . $i );
+			$supprimees[] = RunStore::option_name( self::id( $i ) );
+		}
+
+		$recherches = $this->searches();
+		self::assertCount( 1, $recherches, 'Une seule recherche.' );
+		self::assertStringStartsWith( 'SELECT option_name, SUBSTRING(option_value, 1, 1024) AS option_head FROM wp_options WHERE option_name LIKE ', $recherches[0], 'La recherche ne lit que le début des valeurs.' );
+		self::assertSame( $supprimees, $this->value_reads(), 'Valeurs lues entières : celles des supprimées seulement, la plus ancienne d’abord.' );
+		self::assertLessThanOrEqual( 205 * 1024 + 5 * $taille, $this->table->bytes_read );
+		self::assertLessThan( intdiv( 205 * $taille, 10 ), $this->table->bytes_read, 'Moins d’un dixième de ce que la lecture des valeurs entières transférait.' );
+	}
+
+	/**
+	 * Valeur longue écrite dans un autre ordre (le résultat avant l'état et les dates) : le
+	 * début ne dit ni l'état ni l'âge, la valeur est lue entière, une à la fois. La règle
+	 * reste la même : supprimée après 7 jours, gardée avant.
+	 */
+	public function test_un_long_enregistrement_dont_les_dates_suivent_le_resultat_est_lu_en_entier(): void {
+		foreach ( [ 1 => self::NOW - 8 * self::DAY, 2 => self::NOW - self::DAY ] as $n => $fin ) {
+			$this->put_raw(
+				self::id( $n ),
+				array_merge(
+					[
+						'command_id' => self::id( $n ),
+						'outcome'    => [
+							'status' => 'done',
+							'result' => [ 'journal' => str_repeat( 'x', 5000 ) ],
+						],
+						'state'      => RunState::DONE,
+					],
+					self::dates_de_fin( $fin )
+				)
+			);
+		}
+
+		self::assertSame( 1, RunStore::purge( self::NOW, 500 ) );
+
+		self::assertSame( [ RunStore::option_name( self::id( 2 ) ) ], array_keys( $this->table->rows ) );
+		self::assertCount( 3, $this->value_reads(), 'Les deux lues entières pendant la recherche, puis la supprimée relue avant sa suppression.' );
+	}
+
+	/**
+	 * Résultat tardif d'une exécution déclarée interrompue, écrit entre la recherche et la
+	 * relecture d'une valeur longue : relue, elle n'est plus terminée depuis 7 jours, rien
+	 * n'est supprimé.
+	 */
+	public function test_un_long_enregistrement_reecrit_avant_sa_relecture_est_garde(): void {
+		$this->put_long( self::id( 1 ), RunState::INTERRUPTED, self::dates_de_fin( self::NOW - 8 * self::DAY ), 5000 );
+		$nom    = RunStore::option_name( self::id( 1 ) );
+		$tardif = (string) json_encode(
+			[
+				'command_id'  => self::id( 1 ),
+				'command'     => 'update_plugin',
+				'body_sha256' => str_repeat( 'ab', 32 ),
+				'state'       => RunState::DONE,
+				'accepted_at' => self::NOW - 8 * self::DAY - 120,
+				'started_at'  => self::NOW - 8 * self::DAY - 118,
+				'alive_at'    => self::NOW,
+				'finished_at' => self::NOW,
+				'outcome'     => [
+					'status' => 'done',
+					'result' => [ 'journal' => str_repeat( 'y', 5000 ) ],
+				],
+			]
+		);
+		$this->table->before_read = function () use ( $nom, $tardif ): void {
+			$this->table->rows[ $nom ]['value'] = $tardif;
+		};
+
+		self::assertSame( 0, RunStore::purge( self::NOW, 500 ) );
+
+		self::assertSame( $tardif, $this->table->rows[ $nom ]['value'] );
+		self::assertSame( [], $this->deletes(), 'Relue, elle n’est plus celle que la recherche a vue : aucune suppression tentée.' );
+	}
+
+	/** Ménage seulement : une relecture refusée par la base arrête le passage, sans erreur. */
+	public function test_base_qui_refuse_la_relecture(): void {
+		$this->put_long( self::id( 1 ), RunState::DONE, self::dates_de_fin( self::NOW - 8 * self::DAY ), 5000 );
+		$this->table->before_read = function (): void {
+			$this->table->read_fails = true;
+		};
+
+		self::assertSame( 0, RunStore::purge( self::NOW, 500 ) );
+
+		self::assertCount( 1, $this->table->rows );
+		self::assertSame( [], $this->deletes() );
+	}
+
+	/**
+	 * Les mêmes, avec un résultat bien plus long que le début lu : l'état et les dates sont
+	 * lus dans le début, la valeur n'est lue entière que pour être supprimée.
+	 *
+	 * @param array<string, int|null> $dates
+	 */
+	#[DataProvider( 'terminees_depuis_plus_de_7_jours' )]
+	public function test_une_longue_execution_terminee_depuis_plus_de_7_jours_est_supprimee( string $state, array $dates ): void {
+		$this->put_long( self::id( 1 ), $state, $dates, 5000 );
+		$raw = $this->raw( self::id( 1 ) );
+
+		self::assertSame( 1, RunStore::purge( self::NOW, 500 ) );
+
+		self::assertSame( [], $this->table->rows );
+		self::assertSame( [ RunStore::option_name( self::id( 1 ) ) ], $this->value_reads(), 'Lue entière une fois, pour être supprimée.' );
+		self::assertSame(
+			"DELETE FROM wp_options WHERE option_name = 'g2rd_cmdrun_" . self::id( 1 ) . "' AND option_value = '" . addslashes( $raw ) . "'",
+			end( $this->table->queries ),
+			'Suppression conditionnelle, sur la valeur relue.'
+		);
+	}
+
+	/**
+	 * @param bool $longues Vrai : chaque enregistrement porte un résultat bien plus long que
+	 *                      le début lu par la purge.
+	 */
+	#[DataProvider( 'longueurs' )]
+	public function test_une_execution_terminee_depuis_moins_de_7_jours_est_gardee( bool $longues ): void {
 		// Finie il y a 7 jours tout juste : « plus de 7 jours » n'est pas atteint.
-		$this->put( self::id( 1 ), RunState::DONE, self::dates_de_fin( self::NOW - 7 * self::DAY ) );
-		$this->put( self::id( 2 ), RunState::FAILED, self::dates_de_fin( self::NOW - self::DAY ) );
+		$this->put_sized( $longues, self::id( 1 ), RunState::DONE, self::dates_de_fin( self::NOW - 7 * self::DAY ) );
+		$this->put_sized( $longues, self::id( 2 ), RunState::FAILED, self::dates_de_fin( self::NOW - self::DAY ) );
 		// Acceptée il y a 30 jours, finie il y a 6 : l'âge compte depuis la fin.
-		$this->put(
+		$this->put_sized(
+			$longues,
 			self::id( 3 ),
 			RunState::DONE,
 			[
@@ -110,7 +248,8 @@ final class RunStorePurgeTest extends TestCase {
 			]
 		);
 		// Sans date de fin, la plus récente des dates connues compte : son dernier signe de vie.
-		$this->put(
+		$this->put_sized(
+			$longues,
 			self::id( 4 ),
 			RunState::INTERRUPTED,
 			[
@@ -126,6 +265,15 @@ final class RunStorePurgeTest extends TestCase {
 
 		self::assertSame( $avant, $this->table->rows );
 		self::assertSame( [], $this->deletes(), 'Aucune suppression tentée.' );
+		self::assertSame( [], $this->value_reads(), 'Aucune valeur lue entière : le début suffit.' );
+	}
+
+	/** @return array<string, array{0: bool}> */
+	public static function longueurs(): array {
+		return [
+			'enregistrements courts' => [ false ],
+			'enregistrements longs'  => [ true ],
+		];
 	}
 
 	public function test_au_dela_de_200_les_plus_anciennes_terminees_partent_d_abord(): void {
@@ -179,6 +327,11 @@ final class RunStorePurgeTest extends TestCase {
 		// Une valeur illisible ne dit ni son état ni sa date : gardée (retirée à la désinstallation).
 		$this->table->rows[ RunStore::option_name( self::id( 4 ) ) ] = [
 			'value'    => '{"command_id":',
+			'autoload' => 'no',
+		];
+		// De même, longue : son début ne suffit pas, elle est lue entière, toujours illisible.
+		$this->table->rows[ RunStore::option_name( self::id( 5 ) ) ] = [
+			'value'    => 'a:1:{s:5:"state";s:' . str_repeat( 'x', 3000 ) . '}',
 			'autoload' => 'no',
 		];
 		// Au-delà de 200 enregistrements : seules les terminées partent, ici aucune.
@@ -403,6 +556,50 @@ final class RunStorePurgeTest extends TestCase {
 		];
 	}
 
+	/**
+	 * Comme put(), avec un résultat de `$bytes` octets, écrit après les dates comme le fait
+	 * RunLifecycle::finish() : un enregistrement bien plus long que le début lu par la purge.
+	 *
+	 * @param array<string, int|null> $dates
+	 */
+	private function put_long( string $id, string $state, array $dates, int $bytes ): void {
+		$this->put( $id, $state, $dates );
+		$record            = json_decode( $this->raw( $id ), true );
+		$record['outcome'] = [
+			'status'       => 'done',
+			'result'       => [ 'journal' => str_repeat( 'x', $bytes ) ],
+			'error'        => null,
+			'stray_output' => null,
+		];
+
+		$this->put_raw( $id, $record );
+	}
+
+	/**
+	 * put() ou put_long() (résultat de 5 000 octets), selon `$long`.
+	 *
+	 * @param array<string, int|null> $dates
+	 */
+	private function put_sized( bool $long, string $id, string $state, array $dates ): void {
+		if ( $long ) {
+			$this->put_long( $id, $state, $dates, 5000 );
+			return;
+		}
+		$this->put( $id, $state, $dates );
+	}
+
+	/**
+	 * Écrit un enregistrement tel quel (ordre des clés compris).
+	 *
+	 * @param array<string, mixed> $record
+	 */
+	private function put_raw( string $id, array $record ): void {
+		$this->table->rows[ RunStore::option_name( $id ) ] = [
+			'value'    => (string) json_encode( $record ),
+			'autoload' => 'no',
+		];
+	}
+
 	private function raw( string $id ): string {
 		return $this->table->rows[ RunStore::option_name( $id ) ]['value'];
 	}
@@ -410,6 +607,22 @@ final class RunStorePurgeTest extends TestCase {
 	/** @return list<string> Suppressions tentées. */
 	private function deletes(): array {
 		return array_values( array_filter( $this->table->queries, static fn ( string $q ): bool => str_starts_with( $q, 'DELETE ' ) ) );
+	}
+
+	/** @return list<string> Recherches par préfixe, quelles que soient les colonnes lues. */
+	private function searches(): array {
+		return array_values( array_filter( $this->table->queries, static fn ( string $q ): bool => str_starts_with( $q, 'SELECT option_name' ) ) );
+	}
+
+	/** @return list<string> Options dont la valeur a été lue entière, une à la fois, dans l'ordre. */
+	private function value_reads(): array {
+		$noms = [];
+		foreach ( $this->table->queries as $requete ) {
+			if ( 1 === preg_match( "/^SELECT option_value FROM wp_options WHERE option_name = '([^']+)' LIMIT 1$/", $requete, $m ) ) {
+				$noms[] = $m[1];
+			}
+		}
+		return $noms;
 	}
 
 	/** @return list<string> Recherches par préfixe. */

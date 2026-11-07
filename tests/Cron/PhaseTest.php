@@ -12,6 +12,8 @@ use G2RD\Connector\Cron\HeartbeatJob;
 use G2RD\Connector\Cron\Phase;
 use G2RD\Connector\Cron\RestorePointPurgeJob;
 use G2RD\Connector\Cron\UpdatesDiscoveryJob;
+use G2RD\Connector\PhpErrors\Buffer;
+use G2RD\Connector\PhpErrors\LogTail;
 use G2RD\Connector\Plugin;
 use G2RD\Connector\Rest\CommandController;
 use G2RD\Connector\Rest\CommandRunsController;
@@ -359,6 +361,41 @@ final class PhaseTest extends TestCase {
 		Plugin::instance()->boot();
 
 		self::assertNotFalse( has_action( RestorePointPurgeJob::HOOK, [ RunStore::class, 'purge_now' ] ) );
+	}
+
+	/**
+	 * Même démarrage d'un site enrôlé : la lecture du journal PHP et la purge des erreurs PHP
+	 * relevées (1.16) partent avec la tâche biquotidienne ; chacune ne fait rien tant que le
+	 * relevé n'est pas activé.
+	 */
+	public function test_le_demarrage_d_un_site_enrole_branche_le_journal_et_la_purge_des_erreurs_php(): void {
+		Functions\when( 'is_admin' )->justReturn( false );
+		Functions\when( 'wp_load_alloptions' )->justReturn( [ Settings::OPTION_KEY => 'autochargée' ] );
+		$this->options[ Settings::OPTION_KEY ] = [
+			'site_id'    => 7,
+			'site_token' => Settings::encrypt_token( 'jeton-du-site', 'v1' ),
+		];
+
+		Plugin::instance()->boot();
+
+		self::assertNotFalse( has_action( RestorePointPurgeJob::HOOK, [ LogTail::class, 'run_now' ] ) );
+		self::assertNotFalse( has_action( RestorePointPurgeJob::HOOK, [ Buffer::class, 'purge_now' ] ) );
+	}
+
+	/**
+	 * Site non enrôlé (jamais enrôlé, ou déconnecté du manager) : la lecture du journal n'est
+	 * pas branchée (aucune écriture avant l'accord explicite) ; la purge du tampon l'est, pour
+	 * que les 7 jours annoncés restent vrais après une déconnexion. Sans tampon, elle ne fait
+	 * rien (tâche 5).
+	 */
+	public function test_un_site_non_enrole_ne_lit_pas_le_journal_mais_purge_le_tampon(): void {
+		Functions\when( 'is_admin' )->justReturn( false );
+		Functions\when( 'wp_load_alloptions' )->justReturn( [] );
+
+		Plugin::instance()->boot();
+
+		self::assertFalse( has_action( RestorePointPurgeJob::HOOK, [ LogTail::class, 'run_now' ] ) );
+		self::assertNotFalse( has_action( RestorePointPurgeJob::HOOK, [ Buffer::class, 'purge_now' ] ) );
 	}
 
 	/**

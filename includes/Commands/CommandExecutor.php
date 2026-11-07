@@ -21,6 +21,7 @@ namespace G2RD\Connector\Commands;
 
 use Automatic_Upgrader_Skin;
 use Core_Upgrader;
+use G2RD\Connector\PhpErrors\CaptureCommand;
 use G2RD\Connector\Rest\DbHealth;
 use G2RD\Connector\Rollback\ProtectedUpdate;
 use G2RD\Connector\Rollback\RestoreCommands;
@@ -47,6 +48,7 @@ final class CommandExecutor {
 		'rollback_plugin',
 		'delete_restore_point',
 		'set_signature_policy',
+		'set_php_errors_capture',
 	];
 
 	/**
@@ -54,7 +56,8 @@ final class CommandExecutor {
 	 * signature du site, par la route REST (cf Rest\Auth) comme par la file tirée
 	 * par le cron (cf Cron\HeartbeatJob et Security\QueueSignature). Les commandes
 	 * historiques n'y figurent pas : en politique `report`, elles restent acceptées
-	 * sans signature.
+	 * sans signature. `set_php_errors_capture` (1.16) : activer le relevé des erreurs
+	 * PHP fait envoyer des données du site.
 	 *
 	 * @var list<string>
 	 */
@@ -62,6 +65,7 @@ final class CommandExecutor {
 		'rollback_plugin',
 		'delete_restore_point',
 		'set_signature_policy',
+		'set_php_errors_capture',
 	];
 
 	/** Longueur maximale de la sortie parasite remontée au manager (diagnostic). */
@@ -151,6 +155,7 @@ final class CommandExecutor {
 				'rollback_plugin'           => ( new RestoreCommands( Services::make() ) )->rollback_plugin( (array) ( $payload ?? [] ) ),
 				'delete_restore_point'      => ( new RestoreCommands( Services::make() ) )->delete_restore_point( (array) ( $payload ?? [] ) ),
 				'set_signature_policy'      => ( new RestoreCommands( Services::make() ) )->set_signature_policy( (array) ( $payload ?? [] ) ),
+				'set_php_errors_capture'    => ( new CaptureCommand() )->run( (array) ( $payload ?? [] ) ),
 			};
 			$outcome = [
 				'status' => 'done',

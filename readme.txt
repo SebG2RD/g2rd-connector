@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.15.0
+Stable tag: 1.16.0-rc.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -21,6 +21,7 @@ Connects this WordPress site to the centralized G2RD WP Manager dashboard (https
 * **Optional event stream** — push real-time notifications (user logins, login failures, plugin activations, core/plugin/theme updates, auto-update failures) to the manager. Login failures are sent with a 2-second cap instead of 15, at most 30 per minute. Disabled until you opt in.
 * **Optional remote commands** — let the manager trigger cache clearing, update checks, core/plugin/theme updates and database maintenance (delete spam comments, delete post revisions, empty trash, delete expired transients, optimize database) remotely. Disabled until you opt in.
 * **Direct login from the manager** — the manager can open this site's dashboard without a password, through a signed one-time link valid for one minute, for staff whose manager account uses two-factor authentication. On by default; can be turned off in the plugin settings ("Allow direct login from G2RD").
+* **Optional PHP error monitoring** — when turned on for this site (off by default), PHP fatal errors raised after the plugin has loaded are kept 7 days, with their message filtered on the site, and sent to the manager with the inventory. Turned on or off by a signed command from the manager, or with the "Relevé des erreurs PHP" setting of the plugin.
 * **Theme integration** — when the parent theme is the optional companion theme `g2rd-theme` (>= 1.19, child themes included), the plugin registers itself as a "Manager G2RD" tab of the theme's options console (*Appearance → G2RD Options* up to theme 1.40, top-level *G2RD* menu from theme 1.41) instead of adding a top-level menu, for a tidy admin UX. Its own settings page stays reachable outside the menu, as a fallback, at `wp-admin/admin.php?page=g2rd-connector`.
 
 = External service =
@@ -33,14 +34,17 @@ This plugin relies on the **G2RD WP Manager** service operated by G2RD Agence We
 
 **What is sent, when, and only after explicit enrollment:**
 
-* On every manager-initiated `/snapshot` call: WordPress version, list of installed/active plugins and themes (names, versions, slugs), PHP/MySQL versions, memory limit.
+* On enrollment (a one-shot action you trigger with an invitation token): the site address and name, the administration email address (`admin_email`), and the WordPress, PHP and connector versions.
+* On every manager-initiated `/snapshot` call: the site name, address, administration email address (`admin_email`), language, time zone, whether it is a multisite network, icon address and the connector version; the WordPress version (installed, latest, update available); every installed plugin and theme (file or folder, slug, name, installed and latest versions, active or not, update available, plugin or theme URI, author); translations (installed languages, site language, available translation updates: type, slug, language, version and date); the server: PHP, WordPress and MySQL versions, web server software, PHP memory limit, maximum execution time and maximum upload size; the database health, computed at most once a day (number of spam comments, post revisions, trashed posts and expired transients, size of autoloaded options and table overhead, and its date); the freshness of the update discovery (date of the last capture, late or not, whether WP-Cron is disabled, next run); what the plugin can do (capabilities); the plugin restore points kept on the site (id, plugin file, version, kind, SHA-256, size, creation and expiry dates, kept on hold or not; their number, total size and whether their folder is writable) and the outcome of protected updates that were interrupted and recovered (plugin file, restore point, step, outcome, explanation or error message if any, whether the plugin was reactivated, date).
 * On every hourly heartbeat (if enabled): WordPress/PHP/connector version, free disk space, active plugin count, registered user count.
 * Every hour, if remote commands are enabled (since 1.15, even with the heartbeat disabled): the plugin asks the manager for its pending commands; this request sends no site data. It then reports to the manager the outcome of each command it ran or refused (status, result of the command and error message, if any).
-* On every webhook event (if enabled): event type (e.g. `user.login`, `plugin.activated`) and a small context payload (user id, plugin file name, IP for failed logins).
+* On every webhook event (if enabled): the event type and a small context payload — for a login (`user.login`), the user id, login and roles; for a failed login (`user.login_failed`, at most 30 per minute), the login that was tried and the visitor's IP address; for a plugin activation or deactivation, the plugin file name; for a core, plugin or theme update, the updated items and who ran it (user id, login, email address and roles, or `cron` for a scheduled update); for automatic updates, the number of items and of failed items per type.
 * Since 1.13, the `/snapshot` answer also contains the login page address, the state of the "Allow direct login from G2RD" setting and the site's administrators (up to 50: user id, login, email, registration date), so the manager can offer direct login with the account chosen by the agency.
 * Since 1.13, a `direct_login` event (WordPress login and user id, manager user id) is sent after each direct login, if events are enabled.
 * Since 1.15, the `/snapshot` answer also describes the server environment: which PHP extensions are present (sodium, openssl, zip, zlib, mysqli) and the libsodium version, the PHP execution mode (SAPI), whether the PHP `exec` function is available (only read, never called), the memory and execution time limits, the free and total space of the disk that holds `wp-content`, and the total sizes of `wp-content`, of the media library and of the database, measured at most once a day in the background (with the date, status and duration of that measurement and the number of files counted). Only totals and flags are sent: no file name and no path.
-* Since 1.15, when the manager reads a command run in the background (signed `GET /command-runs/<id>`, if remote commands are enabled): its state, dates, current step of a protected update, the command result (same content as the `/command` answer) and, after an interruption, its cause (for a PHP fatal error: error message, file path on the server and line number) and the plugin recovery result already reported in the `/snapshot` answer. These records are only readable through that signed route.
+* Since 1.15, when the manager reads a command run in the background (signed `GET /command-runs/<id>`, if remote commands are enabled): its state, dates, current step of a protected update, the command result (same content as the `/command` answer) and, after an interruption, its cause (for a PHP fatal error: the error message, the file and the line number; since 1.16 the file path is relative to WordPress, and server paths, email addresses, IP addresses, passwords and tokens are removed from the message, by the same filter as the PHP errors below) and the plugin recovery result already reported in the `/snapshot` answer. These records are only readable through that signed route.
+* Since 1.16, only if PHP error monitoring is turned on for this site (off by default): the `/snapshot` answer contains the PHP fatal errors that occurred on the site during the last 7 days, grouped by error (at most 50 groups and 16 KB): level, component (plugin, theme, WordPress core, must-use plugin or unknown, with its slug and version), file path relative to WordPress (only the file name for a file outside WordPress), line, filtered message (server paths, database names, users and connection strings, email addresses, IP addresses, passwords, tokens and SQL queries with their values are removed on the site, before anything is stored), first and last time seen, number of occurrences recorded (at most one per error and per minute) and a fingerprint of the error (SHA-256 of its level, component, file and message), with the date of the reading, the sources in use and whether some errors were left out. When monitoring is off, the answer only says so: no error is sent, not even those kept earlier. If the manager also turns on log reading, the same information is taken from the end of the PHP error log (warnings, deprecations and notices included), only when that log file is inside the WordPress folder and, on a multisite network, only by the main site (the log is shared by the whole network). The filter removes the data listed above, but an error message is written by the plugin or theme that raised it: it may still contain other free text chosen by its author (for example a product name or an order number). Errors are kept on the site 7 days at most while the plugin is active, also after the site is disconnected from the manager, and removed when the plugin is uninstalled. The recording at PHP shutdown does not see the errors raised before this plugin loads (plugins loaded earlier, must-use plugins, WordPress start-up), nor those after which PHP is stopped before its turn: by a custom `wp-content/php-error.php` error page that ends with `exit` (or `die`), by a plugin that asks PHP to stop when the error is displayed (`wp_php_error_args` filter), or, during a recovery mode session (in the browser that opened the link of the recovery email), by WordPress itself, which pauses the faulty plugin or theme and reloads the page. Nor does it see a fatal error followed, during PHP shutdown, by a warning, notice or deprecation (for example raised by another plugin's `shutdown` action): PHP then only reports that last message. If PHP writes these errors to its error log, only log reading, when it is turned on, can find them there.
+* Since 1.16, the `/snapshot` answer also describes how PHP and WordPress log errors (`log_errors`, `display_errors`, `WP_DEBUG`, `WP_DEBUG_LOG`, `WP_DEBUG_DISPLAY`), where the PHP error log is (not set, inside or outside the WordPress folder, missing, refused, or shared by a multisite network) and, when it is inside and checked, whether it is readable and its size. No path is sent.
 
 **Nothing is sent before enrollment.** Enrollment is a manual one-shot action that requires an invitation token obtained from your manager admin.
 
@@ -75,7 +79,7 @@ Disconnect from the plugin settings (button **Disconnect from manager**), or rev
 
 = What happens on uninstall? =
 
-All plugin options (`g2rd_connector_settings`, restore point index, signature state) are removed, as are the records of the commands run in the background (`g2rd_cmdrun_*` options, finished or not, on every site of a multisite network); the cron jobs are unscheduled, the restore point archives the plugin created in `wp-content/g2rd-snapshots/` are deleted (nothing else in that folder is touched), and the site stops sending anything. The manager-side record is preserved until you delete it from the dashboard.
+All plugin options (`g2rd_connector_settings`, restore point index, signature state) are removed, as are the records of the commands run in the background (`g2rd_cmdrun_*` options, finished or not, on every site of a multisite network) and the PHP errors kept for the manager (`g2rd_php_errors`, `g2rd_php_errors_log_cursor`, on every site of a multisite network); the cron jobs are unscheduled, the restore point archives the plugin created in `wp-content/g2rd-snapshots/` are deleted (nothing else in that folder is touched), and the site stops sending anything. The manager-side record is preserved until you delete it from the dashboard.
 
 == Screenshots ==
 
@@ -83,6 +87,37 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 2. Theme-integrated "Manager G2RD" tab in the G2RD theme console (requires `g2rd-theme` >= 1.19 as the theme or its parent theme).
 
 == Changelog ==
+
+= 1.16.0-rc.1 =
+
+* **New: PHP error monitoring (`php_errors`), off by default.** When it is turned on for a site
+  (signed command `set_php_errors_capture` from the manager, or the new "Relevé des erreurs PHP"
+  setting), the plugin records the PHP fatal errors raised after it has loaded, filters their
+  message on the site (server paths, database names and users, email addresses, IP addresses,
+  passwords, tokens and SQL queries removed), groups them and keeps them 7 days (at most 50
+  groups and 32 KB, option not autoloaded, at most one write per error and per minute). The
+  `/snapshot` answer carries them (`php_errors` block, version 1, 16 KB at most) and announces
+  the `php_errors` capability. Errors raised before the plugin loads (plugins loaded earlier,
+  must-use plugins, WordPress start-up) are not seen by this recording, and the block says so
+  (`coverage`); the readme lists the other cases it cannot see. Optional reading of the end of
+  the PHP error log, off by default, only for a log inside the WordPress folder (256 KB and 2
+  seconds at most, on the twice-daily task). Until it is turned on for a site, nothing is
+  recorded and the block only says that monitoring is off.
+* **New: how PHP and WordPress log errors, in the inventory (`php_logging` block)**, without
+  any path.
+* **New signed command `set_php_errors_capture`**: a valid signature is always required.
+* **Security: the cause of an interrupted background command no longer contains server paths**;
+  the file path is relative to WordPress and the message is filtered.
+* **Fix: this readme lists every data sent to the manager**: what is sent on enrollment, the
+  whole content of the inventory (site language, time zone, icon and multisite flag, plugin and
+  theme authors and addresses, translations, server software and limits, database health,
+  update discovery, capabilities, restore points and recovery outcomes were missing) and the
+  personal data (administration email address, login and roles of a user who logs in, email
+  address and roles of who ran an update, login tried and IP address of a failed login).
+* **Fix: a background command acceptance resent by the host's CDN is recognised only for the
+  exact method and route** (no more case-insensitive comparison).
+* **Performance: purging background command records reads only the start of each record**
+  (up to 12.8 MB were read and decoded on each acceptance on a busy site).
 
 = 1.15.0 =
 
