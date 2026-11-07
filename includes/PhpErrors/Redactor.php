@@ -12,9 +12,10 @@
  * partagé à l'octet).
  *
  * Barrière propre au connecteur, appliquée après les motifs : toute occurrence des valeurs du
- * site qui ne doivent jamais sortir (DB_NAME, DB_USER, DB_HOST et son hôte sans le port, d'au
- * moins 3 caractères, voir known_values()), casse ignorée, est masquée par `[secret]`, sauf au
- * milieu d'un mot plus long. Elle couvre les formes de message qu'aucun motif ne prévoit. Les
+ * site qui ne doivent jamais sortir (DB_NAME, DB_USER, DB_HOST et son hôte sans le port,
+ * DB_PASSWORD, d'au moins 3 caractères, voir known_values()), casse ignorée, est masquée par
+ * `[secret]`, sauf au milieu d'un mot plus long. Elle couvre les formes de message qu'aucun
+ * motif ne prévoit. Les
  * valeurs par défaut communes à toutes les installations (« localhost », « root »…) n'en sont
  * pas : elles ne disent rien du site. Elle n'entre pas dans les vecteurs partagés : le manager
  * ne connaît pas ces valeurs, et les vecteurs se prouvent par les seuls motifs.
@@ -65,7 +66,7 @@ final class Redactor {
 	private const SECRET_NAMES = 'token|key|password|passwd|pwd|pass|secret|ticket|sig|signature|nonce|auth|hash|credentials?|cookie|session';
 
 	/** Constantes de wp-config.php dont la valeur ne sort jamais du site (barrière par valeur). */
-	private const KNOWN_CONSTANTS = [ 'DB_NAME', 'DB_USER', 'DB_HOST' ];
+	private const KNOWN_CONSTANTS = [ 'DB_NAME', 'DB_USER', 'DB_HOST', 'DB_PASSWORD' ];
 
 	/** Longueur minimale d'une valeur connue masquée, en caractères. */
 	private const KNOWN_VALUE_MIN_CHARS = 3;
@@ -124,12 +125,13 @@ final class Redactor {
 	}
 
 	/**
-	 * Valeurs du site masquées par la barrière propre au connecteur : DB_NAME, DB_USER et DB_HOST
-	 * quand ces constantes sont définies, plus l'hôte de DB_HOST sans son port ni sa socket
-	 * (« srv123.hstgr.io:3306 » donne aussi « srv123.hstgr.io »). Une valeur de moins de 3
-	 * caractères ou commune à toutes les installations (« localhost », « root », une base nommée
-	 * « WordPress »…, voir GENERIC_VALUES) n'est pas retenue. De la plus longue à la plus courte,
-	 * sans doublon (casse ignorée).
+	 * Valeurs du site masquées par la barrière propre au connecteur : DB_NAME, DB_USER, DB_HOST et
+	 * DB_PASSWORD quand ces constantes sont définies, plus l'hôte de DB_HOST sans son port ni sa
+	 * socket (« srv123.hstgr.io:3306 » donne aussi « srv123.hstgr.io »). DB_PASSWORD rattrape un
+	 * mot de passe écrit sans nom de champ devant, trop court pour les motifs de jeton. Une valeur
+	 * de moins de 3 caractères ou commune à toutes les installations (« localhost », « root », une
+	 * base nommée « WordPress »…, voir GENERIC_VALUES) n'est pas retenue. De la plus longue à la
+	 * plus courte, sans doublon (casse ignorée).
 	 *
 	 * @return list<string>
 	 */
