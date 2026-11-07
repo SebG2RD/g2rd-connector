@@ -27,6 +27,8 @@ abstract class BackupTestCase extends TestCase {
 		// Site simple par défaut : une fois simulée par un test, une fonction reste définie pour
 		// Brain Monkey, et un appel sans simulation lèverait.
 		Functions\when( 'is_multisite' )->justReturn( false );
+		// Sels de wp-config.php : nom du dossier privé de Run\WorkDir (tests qui passent par lui).
+		Functions\when( 'wp_salt' )->justReturn( 'sel-de-test' );
 		// Résultat de signature d'une requête d'un test précédent : état statique du processus.
 		( new \ReflectionProperty( \G2RD\Connector\Rest\Auth::class, 'last_signature_check' ) )->setValue( null, null );
 		// Passage de la porte des mises à jour laissé ouvert par un test précédent : état statique.
