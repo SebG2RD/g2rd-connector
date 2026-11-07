@@ -30,8 +30,10 @@
  *   5. dernier filet armé (arm_last_net()), signe de vie attaché (RunHeartbeat ; s'il ne
  *      s'attache pas, la commande s'exécute quand même), commande exécutée, résultat écrit
  *      (RunLifecycle::finish()), de la forme de la réponse de `/command` ;
- *   6. signe de vie détaché, puis créneau rendu (ExecutionSlot::release()), chacun
- *      rattrapé à part ; dernier filet désarmé (fin normale).
+ *   6. signe de vie détaché, passage de la porte des mises à jour fermé
+ *      (UpdateGate::leave(), ouvert par l'acceptation), puis créneau rendu
+ *      (ExecutionSlot::release()), chacun rattrapé à part ; dernier filet désarmé (fin
+ *      normale).
  *
  * Dernier filet (§ 3.5, mort du processus, cas 1) : si PHP s'arrête pendant la commande
  * (erreur fatale, délai PHP dépassé, exit d'une extension), rien ne passe plus dans le
@@ -125,6 +127,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\CommandRuns;
 
+use G2RD\Connector\Backup\Gate\UpdateGate;
 use G2RD\Connector\Commands\CommandExecutor;
 use G2RD\Connector\PhpErrors\Normalizer;
 use G2RD\Connector\PhpErrors\Redactor;
@@ -677,8 +680,10 @@ final class AfterResponseRunner {
 	}
 
 	/**
-	 * Détache le signe de vie, puis rend le créneau, chacun rattrapé à part : le créneau
-	 * est rendu même si le détachement lève, et rien ne remonte hors du filtre. Une base
+	 * Détache le signe de vie, ferme le passage de la porte des mises à jour ouvert par
+	 * l'acceptation (UpdateGate::leave() : entrée du témoin retirée, verrou rendu), puis rend
+	 * le créneau, chacun rattrapé à part : le créneau est rendu même si le détachement ou la
+	 * fermeture lève, et rien ne remonte hors du filtre. Une base
 	 * qui lève sur le rendu laisse le créneau pris : il est repris 600 s après son dernier
 	 * signe de vie (ExecutionSlot, limite connue « rendu perdu »).
 	 */
@@ -689,6 +694,14 @@ final class AfterResponseRunner {
 			// Écouteurs peut-être restés branchés : sans effet sur une exécution conclue,
 			// un signe de vie n'écrit que sur une exécution en cours et sur un créneau
 			// tenu par elle.
+			unset( $e );
+		}
+
+		try {
+			UpdateGate::leave();
+		} catch ( \Throwable $e ) {
+			// Verrou rendu par MySQL à la fin de la connexion ; entrée du témoin effacée par la
+			// prochaine tranche.
 			unset( $e );
 		}
 
@@ -825,9 +838,11 @@ final class AfterResponseRunner {
 
 	/**
 	 * Issue de la commande → résultat enregistré, de la forme de la réponse de `/command`
-	 * (CommandController::handle()) : {command, status, result, error, at, stray_output?},
-	 * sans `signature_check` (signature toujours exigée sur ces routes). `status` vaut
-	 * « done » ou « failed », comme l'état que RunLifecycle::finish() en tire.
+	 * (CommandController::handle()) : {command, status, result, error, at, stray_output?,
+	 * error_code?, retry_after?, stage?}, sans `signature_check` (signature toujours exigée sur
+	 * ces routes). `status` vaut « done » ou « failed », comme l'état que RunLifecycle::finish()
+	 * en tire. Les trois derniers champs, ceux d'un refus à code stable (porte des mises à jour,
+	 * sauvegarde), suivent les bornes de CommandController::refusal_fields().
 	 *
 	 * @param array<string, mixed>|null $executed Issue rendue par l'exécuteur ; null :
 	 *                                            commande inconnue, rien n'a été exécuté.
@@ -856,6 +871,19 @@ final class AfterResponseRunner {
 		// commande, capturé par CommandExecutor.
 		if ( isset( $executed['stray_output'] ) && '' !== $executed['stray_output'] ) {
 			$outcome['stray_output'] = $executed['stray_output'];
+		}
+		// Refus à code stable (porte des mises à jour, sauvegarde) : code, délai et étape, comme /command.
+		$code = $executed['error_code'] ?? null;
+		if ( is_string( $code ) && 1 === preg_match( '/^[a-z_]{1,64}$/D', $code ) ) {
+			$outcome['error_code'] = $code;
+			$retry                 = $executed['retry_after'] ?? null;
+			if ( is_int( $retry ) && $retry >= 1 && $retry <= 3600 ) {
+				$outcome['retry_after'] = $retry;
+			}
+			$stage = $executed['stage'] ?? null;
+			if ( is_string( $stage ) && 1 === preg_match( '/^[a-z_]{1,32}$/D', $stage ) ) {
+				$outcome['stage'] = $stage;
+			}
 		}
 
 		return $outcome;

@@ -1,7 +1,8 @@
 <?php
 /**
  * Faux $wpdb des tests du module de sauvegarde : tables des options (les requêtes de
- * CommandRuns\OptionRow, une table par blog, nom lu dans $wpdb->options) et verrous consultatifs
+ * CommandRuns\OptionRow, une table par blog, nom lu dans $wpdb->options ; les recherches par préfixe
+ * de CommandRuns\RunStore, depuis le branchement de la route en arrière-plan) et verrous consultatifs
  * (GET_LOCK, RELEASE_LOCK de Support\MysqlLock). Toute autre requête, ou une requête non préparée,
  * lève une \LogicException : un test ne valide jamais une requête que la vraie base lirait
  * autrement.
@@ -46,6 +47,9 @@ final class FakeBackupWpdb {
 
 	/** Appelée une fois juste avant la prochaine écriture : un autre processus écrit entre-temps. */
 	public ?\Closure $before_write = null;
+
+	/** Nom d'option dont l'INSERT IGNORE échoue (rend false), ou null. */
+	public ?string $insert_fails_for = null;
 
 	/** @var array<string, array{0: string, 1: list<mixed>}> Requête préparée → modèle et valeurs. */
 	private array $prepared = [];
@@ -138,6 +142,10 @@ final class FakeBackupWpdb {
 
 		if ( 1 === preg_match( '/^INSERT IGNORE INTO (\S+) \(option_name, option_value, autoload\) VALUES \(%s, %s, %s\)$/', $template, $match ) ) {
 			$name = (string) $args[0];
+			if ( $name === $this->insert_fails_for ) {
+				$this->last_error = 'Disk full';
+				return false;
+			}
 			if ( isset( $this->tables[ $match[1] ][ $name ] ) ) {
 				return 0;
 			}
@@ -162,6 +170,76 @@ final class FakeBackupWpdb {
 		}
 
 		throw new \LogicException( 'Écriture non prévue par le faux $wpdb : ' . $sql );
+	}
+
+	/**
+	 * Les recherches par préfixe de RunStore et RunReaper (modèle : FakeOptionsTable) : exécutions
+	 * non terminées (ramassage, RunStore::unfinished()), toutes les lignes du préfixe
+	 * (RunStore::scan()), et le début de chaque valeur (purge, RunStore::scan_heads(),
+	 * `option_head` ; SUBSTRING compte ici des octets, MySQL des caractères : valeurs en ASCII).
+	 *
+	 * @return list<array<string, string>>
+	 */
+	public function get_results( string $sql, string $output = 'OBJECT' ): array {
+		[ $template, $args ] = $this->receive( $sql );
+		unset( $output );
+		if ( 1 === preg_match( '/^SELECT option_name, SUBSTRING\(option_value, 1, %d\) AS option_head FROM (\S+) WHERE option_name LIKE %s LIMIT %d$/', $template, $match ) ) {
+			$heads = [];
+			foreach ( $this->rows_by_prefix( $match[1], (string) $args[1], null, (int) $args[2] ) as $row ) {
+				$heads[] = [
+					'option_name' => $row['option_name'],
+					'option_head' => substr( $row['option_value'], 0, (int) $args[0] ),
+				];
+			}
+			return $heads;
+		}
+		if ( 1 !== preg_match( '/^SELECT option_name, option_value FROM (\S+) WHERE option_name LIKE %s( AND \( option_value LIKE %s OR option_value LIKE %s \))? LIMIT %d$/', $template, $match ) ) {
+			throw new \LogicException( 'Lecture non prévue par le faux $wpdb : ' . $sql );
+		}
+		$values = isset( $match[2] ) && '' !== $match[2] ? [ (string) $args[1], (string) $args[2] ] : null;
+
+		return $this->rows_by_prefix( $match[1], (string) $args[0], $values, (int) end( $args ) );
+	}
+
+	/**
+	 * Lignes de `$table` dont le nom suit le motif LIKE, dans l'ordre des noms, `$limit` au plus ;
+	 * avec `$values`, seulement celles dont la valeur suit l'un des deux motifs.
+	 *
+	 * @param array{0: string, 1: string}|null $values
+	 * @return list<array{option_name: string, option_value: string}>
+	 */
+	private function rows_by_prefix( string $table, string $pattern, ?array $values, int $limit ): array {
+		$rows  = [];
+		$names = array_keys( $this->tables[ $table ] ?? [] );
+		sort( $names, SORT_STRING );
+		foreach ( $names as $name ) {
+			if ( count( $rows ) >= $limit ) {
+				break;
+			}
+			$value = $this->tables[ $table ][ $name ];
+			if ( self::like( $pattern, (string) $name ) && ( null === $values || self::like( $values[0], $value ) || self::like( $values[1], $value ) ) ) {
+				$rows[] = [
+					'option_name'  => (string) $name,
+					'option_value' => $value,
+				];
+			}
+		}
+		return $rows;
+	}
+
+	/** LIKE de MySQL : `%`, `_`, et `\` qui échappe le caractère suivant. */
+	private static function like( string $pattern, string $value ): bool {
+		$regex  = '';
+		$length = strlen( $pattern );
+		for ( $i = 0; $i < $length; $i++ ) {
+			$char = $pattern[ $i ];
+			if ( '\\' === $char && $i + 1 < $length ) {
+				$regex .= preg_quote( $pattern[ ++$i ], '/' );
+				continue;
+			}
+			$regex .= '%' === $char ? '.*' : ( '_' === $char ? '.' : preg_quote( $char, '/' ) );
+		}
+		return 1 === preg_match( '/^' . $regex . '$/sD', $value );
 	}
 
 	/** Valeur JSON décodée d'une option, ou null si absente. */

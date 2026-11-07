@@ -35,6 +35,7 @@ final class RefusalTest extends TestCase {
 		yield 'body_too_large' => [ Refusal::BODY_TOO_LARGE, 'g2rd_connector_body_too_large', 413 ];
 		yield 'async_disabled' => [ Refusal::ASYNC_DISABLED, 'g2rd_connector_async_disabled', 503 ];
 		yield 'run_unknown' => [ Refusal::RUN_UNKNOWN, 'g2rd_connector_run_unknown', 404 ];
+		yield 'backup_slice_running' => [ Refusal::BACKUP_SLICE_RUNNING, 'g2rd_connector_backup_slice_running', 409 ];
 	}
 
 	#[DataProvider( 'refus' )]

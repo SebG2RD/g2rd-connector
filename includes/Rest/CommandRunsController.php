@@ -15,6 +15,9 @@
  *
  *   numéro inconnu, site libre              → 202 `accepted`, exécution programmée
  *   numéro inconnu, site occupé             → 409 `site_busy`, rien n'est enregistré
+ *   mise à jour pendant une tranche de
+ *   sauvegarde (verrou tenu sans créneau)   → 409 `backup_slice_running`, créneau rendu,
+ *                                              rien n'est enregistré
  *   numéro connu, même corps                → 200 `duplicate`, l'état sans le résultat
  *   numéro connu, autre corps               → 409 `command_id_conflict`
  *   renvoi du CDN (nonce vu), numéro connu   → 200 `duplicate`
@@ -39,6 +42,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Rest;
 
+use G2RD\Connector\Backup\Gate\UpdateGate;
 use G2RD\Connector\CommandRuns\AsyncCommands;
 use G2RD\Connector\CommandRuns\AsyncProbe;
 use G2RD\Connector\CommandRuns\Capability;
@@ -193,8 +197,12 @@ final class CommandRunsController {
 	 *      même numéro (une autre requête est en train de l'accepter) → « déjà reçue » dès
 	 *      que l'enregistrement paraît, relu pendant 1,5 s au plus, 500 sinon
 	 *      (await_reception()) ;
-	 *   7. création de l'enregistrement (perdue : créneau rendu, puis « déjà reçue » si le
-	 *      numéro est apparu entre-temps, 500 sinon) ;
+	 *   6 bis. porte des mises à jour (UpdateGate::COMMANDS seulement) : une tranche de
+	 *      sauvegarde tient le verrou sans tenir le créneau (tranche passée par `/command`) →
+	 *      créneau rendu, 409 `backup_slice_running`, rien n'est enregistré ; sinon le passage
+	 *      reste ouvert jusqu'à AfterResponseRunner::clean_up() ;
+	 *   7. création de l'enregistrement (perdue : porte fermée et créneau rendu, puis
+	 *      « déjà reçue » si le numéro est apparu entre-temps, 500 sinon) ;
 	 *   8. exécution programmée pour après la réponse ;
 	 *   9. 202.
 	 *
@@ -260,6 +268,15 @@ final class CommandRunsController {
 			return Refusal::error( Refusal::SITE_BUSY, $slot );
 		}
 
+		// Porte des mises à jour (phase 4) : ouverte après le créneau, gardée par l'exécution après
+		// réponse (même processus, même connexion MySQL), fermée par AfterResponseRunner::clean_up().
+		$gate = UpdateGate::applies_to( $command ) ? UpdateGate::enter( $command, $now ) : null;
+		if ( null !== $gate ) {
+			ExecutionSlot::release( $command_id );
+
+			return Refusal::error( Refusal::BACKUP_SLICE_RUNNING, [ 'retry_after' => $gate['retry_after'] ?? null ] );
+		}
+
 		$created = RunStore::create(
 			[
 				'command_id'  => $command_id,
@@ -274,7 +291,8 @@ final class CommandRunsController {
 		);
 		if ( ! $created ) {
 			// Numéro enregistré entre-temps par un autre processus, ou écriture refusée : le
-			// créneau, pris pour rien, est rendu.
+			// créneau, pris pour rien, est rendu (la porte des mises à jour d'abord).
+			UpdateGate::leave();
 			ExecutionSlot::release( $command_id );
 
 			return self::received_meanwhile( $command_id, $fingerprint, $now, self::store_unavailable() );
