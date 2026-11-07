@@ -289,16 +289,11 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 		$this->wpdb->charset = 'latin1';
 		$this->wpdb->session = [ 'latin1', 'latin1', 'latin1' ];
 		$emis                = '';
-		$refus               = self::refus(
-			fn () => $this->dumper()->advance(
-				$liste,
-				$curseur,
-				static function ( string $morceau ) use ( &$emis ): void {
-					$emis .= $morceau;
-				},
-				static fn (): bool => false
-			)
-		);
+		// Fermeture créée hors de la fonction fléchée, qui capturerait $emis par valeur.
+		$emit  = static function ( string $morceau ) use ( &$emis ): void {
+			$emis .= $morceau;
+		};
+		$refus = self::refus( fn () => $this->dumper()->advance( $liste, $curseur, $emit, static fn (): bool => false ) );
 
 		self::assertSame( BackupRefused::DB_CHARSET_MISMATCH, $refus->reason_code() );
 		self::assertNull( $refus->retry_after(), 'non réessayable' );
@@ -383,7 +378,7 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 			);
 			$curseur = self::par_l_etat( $etape['cursor'] );
 		} while ( null !== $curseur && ++$appels < 1000 );
-		preg_match_all( '/^SELECT \* FROM `' . preg_quote( $table, '/' ) . '`.* LIMIT (\d+)$/m', implode( "\n", $this->wpdb->queries ), $lues );
+		preg_match_all( '/^SELECT `.+` FROM `' . preg_quote( $table, '/' ) . '` .*LIMIT (\d+)$/m', implode( "\n", $this->wpdb->queries ), $lues );
 
 		return array_map( 'intval', $lues[1] );
 	}
@@ -614,20 +609,16 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 				]
 			),
 		];
+		$emis = 0;
+		// Fermeture créée hors des fonctions fléchées, qui captureraient $emis par valeur.
+		$emit = static function ( string $morceau ) use ( &$emis ): void {
+			unset( $morceau );
+			++$emis;
+		};
 		foreach ( $cas as $nom => $curseur ) {
 			$this->wpdb->queries = [];
 			$emis                = 0;
-			$refus               = self::refus(
-				fn () => $this->dumper()->advance(
-					$liste,
-					$curseur,
-					static function ( string $morceau ) use ( &$emis ): void {
-						unset( $morceau );
-						++$emis;
-					},
-					static fn (): bool => false
-				)
-			);
+			$refus               = self::refus( fn () => $this->dumper()->advance( $liste, $curseur, $emit, static fn (): bool => false ) );
 			self::assertSame( BackupRefused::DB_CURSOR_INVALID, $refus->reason_code(), $nom );
 			self::assertNull( $refus->retry_after(), $nom . ' : non réessayable' );
 			self::assertSame( 0, $emis, $nom . ' : rien émis' );
@@ -648,17 +639,14 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 							'after_hex' => [ '31' ],
 						]
 					),
-					static function ( string $morceau ) use ( &$emis ): void {
-						unset( $morceau );
-						++$emis;
-					},
+					$emit,
 					static fn (): bool => false
 				)
 			);
 			self::assertSame( BackupRefused::DB_CURSOR_INVALID, $refus->reason_code(), $nom );
 			self::assertNull( $refus->retry_after(), $nom );
 			self::assertSame( 0, $emis, $nom . ' : rien émis' );
-			self::assertSame( [], array_filter( $this->wpdb->queries, static fn ( string $q ): bool => str_starts_with( $q, 'SELECT * FROM' ) ), $nom . ' : refus au lot, avant sa requête' );
+			self::assertSame( [], array_filter( $this->wpdb->queries, static fn ( string $q ): bool => str_starts_with( $q, FakeDumpWpdb::ROWS_START ) ), $nom . ' : refus au lot, avant sa requête' );
 		}
 	}
 
@@ -730,5 +718,159 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 		self::assertSame( [ 'wp_options', 'wp_posts' ], DatabaseDumper::tables_from_hex( [ bin2hex( 'wp_options' ), bin2hex( 'wp_posts' ) ] ) );
 		self::assertTrue( DatabaseDumper::hex_list( [ '', 'ab' ] ), 'valeur de clé vide : hexadécimal vide' );
 		self::assertFalse( DatabaseDumper::hex_list( [ "ab\n" ] ) );
+	}
+
+	/**
+	 * Table du faux de $n lignes (clé $cle de 1 à $n, valeur ligne-<clé>), rangées à l'envers, lue par
+	 * lots de deux au départ (taille moyenne annoncée) ; $options remplace ou complète la table.
+	 *
+	 * @param list<string>         $pk
+	 * @param array<string, mixed> $options
+	 */
+	private function lignes( string $table, string $cle, array $pk, int $n, array $options = [] ): void {
+		$lignes = [];
+		for ( $i = $n; $i >= 1; $i-- ) {
+			$lignes[] = [
+				$cle => (string) $i,
+				'v'  => 'ligne-' . $i,
+			];
+		}
+		$this->wpdb->tables[ $table ] = $options + [
+			'columns'        => [
+				$cle => 'bigint(20) unsigned',
+				'v'  => 'varchar(20)',
+			],
+			'pk'             => $pk,
+			'rows'           => $lignes,
+			'avg_row_length' => intdiv( DatabaseDumper::BATCH_BYTES, 2 ),
+		];
+	}
+
+	public function test_cle_invisible_lue_par_son_nom_et_reprise_sans_doublon(): void {
+		// my_row_id : la clé INVISIBLE que MySQL 8.0.30+ ajoute (sql_generate_invisible_primary_key), que SELECT * ne rend pas.
+		$this->lignes( 'wp_gipk', 'my_row_id', [ 'my_row_id' ], 9, [ 'invisible' => [ 'my_row_id' ] ] );
+		$liste = [ 'wp_gipk' ];
+
+		[ $entier ]                       = $this->dump( $liste, static fn (): bool => false );
+		$this->wpdb->queries              = [];
+		[ $repris, , $appels, $curseurs ] = $this->dump( $liste, static fn (): bool => true );
+
+		self::assertSame( $entier, $repris, 'reprise par lots identique au dump d\'une traite' );
+		self::assertSame( 4, $appels, 'en-tête, puis lots de 2, 4 et 8 lignes' );
+		self::assertStringContainsString( "INSERT INTO `wp_gipk` (`my_row_id`,`v`) VALUES\n('1','ligne-1'),\n('2','ligne-2');\n", $repris );
+		for ( $i = 1; $i <= 9; $i++ ) {
+			self::assertSame( 1, substr_count( $repris, "('" . $i . "','ligne-" . $i . "')" ), 'ligne ' . $i . ' une fois, avec sa clé' );
+		}
+		self::assertStringNotContainsString( 'NULL', $repris, 'aucune colonne écrite NULL faute d\'avoir été lue' );
+		self::assertSame( [ null, [ bin2hex( '2' ) ], [ bin2hex( '6' ) ] ], array_column( $curseurs, 'after_hex' ), 'la reprise avance sur la clé invisible' );
+		$lectures = array_values( array_filter( $this->wpdb->queries, static fn ( string $q ): bool => str_starts_with( $q, FakeDumpWpdb::ROWS_START ) ) );
+		self::assertCount( 3, $lectures );
+		foreach ( $lectures as $lecture ) {
+			self::assertStringStartsWith( 'SELECT `my_row_id`,`v` FROM `wp_gipk` ', $lecture, 'colonnes nommées, la clé invisible comprise' );
+		}
+	}
+
+	public function test_colonne_de_la_cle_absente_de_la_ligne_refusee_sans_rien_emettre(): void {
+		$anomalies = [
+			'clé non rendue dans la ligne' => [ 'omitted' => [ 'my_row_id' ] ],
+			'clé nulle dans la ligne'      => [
+				'rows' => [
+					[
+						'my_row_id' => null,
+						'v'         => 'ligne-1',
+					],
+				],
+			],
+		];
+		$emis = '';
+		// Fermeture créée hors des fonctions fléchées, qui captureraient $emis par valeur.
+		$emit = static function ( string $morceau ) use ( &$emis ): void {
+			$emis .= $morceau;
+		};
+		foreach ( $anomalies as $nom => $anomalie ) {
+			$this->wpdb = self::faux();
+			$this->lignes( 'wp_gipk', 'my_row_id', [ 'my_row_id' ], 5, $anomalie );
+			$emis  = '';
+			$refus = self::refus( fn () => $this->dumper()->advance( [ 'wp_gipk' ], null, $emit, static fn (): bool => false ) );
+			self::assertSame( BackupRefused::DB_READ_FAILED, $refus->reason_code(), $nom );
+			self::assertNotNull( $refus->retry_after(), $nom . ' : réessayable, rien n\'est corrompu' );
+			self::assertStringContainsString( '« wp_gipk »', $refus->getMessage(), $nom . ' : la table est nommée' );
+			self::assertSame( DatabaseDumper::header( 'utf8mb4' ) . "DROP TABLE IF EXISTS `wp_gipk`;\nCREATE TABLE `wp_gipk` (`my_row_id`,`v`);\n", $emis, $nom . ' : rien émis du lot' );
+		}
+
+		// Aucune colonne lue : refus avant le premier octet de la table et avant toute lecture de ses lignes.
+		$this->wpdb                    = self::faux();
+		$this->wpdb->tables['wp_vide'] = [
+			'columns' => [],
+			'pk'      => [],
+			'rows'    => [],
+		];
+		$emis                          = '';
+		$refus                         = self::refus( fn () => $this->dumper()->advance( [ 'wp_vide' ], null, $emit, static fn (): bool => false ) );
+		self::assertSame( BackupRefused::DB_READ_FAILED, $refus->reason_code() );
+		self::assertStringContainsString( '« wp_vide »', $refus->getMessage() );
+		self::assertSame( DatabaseDumper::header( 'utf8mb4' ), $emis, 'en-tête seul : ni DROP ni CREATE' );
+		self::assertSame( [], array_filter( $this->wpdb->queries, static fn ( string $q ): bool => str_starts_with( $q, FakeDumpWpdb::ROWS_START ) || str_starts_with( $q, 'SHOW CREATE TABLE' ) ) );
+	}
+
+	public function test_reprise_qui_n_avance_pas_refusee_sans_rien_emettre(): void {
+		// WHERE (clé) > (…) relu depuis le début (comme `my_row_id` > '' qui compare à 0) ; le lot grossit (2 puis 4 lignes),
+		// sa dernière clé n'est donc pas celle du curseur : seule la ligne du curseur, relue, trahit la reprise.
+		$this->lignes( 'wp_t', 'id', [ 'id' ], 5, [ 'where_ignored' => true ] );
+		$sql     = '';
+		$emit    = static function ( string $morceau ) use ( &$sql ): void {
+			$sql .= $morceau;
+		};
+		$curseur = null;
+		$refus   = null;
+		$avant   = '';
+		for ( $appels = 0; $appels < 10 && null === $refus; $appels++ ) {
+			$avant = $sql;
+			try {
+				$curseur = self::par_l_etat( $this->dumper()->advance( [ 'wp_t' ], $curseur, $emit, static fn (): bool => true )['cursor'] );
+			} catch ( BackupRefused $e ) {
+				$refus = $e;
+			}
+		}
+
+		self::assertInstanceOf( BackupRefused::class, $refus, 'jamais un dump fini sur une reprise qui n\'avance pas' );
+		self::assertSame( BackupRefused::DB_READ_FAILED, $refus->reason_code() );
+		self::assertStringContainsString( '« wp_t »', $refus->getMessage() );
+		self::assertSame( 3, $appels, 'refus à la première reprise' );
+		self::assertSame( $avant, $sql, 'rien émis par la tranche refusée' );
+		for ( $i = 1; $i <= 5; $i++ ) {
+			self::assertLessThanOrEqual( 1, substr_count( $sql, "'ligne-" . $i . "'" ), 'ligne ' . $i . ' jamais copiée deux fois' );
+		}
+	}
+
+	public function test_cle_ajoutee_entre_deux_tranches_refusee_sans_rien_emettre(): void {
+		$this->lignes( 'wp_t', 'id', [], 5 );
+		$liste   = [ 'wp_t' ];
+		$sql     = '';
+		$emit    = static function ( string $morceau ) use ( &$sql ): void {
+			$sql .= $morceau;
+		};
+		$curseur = null;
+		// Deux tranches : l'en-tête et le CREATE, puis un lot LIMIT 2 OFFSET 0.
+		for ( $i = 0; $i < 2; $i++ ) {
+			$curseur = self::par_l_etat( $this->dumper()->advance( $liste, $curseur, $emit, static fn (): bool => true )['cursor'] );
+		}
+		self::assertIsArray( $curseur );
+		self::assertSame( 2, $curseur['offset'] );
+		self::assertNull( $curseur['after_hex'] );
+
+		// Une extension ajoute une clé primaire à la table (migration) avant la tranche suivante.
+		$this->wpdb->tables['wp_t']['pk'] = [ 'id' ];
+		$this->wpdb->queries              = [];
+		$avant                            = $sql;
+		$refus                            = self::refus( fn () => $this->dumper()->advance( $liste, $curseur, $emit, static fn (): bool => false ) );
+
+		self::assertSame( BackupRefused::DB_CURSOR_INVALID, $refus->reason_code() );
+		self::assertNull( $refus->retry_after(), 'non réessayable' );
+		self::assertSame( $avant, $sql, 'rien émis par la tranche refusée' );
+		self::assertSame( [], array_filter( $this->wpdb->queries, static fn ( string $q ): bool => str_starts_with( $q, FakeDumpWpdb::ROWS_START ) ), 'refus avant la lecture du lot' );
+		for ( $i = 1; $i <= 5; $i++ ) {
+			self::assertLessThanOrEqual( 1, substr_count( $sql, "'ligne-" . $i . "'" ), 'ligne ' . $i . ' jamais copiée deux fois' );
+		}
 	}
 }

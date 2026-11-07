@@ -168,7 +168,7 @@ final class DatabaseDumperTablesTest extends TestCase {
 		self::assertSame( FakeDumpWpdb::SESSION_QUERY, $wpdb->queries[0] );
 		self::assertStringStartsWith( 'SELECT TABLE_NAME, AVG_ROW_LENGTH FROM information_schema.TABLES', $wpdb->queries[1] );
 		self::assertStringStartsWith( 'SELECT HEX(CONVERT(TABLE_NAME USING utf8mb4))', $wpdb->queries[2] );
-		foreach ( [ 'SHOW FULL COLUMNS', 'SHOW CREATE TABLE', 'SELECT * FROM' ] as $lecture ) {
+		foreach ( [ 'SHOW FULL COLUMNS', 'SHOW CREATE TABLE', FakeDumpWpdb::ROWS_START ] as $lecture ) {
 			self::assertSame( 0, self::compte( $wpdb->queries, $lecture ), $lecture . ' : aucune lecture du contenu' );
 		}
 	}

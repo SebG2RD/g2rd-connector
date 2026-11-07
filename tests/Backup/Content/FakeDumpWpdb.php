@@ -4,9 +4,10 @@
  * (les trois variables de jeu), des noms perdus, une connexion qui peut être rouverte, et les seules
  * requêtes de Backup\Content\DatabaseDumper (docs/backup-payload.md § 4), reconnues à leur texte.
  * Toute autre requête lève, de même qu'un motif LIKE qui contient \ ou n'est pas celui du préfixe,
- * un identifiant passé par %i, un motif échappé par esc_like() et une valeur de reprise qui n'est
- * pas écrite comme le fait key_literal() : un test ne valide jamais une requête que la vraie base
- * lirait autrement, ni une écriture qui dépend du sql_mode du site.
+ * un identifiant passé par %i, un motif échappé par esc_like(), une valeur de reprise qui n'est
+ * pas écrite comme le fait key_literal(), et SELECT * (une colonne INVISIBLE n'y est pas rendue :
+ * les lignes se lisent par la liste exacte des colonnes de la table) : un test ne valide jamais une
+ * requête que la vraie base lirait autrement, ni une écriture qui dépend du sql_mode du site.
  *
  * @package G2RD\Connector
  */
@@ -29,6 +30,9 @@ final class FakeDumpWpdb {
 	/** Début de la détection des noms perdus (§ 4, « Noms perdus »). */
 	private const LOST_START = 'SELECT HEX(CONVERT(TABLE_NAME USING utf8mb4))';
 
+	/** Début d'une lecture de lignes : la première colonne nommée entre accents graves (jamais SELECT *). */
+	public const ROWS_START = 'SELECT `';
+
 	public string $options = 'wp_options';
 
 	public string $base_prefix = 'wp_';
@@ -37,7 +41,14 @@ final class FakeDumpWpdb {
 
 	public string $last_error = '';
 
-	/** @var array<string, array{columns: array<string, string>, pk: list<string>, rows: list<array<string, string|null>>, view?: bool, avg_row_length?: int}> Noms et valeurs : octets tels que lus dans $charset. */
+	/**
+	 * Noms et valeurs : octets tels que lus dans $charset. invisible : colonnes INVISIBLE (Extra de
+	 * SHOW FULL COLUMNS, rendues seulement nommées) ; omitted : colonnes absentes des lignes rendues
+	 * même nommées (anomalie simulée) ; where_ignored : la reprise WHERE (clé) > (…) relit depuis le
+	 * début (comme `my_row_id` > '' qui compare à 0).
+	 *
+	 * @var array<string, array{columns: array<string, string>, pk: list<string>, rows: list<array<string, string|null>>, view?: bool, avg_row_length?: int, invisible?: list<string>, omitted?: list<string>, where_ignored?: bool}>
+	 */
 	public array $tables = [];
 
 	/** @var list<string> Requêtes reçues, dans l'ordre. */
@@ -158,6 +169,7 @@ final class FakeDumpWpdb {
 				$rows[] = [
 					'Field' => (string) $field,
 					'Type'  => $type,
+					'Extra' => in_array( (string) $field, $this->tables[ $name ]['invisible'] ?? [], true ) ? 'INVISIBLE' : '',
 				];
 			}
 			return $rows;
@@ -173,14 +185,63 @@ final class FakeDumpWpdb {
 			}
 			return array_reverse( $rows );
 		}
-		foreach ( array_keys( $this->tables ) as $candidate ) {
+		if ( str_starts_with( $sql, 'SELECT *' ) ) {
+			throw new \LogicException( 'SELECT * : une colonne INVISIBLE (dont my_row_id) n\'y est pas rendue, les colonnes se nomment : ' . $sql );
+		}
+		foreach ( $this->tables as $candidate => $table ) {
 			$ident = self::ident_or_null( (string) $candidate, $this->charset );
-			$start = 'SELECT * FROM ' . $ident . ' ';
-			if ( null !== $ident && str_starts_with( $sql, $start ) ) {
+			$list  = $this->column_list( $table['columns'] );
+			$start = 'SELECT ' . $list . ' FROM ' . $ident . ' ';
+			if ( null !== $ident && null !== $list && str_starts_with( $sql, $start ) ) {
 				return $this->select( (string) $candidate, substr( $sql, strlen( $start ) - 1 ) );
 			}
 		}
-		throw new \LogicException( 'Lecture non prévue par le faux $wpdb du dump : ' . $sql );
+		throw new \LogicException( 'Lecture non prévue par le faux $wpdb du dump (colonnes autres que celles de la table, dans leur ordre ?) : ' . $sql );
+	}
+
+	/**
+	 * Colonnes de la table écrites par ident(), dans leur ordre, séparées par des virgules ; null si
+	 * un nom est refusé dans le jeu du faux ou si la table n'a pas de colonne.
+	 *
+	 * @param array<string, string> $columns
+	 */
+	private function column_list( array $columns ): ?string {
+		$idents = [];
+		foreach ( array_keys( $columns ) as $column ) {
+			$ident = self::ident_or_null( (string) $column, $this->charset );
+			if ( null === $ident ) {
+				return null;
+			}
+			$idents[] = $ident;
+		}
+		return [] === $idents ? null : implode( ',', $idents );
+	}
+
+	/**
+	 * Lignes telles que la base les rend pour la liste des colonnes de la table : chaque colonne, dans
+	 * l'ordre, sauf celles d'omitted (anomalie simulée).
+	 *
+	 * @param list<array<string, string|null>> $rows
+	 * @return list<array<string, string|null>>
+	 */
+	private function projected( string $name, array $rows ): array {
+		$omitted = $this->tables[ $name ]['omitted'] ?? [];
+		$read    = [];
+		foreach ( $rows as $row ) {
+			$line = [];
+			foreach ( array_keys( $this->tables[ $name ]['columns'] ) as $column ) {
+				$column = (string) $column;
+				if ( in_array( $column, $omitted, true ) ) {
+					continue;
+				}
+				if ( ! array_key_exists( $column, $row ) ) {
+					throw new \LogicException( 'Ligne du faux sans la colonne ' . $column . ' de ' . $name );
+				}
+				$line[ $column ] = $row[ $column ];
+			}
+			$read[] = $line;
+		}
+		return $read;
 	}
 
 	/**
@@ -207,9 +268,9 @@ final class FakeDumpWpdb {
 	}
 
 	/**
-	 * Lignes d'un SELECT * FROM : LIMIT … OFFSET … pour une table sans clé primaire, ORDER BY la clé
-	 * puis LIMIT sinon, avec WHERE (clé) > (valeurs) pour reprendre ; les valeurs se relisent par
-	 * l'inverse de key_literal(), et lui seul.
+	 * Lignes d'un SELECT <colonnes> FROM : LIMIT … OFFSET … pour une table sans clé primaire, ORDER BY
+	 * la clé puis LIMIT sinon, avec WHERE (clé) > (valeurs) pour reprendre ; les valeurs se relisent
+	 * par l'inverse de key_literal(), et lui seul.
 	 *
 	 * @param string $rest Texte qui suit le nom de la table (commence par une espace).
 	 * @return list<array<string, string|null>>
@@ -221,7 +282,7 @@ final class FakeDumpWpdb {
 			if ( 1 !== preg_match( '/\A LIMIT (\d+) OFFSET (\d+)\z/', $rest, $m ) ) {
 				throw new \LogicException( 'Lecture d\'une table sans clé primaire hors de LIMIT … OFFSET … : ' . $rest );
 			}
-			return array_slice( $this->rows_of( $name ), (int) $m[2], (int) $m[1] );
+			return $this->projected( $name, array_slice( $this->rows_of( $name ), (int) $m[2], (int) $m[1] ) );
 		}
 		$columns = implode( ',', array_map( fn ( string $c ): string => DatabaseDumper::ident( $c, $this->charset ), $pk ) );
 		$order   = ' ORDER BY ' . $columns . ' LIMIT ';
@@ -248,12 +309,12 @@ final class FakeDumpWpdb {
 		}
 		$rows = $this->rows_of( $name );
 		usort( $rows, static fn ( array $a, array $b ): int => self::compare_keys( $a, $b, $pk ) );
-		if ( null !== $after ) {
+		if ( null !== $after && empty( $table['where_ignored'] ) ) {
 			$key  = array_combine( $pk, $after );
 			$rows = array_values( array_filter( $rows, static fn ( array $row ): bool => self::compare_keys( $row, $key, $pk ) > 0 ) );
 		}
 
-		return array_slice( $rows, 0, (int) $limit );
+		return $this->projected( $name, array_slice( $rows, 0, (int) $limit ) );
 	}
 
 	/**
@@ -322,7 +383,7 @@ final class FakeDumpWpdb {
 	}
 
 	/**
-	 * @param array{columns: array<string, string>, pk: list<string>, rows: list<array<string, string|null>>, view?: bool, avg_row_length?: int} $table
+	 * @param array{columns: array<string, string>, pk: list<string>, rows: list<array<string, string|null>>, view?: bool, avg_row_length?: int, invisible?: list<string>, omitted?: list<string>, where_ignored?: bool} $table
 	 */
 	private static function avg_row_length( array $table ): int {
 		if ( isset( $table['avg_row_length'] ) ) {

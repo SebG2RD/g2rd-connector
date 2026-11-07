@@ -14,7 +14,12 @@
  *
  * Le curseur passe par l'état JSON entre deux tranches (docs/backup-payload.md § 4, « Curseur du
  * dump ») : jeu de l'en-tête, clé de reprise en hexadécimal (after_hex), jamais d'octet brut lu dans
- * la base ; un curseur illisible est refusé, jamais remplacé par un départ.
+ * la base ; un curseur illisible est refusé, jamais remplacé par un départ. Les lignes se lisent par
+ * leurs colonnes nommées, jamais par SELECT * (une colonne INVISIBLE n'y est pas rendue) ; une
+ * reprise qui repartirait du début de la table est refusée (batch()). Limite écrite : une clé
+ * primaire remplacée entre deux tranches par une autre du même nombre de colonnes n'est pas
+ * détectée (la reprise compare alors les valeurs gardées à d'autres colonnes) ; une clé ajoutée
+ * ou retirée, elle, est refusée.
  *
  * Mémoire : un lot vise BATCH_BYTES (8 Mio) de valeurs ; $wpdb garde son résultat et sa conversion
  * en ARRAY_A (≈ 2 fois), l'instruction INSERT est émise par morceaux de FLUSH_BYTES (512 Kio) : le
@@ -774,6 +779,10 @@ final class DatabaseDumper {
 			$names[]         = $name;
 			$binary[ $name ] = 1 === preg_match( self::BINARY_TYPE, (string) ( $column['Type'] ?? '' ) );
 		}
+		if ( [] === $names ) {
+			// Aucune colonne lue : ni SELECT ni INSERT ne s'écriraient ; refus avant le premier octet de la table.
+			throw new BackupRefused( BackupRefused::DB_READ_FAILED, null, $table ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite et nom de table).
+		}
 		$keys = $this->rows( 'SHOW KEYS FROM ' . self::ident( $table, $charset ) . " WHERE Key_name = 'PRIMARY'", $table );
 		usort( $keys, static fn ( array $a, array $b ): int => (int) ( $a['Seq_in_index'] ?? 0 ) <=> (int) ( $b['Seq_in_index'] ?? 0 ) );
 
@@ -806,8 +815,17 @@ final class DatabaseDumper {
 
 	/**
 	 * Lot suivant : par clé primaire (comparaison de tuples, ordre de la clé), sinon LIMIT/OFFSET.
-	 * Requête bâtie sans $wpdb->prepare() : noms par ident(), valeurs de la clé par key_literal()
-	 * (hexadécimal, quel que soit le sql_mode du site), entiers convertis.
+	 * Colonnes nommées, celles de SHOW FULL COLUMNS dans leur ordre, jamais SELECT * : une colonne
+	 * INVISIBLE (MySQL 8.0.23+, MariaDB 10.3+), dont my_row_id, la clé que MySQL 8.0.30+ ajoute avec
+	 * sql_generate_invisible_primary_key, n'est rendue que nommée ; les colonnes lues sont ainsi
+	 * celles de l'INSERT. Requête bâtie sans $wpdb->prepare() : noms par ident(), valeurs de la clé
+	 * par key_literal() (hexadécimal, quel que soit le sql_mode du site), entiers convertis.
+	 *
+	 * Jamais une reprise au début de la table, qui recopierait des lignes (§ 4, « Curseur du dump ») :
+	 * refus avant la requête si le curseur n'a pas autant de valeurs que la clé, ou avance par offset
+	 * une table qui a maintenant une clé (ajoutée entre deux tranches) ; refus avant d'émettre le lot
+	 * si une ligne lue n'a pas une colonne de la clé (key_hex()), ou a la clé du curseur : la reprise
+	 * n'a pas avancé (WHERE (clé) > (curseur) ne rend jamais la ligne du curseur, déjà écrite).
 	 *
 	 * @param Meta   $meta
 	 * @param Cursor $cursor
@@ -823,7 +841,12 @@ final class DatabaseDumper {
 			// Table sans clé primaire avec une reprise, ou clé changée pendant la sauvegarde : jamais un WHERE aux valeurs décalées.
 			throw new BackupRefused( BackupRefused::DB_CURSOR_INVALID ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
 		}
-		$from = 'SELECT * FROM ' . self::ident( $table, $charset );
+		if ( [] !== $pk && 0 !== $cursor['offset'] ) {
+			// Table commencée par LIMIT/OFFSET (sans clé) qui a reçu une clé primaire entre deux tranches : le lot
+			// par la clé repartirait du début et recopierait les lignes déjà écrites. Une table à clé n'avance jamais par offset.
+			throw new BackupRefused( BackupRefused::DB_CURSOR_INVALID ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+		}
+		$from = 'SELECT ' . implode( ',', array_map( static fn ( string $c ): string => self::ident( $c, $charset ), $meta['columns'] ) ) . ' FROM ' . self::ident( $table, $charset );
 		if ( [] === $pk ) {
 			$sql = $from . ' LIMIT ' . (int) $limit . ' OFFSET ' . (int) $cursor['offset'];
 		} else {
@@ -843,11 +866,43 @@ final class DatabaseDumper {
 			}
 		}
 		$rows = $this->rows( $sql, $table );
-		$last = [] === $rows ? null : $rows[ count( $rows ) - 1 ];
 		// Clé de la dernière ligne relevée ici, en hexadécimal : l'appelant peut libérer le lot avant d'avancer.
-		$this->last_key = null === $last || [] === $pk ? null : array_map( static fn ( string $column ): string => bin2hex( (string) ( $last[ $column ] ?? '' ) ), $pk );
+		$this->last_key = null;
+		if ( [] !== $pk ) {
+			foreach ( $rows as $row ) {
+				$key = self::key_hex( $table, $pk, $row );
+				if ( $key === $after ) {
+					// WHERE (clé) > (curseur) ne rend jamais la ligne du curseur, déjà écrite : la reprise n'a pas avancé, le
+					// lot recopierait des lignes et le suivant relirait les mêmes, sans fin. Rien n'est émis de ce lot.
+					throw new BackupRefused( BackupRefused::DB_READ_FAILED, null, $table ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite et nom de table).
+				}
+				$this->last_key = $key;
+			}
+		}
 
 		return $rows;
+	}
+
+	/**
+	 * Clé primaire de $row en hexadécimal, dans l'ordre de la clé. Une colonne de la clé absente de la
+	 * ligne lue, ou nulle (une clé primaire ne l'est jamais), est un refus, jamais '' : la reprise
+	 * WHERE (clé) > ('') repartirait du début de la table (une clé entière comparée à '' compare à 0).
+	 *
+	 * @param list<string>         $pk
+	 * @param array<string, mixed> $row
+	 * @return list<string>
+	 * @throws BackupRefused DB_READ_FAILED (réessayable, rien n'est émis du lot), qui nomme la table.
+	 */
+	private static function key_hex( string $table, array $pk, array $row ): array {
+		$hex = [];
+		foreach ( $pk as $column ) {
+			if ( ! isset( $row[ $column ] ) ) {
+				throw new BackupRefused( BackupRefused::DB_READ_FAILED, null, $table ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite et nom de table).
+			}
+			$hex[] = bin2hex( (string) $row[ $column ] );
+		}
+
+		return $hex;
 	}
 
 	/**
