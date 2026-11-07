@@ -140,9 +140,12 @@ final class UpdateGate {
 	 * l'état et s'oublierait avant la fin de la mise à jour : trois lectures au lieu de deux au plus
 	 * (P4-2, rappel transverse n° 2).
 	 *
-	 * @template T of array<string, mixed>
-	 * @param \Closure(): T $run
-	 * @return T|array{status: string, error: string, error_code: string, retry_after?: int}
+	 * Types écrits en entier (forme de l'issue de CommandExecutor::run(), refus compris), sans
+	 * gabarit : PHPStan 1.12 ramène la forme du refus à array<string, int|string> dès qu'elle est
+	 * unie à un gabarit, et l'issue de run() perdait sa forme (relevé de niveau 8, tâche 10).
+	 *
+	 * @param \Closure(): array{status:string,result?:array<string,mixed>,error?:string,error_code?:string,retry_after?:int,stray_output?:string} $run
+	 * @return array{status:string,result?:array<string,mixed>,error?:string,error_code?:string,retry_after?:int,stray_output?:string}
 	 */
 	public static function around( string $command, \Closure $run ): array {
 		if ( null !== self::$current || self::$transparent ) {

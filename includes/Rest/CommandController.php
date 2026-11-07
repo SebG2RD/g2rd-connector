@@ -81,6 +81,11 @@ final class CommandController {
 			'at'      => gmdate( 'c' ),
 		];
 
+		// Refus à code stable (porte des mises à jour, sauvegarde) : code, délai et étape, en plus de
+		// la phrase (contrat backup-refusal-v1.json). Absents pour tout autre échec : un appelant qui
+		// les ignore garde exactement son comportement.
+		$body += self::refusal_fields( $outcome );
+
 		// Diagnostic : ce qu'un plugin tiers ou une notice PHP a écrit pendant la
 		// commande. Capturé par CommandExecutor plutôt que laissé corrompre ce JSON.
 		if ( isset( $outcome['stray_output'] ) && '' !== $outcome['stray_output'] ) {
@@ -98,5 +103,31 @@ final class CommandController {
 			$body,
 			'done' === $outcome['status'] ? 200 : 500
 		);
+	}
+
+	/**
+	 * Champs d'un refus à code stable recopiés dans la réponse de /command : `error_code`, puis
+	 * `retry_after` (1 à 3 600) et `stage` (étape d'un autotest en échec) s'ils sont présents et bien
+	 * formés ; rien pour tout autre échec. Publique pour les tests.
+	 *
+	 * @param array<string, mixed> $outcome Issue de CommandExecutor::run().
+	 * @return array<string, int|string>
+	 */
+	public static function refusal_fields( array $outcome ): array {
+		$code = $outcome['error_code'] ?? null;
+		if ( ! is_string( $code ) || 1 !== preg_match( '/^[a-z_]{1,64}$/D', $code ) ) {
+			return [];
+		}
+		$fields = [ 'error_code' => $code ];
+		$retry  = $outcome['retry_after'] ?? null;
+		if ( is_int( $retry ) && $retry >= 1 && $retry <= 3600 ) {
+			$fields['retry_after'] = $retry;
+		}
+		$stage = $outcome['stage'] ?? null;
+		if ( is_string( $stage ) && 1 === preg_match( '/^[a-z_]{1,32}$/D', $stage ) ) {
+			$fields['stage'] = $stage;
+		}
+
+		return $fields;
 	}
 }

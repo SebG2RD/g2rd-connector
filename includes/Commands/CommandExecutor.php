@@ -21,6 +21,8 @@ namespace G2RD\Connector\Commands;
 
 use Automatic_Upgrader_Skin;
 use Core_Upgrader;
+use G2RD\Connector\Backup\Commands\BackupRefused;
+use G2RD\Connector\Backup\Gate\UpdateGate;
 use G2RD\Connector\PhpErrors\CaptureCommand;
 use G2RD\Connector\Rest\DbHealth;
 use G2RD\Connector\Rollback\ProtectedUpdate;
@@ -112,21 +114,39 @@ final class CommandExecutor {
 	/**
 	 * Exécute une commande. Retourne :
 	 *   - [ 'status' => 'done', 'result' => array<string, mixed> ]
-	 *   - [ 'status' => 'failed', 'error' => string ]
+	 *   - [ 'status' => 'failed', 'error' => string ] (+ `error_code` et `retry_after` pour un refus
+	 *     à code stable : porte des mises à jour, sauvegarde ; contrat backup-refusal-v1.json)
 	 *   - null si la commande est inconnue.
 	 *
 	 * Le `$payload` est optionnel pour les commandes legacy (clear_cache,
 	 * update_core, etc.) ; il est requis pour update_plugin (clé `file`) et
 	 * update_theme (clé `stylesheet`).
 	 *
+	 * Les commandes qui changent le code ou le schéma passent par la porte des mises à jour
+	 * (Backup\Gate\UpdateGate) : transparente tant que les sauvegardes sont éteintes.
+	 *
 	 * @param array<string, mixed>|null $payload
-	 * @return array{status:string,result?:array<string,mixed>,error?:string,stray_output?:string}|null
+	 * @return array{status:string,result?:array<string,mixed>,error?:string,error_code?:string,retry_after?:int,stray_output?:string}|null
 	 */
 	public static function run( string $command, ?array $payload = null ): ?array {
 		if ( ! in_array( $command, self::ALLOWED, true ) ) {
 			return null;
 		}
+		if ( UpdateGate::applies_to( $command ) ) {
+			return UpdateGate::around( $command, static fn (): array => self::execute( $command, $payload ) );
+		}
 
+		return self::execute( $command, $payload );
+	}
+
+	/**
+	 * Corps historique de run(), inchangé (tampon de sortie, match, nettoyage) ; seul le refus à code
+	 * stable d'une commande de sauvegarde est ajouté.
+	 *
+	 * @param array<string, mixed>|null $payload
+	 * @return array{status:string,result?:array<string,mixed>,error?:string,error_code?:string,retry_after?:int,stray_output?:string}
+	 */
+	private static function execute( string $command, ?array $payload ): array {
 		// Une commande ne doit RIEN écrire dans le corps de la réponse : le manager y
 		// attend du JSON et rien d'autre. Cf. l'incident du 2026-08-06 où update_core,
 		// faute de skin silencieux, y déversait son HTML de progression — les 15 MAJ du
@@ -161,6 +181,8 @@ final class CommandExecutor {
 				'status' => 'done',
 				'result' => $result,
 			];
+		} catch ( BackupRefused $e ) {
+			$outcome = $e->outcome();
 		} catch ( \Throwable $e ) {
 			$outcome = [
 				'status' => 'failed',

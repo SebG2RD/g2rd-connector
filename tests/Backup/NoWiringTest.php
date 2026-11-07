@@ -72,6 +72,15 @@ final class NoWiringTest extends TestCase {
 	];
 
 	/**
+	 * Fichiers autorisés à citer le module (liste fermée, phase 4) : chacun est ajouté dans le commit
+	 * même de son branchement (plan de la phase 4 : tâches 10, 11, 13, 30 à 34). Chaque fichier
+	 * listé doit vraiment le citer : un fichier qui ne le cite plus sort de la liste.
+	 */
+	private const FICHIERS_AUTORISES = [
+		'includes/Commands/CommandExecutor.php',
+	];
+
+	/**
 	 * Fonctions WordPress interdites dans le module, nom exact (casse ignorée, comme PHP).
 	 *
 	 * Les cinq premières, avec le préfixe wp_remote_, sont la liste du plan (tâche 22) ; les
@@ -134,19 +143,24 @@ final class NoWiringTest extends TestCase {
 
 		$citations = [];
 		foreach ( $fichiers as $relatif ) {
+			if ( in_array( $relatif, self::FICHIERS_AUTORISES, true ) ) {
+				continue;
+			}
 			foreach ( self::citations_du_module( $relatif ) as $citation ) {
 				$citations[] = $citation;
 			}
+		}
+		foreach ( self::FICHIERS_AUTORISES as $autorise ) {
+			self::assertNotSame( [], self::citations_du_module( $autorise ), $autorise . ' est dans la liste fermée mais ne cite plus le module : le retirer de la liste.' );
 		}
 
 		self::assertSame(
 			[],
 			$citations,
-			"Le module des sauvegardes (G2RD\\Connector\\Backup\\…) est cité hors de includes/Backup/.\n"
-			. "Cause probable : une classe du module branchée sur le plugin avant la phase 4.\n"
-			. 'Action : retirer cette référence ; le module reste sans appelant en phase 2 (plan de la '
-			. 'phase 2, rappel transverse n° 2). À partir de la phase 4, seuls les fichiers d\'une liste '
-			. 'fermée, écrite dans ce test, pourront le citer.'
+			"Le module des sauvegardes (G2RD\\Connector\\Backup\\…) est cité hors de includes/Backup/ par un fichier qui n'est pas dans la liste fermée.\n"
+			. "Cause probable : branchement non prévu par le plan de la phase 4.\n"
+			. 'Action : retirer cette référence, ou, si le branchement est voulu par le plan, ajouter le '
+			. 'fichier à FICHIERS_AUTORISES dans le même commit.'
 		);
 	}
 

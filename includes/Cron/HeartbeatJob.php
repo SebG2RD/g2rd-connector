@@ -248,9 +248,40 @@ final class HeartbeatJob {
 		$client->send_command_result(
 			$plan['id'],
 			(string) $outcome['status'],
-			$outcome['result'] ?? null,
+			self::result_of( $outcome ),
 			$outcome['error'] ?? null
 		);
+	}
+
+	/**
+	 * `result` du compte rendu envoyé à la plateforme : celui de la commande ; pour un échec qui
+	 * porte un code stable (porte des mises à jour, sauvegarde), le code et le délai (contrat
+	 * backup-refusal-v1.json, `queue_result`, lus au lot 5-D) ; sinon null, comme aujourd'hui.
+	 * Publique pour les tests.
+	 *
+	 * @param array<string, mixed> $outcome Issue de CommandExecutor::run().
+	 * @return array<string, mixed>|null
+	 */
+	public static function result_of( array $outcome ): ?array {
+		$result = $outcome['result'] ?? null;
+		if ( is_array( $result ) ) {
+			return $result;
+		}
+		$code = $outcome['error_code'] ?? null;
+		if ( ! is_string( $code ) || 1 !== preg_match( '/^[a-z_]{1,64}$/D', $code ) ) {
+			return null;
+		}
+		$fields = [ 'error_code' => $code ];
+		$retry  = $outcome['retry_after'] ?? null;
+		if ( is_int( $retry ) && $retry >= 1 && $retry <= 3600 ) {
+			$fields['retry_after'] = $retry;
+		}
+		$stage = $outcome['stage'] ?? null;
+		if ( is_string( $stage ) && 1 === preg_match( '/^[a-z_]{1,32}$/D', $stage ) ) {
+			$fields['stage'] = $stage;
+		}
+
+		return $fields;
 	}
 
 	/**
