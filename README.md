@@ -44,6 +44,7 @@ g2rd-connector/
 │   ├── Backup/                 sauvegardes chiffrées : préparation, rien de branché
 │   │   ├── Crypto/             AES-256-GCM, HKDF, X25519 et Ed25519 (sodium ou sodium_compat), autotest
 │   │   └── Format/             format G2BK v1 : en-tête, HPKE, segments, index signé, certificat
+│   ├── Backup/Upload/          envoi d'une partie de sauvegarde vers une URL présignée ; non branché avant la phase 4
 │   ├── Security/
 │   │   ├── KeyDerivation       dérivation des clés du SiteToken (trois contextes)
 │   │   ├── RequestSignature    signature des requêtes du manager

@@ -1,0 +1,114 @@
+<?php
+/**
+ * Banc de mesure (phase 3, tâche 20) : mémoire de l'envoi d'une partie par
+ * PartUploader, à travers le vrai code HTTP de WordPress (WP_Http, Requests 2,
+ * transport cURL), vers le faux point d'accès S3 de serveur.php.
+ *
+ * Usage : php mesure.php <taille_mio> <lest_mio>
+ *   taille_mio : taille de la partie envoyée (la 2e d'un fichier de deux parties) ;
+ *   lest_mio   : mémoire occupée avant l'envoi, pour simuler un site déjà chargé
+ *                (WordPress, extensions) ; 0 pour la mesure brute.
+ * Sortie : une ligne JSON. Une erreur fatale (mémoire épuisée) est rendue en JSON
+ * par la fonction d'arrêt.
+ */
+
+declare(strict_types=1);
+
+use G2RD\Connector\Backup\Upload\PartUploader;
+
+$taille_mio = (int) ( $argv[1] ?? 16 );
+$lest_mio   = (int) ( $argv[2] ?? 0 );
+$taille     = $taille_mio * 1048576;
+$sortie     = [
+	'taille_mio'   => $taille_mio,
+	'lest_mio'     => $lest_mio,
+	'memory_limit' => ini_get( 'memory_limit' ),
+];
+
+register_shutdown_function(
+	static function () use ( &$sortie ): void {
+		$erreur = error_get_last();
+		if ( null !== $erreur && in_array( $erreur['type'], [ E_ERROR, E_CORE_ERROR, E_COMPILE_ERROR ], true ) ) {
+			$sortie['issue']        = 'erreur_fatale';
+			$sortie['erreur']       = $erreur['message'];
+			$sortie['pic_au_arret'] = memory_get_peak_usage( true );
+			echo json_encode( $sortie, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ), PHP_EOL;
+		}
+	}
+);
+
+// ── WordPress en SHORTINIT, puis son code HTTP (même ordre que wp-settings.php) ──
+define( 'ABSPATH', '/usr/src/wordpress/' );
+define( 'WP_CONTENT_DIR', __DIR__ . '/wp-content' );
+define( 'SHORTINIT', true );
+define( 'WP_DEBUG', false );
+$table_prefix = 'wp_'; // phpcs:ignore
+require ABSPATH . 'wp-settings.php';
+foreach ( [ 'general-template', 'link-template', 'kses', 'http', 'class-wp-http', 'class-wp-http-streams', 'class-wp-http-curl', 'class-wp-http-proxy', 'class-wp-http-cookie', 'class-wp-http-encoding', 'class-wp-http-response', 'class-wp-http-requests-response', 'class-wp-http-requests-hooks' ] as $fichier_wp ) {
+	require_once ABSPATH . WPINC . '/' . $fichier_wp . '.php';
+}
+
+// ── Le connecteur, par son propre autochargeur (comme sur un site) ──
+define( 'G2RD_CONNECTOR_DIR', '/connector/' );
+require '/connector/includes/autoload.php';
+
+
+$sortie['wordpress'] = $GLOBALS['wp_version'];
+$sortie['php']       = PHP_VERSION;
+$sortie['curl']      = curl_version()['version'];
+
+// ── Fichier de deux parties : la seconde est envoyée (décalage non nul) ──
+$fichier = '/tmp/partie-' . $taille_mio . '.bin';
+$flux    = fopen( $fichier, 'wb' );
+for ( $i = 0; $i < 2 * $taille_mio; $i++ ) {
+	fwrite( $flux, random_bytes( 1048576 ) );
+}
+fclose( $flux );
+
+$url = sprintf(
+	'http://127.0.0.1:9311/g2rd-backups-local/t/%s/s/%s/%s/0?partNumber=2&uploadId=essai-local&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=essai%%2F%s%%2Ffr-par%%2Fs3%%2Faws4_request&X-Amz-Date=%s&X-Amz-Expires=900&X-Amz-SignedHeaders=host&X-Amz-Signature=%s',
+	bin2hex( random_bytes( 16 ) ),
+	bin2hex( random_bytes( 16 ) ),
+	bin2hex( random_bytes( 16 ) ),
+	gmdate( 'Ymd' ),
+	gmdate( 'Ymd\THis\Z' ),
+	str_repeat( '0', 64 ) // signature factice : le faux point d'accès ne la vérifie pas.
+);
+
+// Lest : mémoire déjà occupée par le « site » avant l'envoi.
+$lest = $lest_mio > 0 ? str_repeat( 'L', $lest_mio * 1048576 ) : '';
+
+/**
+ * Mémoire résidente du processus (Linux, /proc/self/status) : `VmRSS` (actuelle) ou
+ * `VmHWM` (pic). Elle compte aussi ce que libcurl alloue hors du gestionnaire de
+ * mémoire de PHP (copie du corps par CURLOPT_COPYPOSTFIELDS), que memory_limit ignore.
+ */
+function g2rd_mesure_rss( string $champ ): ?int {
+	$etat = (string) file_get_contents( '/proc/self/status' );
+	return 1 === preg_match( '/^' . $champ . ':\s+(\d+) kB$/m', $etat, $m ) ? 1024 * (int) $m[1] : null;
+}
+
+$envoyeur = new PartUploader( false, true );
+gc_collect_cycles();
+$sortie['usage_avant']           = memory_get_usage( true );
+$sortie['pic_avant']             = memory_get_peak_usage( true );
+memory_reset_peak_usage();
+// Remise à zéro du pic de mémoire résidente (VmHWM) du processus.
+$sortie['rss_pic_remis_a_zero'] = false !== @file_put_contents( '/proc/self/clear_refs', '5' );
+$sortie['rss_avant']            = g2rd_mesure_rss( 'VmRSS' );
+$resultat                        = $envoyeur->upload( $url, '127.0.0.1', 9311, $fichier, $taille, $taille, 120 );
+$sortie['pic_apres']             = memory_get_peak_usage( true );
+$sortie['usage_apres']           = memory_get_usage( true );
+$sortie['rss_pic_apres']         = g2rd_mesure_rss( 'VmHWM' );
+$sortie['pic_ajoute']            = $sortie['pic_apres'] - $sortie['usage_avant'];
+$sortie['pic_ajoute_sur_partie'] = round( $sortie['pic_ajoute'] / $taille, 3 );
+$sortie['rss_pic_ajoute_sur_partie'] = ( null !== $sortie['rss_avant'] && null !== $sortie['rss_pic_apres'] )
+	? round( ( $sortie['rss_pic_apres'] - $sortie['rss_avant'] ) / $taille, 3 )
+	: null;
+$sortie['issue']                 = $resultat->outcome;
+$sortie['http_status']           = $resultat->http_status;
+$sortie['etag_conforme']         = $resultat->etag === '"' . md5( (string) file_get_contents( $fichier, false, null, $taille, $taille ) ) . '"';
+$sortie['elapsed_ms']            = $resultat->elapsed_ms;
+unset( $lest );
+unlink( $fichier );
+echo json_encode( $sortie, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ), PHP_EOL;
