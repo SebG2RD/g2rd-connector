@@ -11,6 +11,9 @@ final class FileWalkerTest extends TestCase {
 
 	private string $racine;
 
+	/** @var list<string> Dossiers dont les droits ont été retirés : rendus avant le nettoyage. */
+	private array $droits_retires = [];
+
 	protected function setUp(): void {
 		parent::setUp();
 		$this->racine = str_replace( '\\', '/', sys_get_temp_dir() ) . '/g2rd-walker-' . bin2hex( random_bytes( 4 ) );
@@ -23,6 +26,9 @@ final class FileWalkerTest extends TestCase {
 	}
 
 	protected function tearDown(): void {
+		foreach ( $this->droits_retires as $dossier ) {
+			chmod( $dossier, 0755 );
+		}
 		$iterateur = new \RecursiveIteratorIterator( new \RecursiveDirectoryIterator( $this->racine, \FilesystemIterator::SKIP_DOTS ), \RecursiveIteratorIterator::CHILD_FIRST );
 		foreach ( $iterateur as $entree ) {
 			$entree->isDir() && ! $entree->isLink() ? rmdir( $entree->getPathname() ) : unlink( $entree->getPathname() );
@@ -89,6 +95,55 @@ final class FileWalkerTest extends TestCase {
 		self::assertSame( [], array_filter( $entrees, static fn ( array $e ): bool => str_starts_with( $e['path'], 'lien/' ) ), 'rien sous le lien' );
 	}
 
+	public function test_un_parcours_lisible_rend_tout_liste_et_rien_de_refuse(): void {
+		$parcours = new FileWalker( $this->racine );
+		$entrees  = iterator_to_array( $parcours->walk(), false );
+
+		self::assertSame( [], array_filter( $entrees, static fn ( array $e ): bool => true !== $e['listed'] ), 'aucune entrée marquée non listée' );
+		self::assertSame( [], $parcours->unlisted() );
+		self::assertFalse( $parcours->within_unlisted( 'a/b/c.php' ) );
+		self::assertTrue( ( new FileWalker( $this->racine ) )->entry( 'a' )['listed'] ?? null );
+	}
+
+	public function test_un_dossier_dont_la_liste_est_refusee_est_rendu_non_liste_jamais_tu(): void {
+		$this->retirer_droits( 'a', 0000 );
+		$parcours = new FileWalker( $this->racine );
+		$entrees  = iterator_to_array( $parcours->walk(), false );
+
+		self::assertSame( $this->arbre_sans_le_contenu_de_a(), array_column( $entrees, 'path' ) );
+		$a = $this->entree( $entrees, 'a' );
+		self::assertSame( [ 'dir', false ], [ $a['type'], $a['listed'] ], 'rendu comme dossier, marqué non listé' );
+		self::assertSame( [ 'a' ], $parcours->unlisted() );
+		self::assertTrue( $parcours->within_unlisted( 'a' ) );
+		self::assertTrue( $parcours->within_unlisted( 'a/b/c.php' ), 'jamais « deleted » sous un dossier refusé' );
+		self::assertFalse( $parcours->within_unlisted( 'a.txt' ) );
+		self::assertFalse( $parcours->within_unlisted( 'a.txt.d/x' ) );
+
+		chmod( $this->racine . '/a', 0755 );
+		iterator_to_array( $parcours->walk(), false );
+		self::assertSame( [], $parcours->unlisted(), 'remis à zéro à chaque parcours' );
+	}
+
+	public function test_un_dossier_liste_mais_non_traversable_est_rendu_non_liste_jamais_vide(): void {
+		$this->retirer_droits( 'a', 0644 );
+		$parcours = new FileWalker( $this->racine );
+		$entrees  = iterator_to_array( $parcours->walk(), false );
+
+		self::assertSame( $this->arbre_sans_le_contenu_de_a(), array_column( $entrees, 'path' ) );
+		self::assertFalse( $this->entree( $entrees, 'a' )['listed'] );
+		self::assertSame( [ 'a' ], $parcours->unlisted() );
+		self::assertTrue( $parcours->within_unlisted( 'a/z.txt' ) );
+	}
+
+	public function test_la_reprise_dans_un_dossier_devenu_illisible_le_signale(): void {
+		$this->retirer_droits( 'a', 0000 );
+		$parcours = new FileWalker( $this->racine );
+
+		self::assertSame( array_slice( $this->arbre_sans_le_contenu_de_a(), 2 ), $this->chemins( $parcours, 'a/b/c.php' ), 'son entrée est déjà passée : rien de rendu pour lui' );
+		self::assertSame( [ 'a' ], $parcours->unlisted() );
+		self::assertTrue( $parcours->within_unlisted( 'a/z.txt' ), 'la suite du dossier n\'est jamais dite supprimée' );
+	}
+
 	public function test_comparaison_de_l_ordre_du_parcours(): void {
 		self::assertLessThan( 0, FileWalker::compare( 'a/b', 'a.txt' ) );
 		self::assertLessThan( 0, FileWalker::compare( 'a', 'a/b' ) );
@@ -101,5 +156,41 @@ final class FileWalkerTest extends TestCase {
 	 */
 	private function chemins( FileWalker $parcours, ?string $apres = null ): array {
 		return array_map( static fn ( array $e ): string => $e['path'], iterator_to_array( $parcours->walk( $apres ), false ) );
+	}
+
+	/**
+	 * @return list<string>
+	 */
+	private function arbre_sans_le_contenu_de_a(): array {
+		return [ 'B.txt', 'a', 'a.txt', 'a.txt.d', 'wp-content', 'wp-content/cache', 'wp-content/cache/x', 'wp-content/cache/x/y', 'wp-content/uploads', 'wp-content/uploads/m.jpg' ];
+	}
+
+	/**
+	 * @param list<array<string, mixed>> $entrees
+	 * @return array<string, mixed>
+	 */
+	private function entree( array $entrees, string $chemin ): array {
+		$trouvees = array_values( array_filter( $entrees, static fn ( array $e ): bool => $chemin === $e['path'] ) );
+		self::assertCount( 1, $trouvees, 'une seule entrée ' . $chemin );
+
+		return $trouvees[0];
+	}
+
+	/** Retire des droits POSIX à un dossier d'essai ; saute l'essai là où les droits n'ont pas d'effet. */
+	private function retirer_droits( string $relatif, int $mode ): void {
+		if ( 'Windows' === PHP_OS_FAMILY ) {
+			self::markTestSkipped( 'Droits POSIX sans effet sous Windows (chmod n\'y retire ni la liste ni la traversée d\'un dossier) : essai mené en CI Linux et sur le banc (tâche 37, E1).' );
+		}
+		if ( function_exists( 'posix_geteuid' ) && 0 === posix_geteuid() ) {
+			self::markTestSkipped( 'Essai lancé en root, qui passe outre les droits des dossiers : à mener sous un utilisateur ordinaire (CI Linux, banc, tâche 37, E1).' );
+		}
+		$dossier                = $this->racine . '/' . $relatif;
+		$this->droits_retires[] = $dossier;
+		chmod( $dossier, $mode );
+		clearstatcache();
+		$sans_effet = 0 === ( $mode & 0444 ) ? false !== @scandir( $dossier ) : false !== @lstat( $dossier . '/z.txt' );
+		if ( $sans_effet ) {
+			self::markTestSkipped( 'Les droits retirés n\'ont pas d\'effet pour cet utilisateur (root sans l\'extension posix ?) : essai à mener sous un utilisateur ordinaire (CI Linux, banc, tâche 37, E1).' );
+		}
 	}
 }
