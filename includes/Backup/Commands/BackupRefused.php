@@ -57,6 +57,18 @@ final class BackupRefused extends \RuntimeException {
 
 	public const QUEUE_UNSUPPORTED = 'backup_queue_unsupported';
 
+	/** Refus du dump (docs/backup-payload.md § 4), non réessayables : session lue dans un autre jeu que celui du dump. */
+	public const DB_CHARSET_MISMATCH = 'backup_db_charset_mismatch';
+
+	/** Nom de table ou de colonne d'une table copiée perdu dans le jeu du dump, ou mal formé (ident()). */
+	public const DB_NAME_UNSUPPORTED = 'backup_db_name_unsupported';
+
+	/** Préfixe hors de [A-Za-z0-9_], ou <préfixe>options absente de la liste lue : jamais de dump vide réussi. */
+	public const DB_TABLES_NOT_FOUND = 'backup_db_tables_not_found';
+
+	/** Curseur du dump ou liste des tables relus de l'état et illisibles : jamais de repli silencieux. */
+	public const DB_CURSOR_INVALID = 'backup_db_cursor_invalid';
+
 	/** Tous les codes, dans l'ordre du contrat. */
 	public const CODES = [
 		self::SLICE_RUNNING,
@@ -80,6 +92,10 @@ final class BackupRefused extends \RuntimeException {
 		self::WORK_DIR_UNAVAILABLE,
 		self::TOO_MANY_SEGMENTS,
 		self::QUEUE_UNSUPPORTED,
+		self::DB_CHARSET_MISMATCH,
+		self::DB_NAME_UNSUPPORTED,
+		self::DB_TABLES_NOT_FOUND,
+		self::DB_CURSOR_INVALID,
 	];
 
 	/** Délai par défaut des refus réessayables (secondes). */
@@ -216,8 +232,36 @@ final class BackupRefused extends \RuntimeException {
 			self::WORK_DIR_UNAVAILABLE => __( 'La sauvegarde n’a pas été lancée : le dossier de travail wp-content/g2rd-backups n’a pas pu être créé, ou n’est pas inscriptible. Rien n’a été modifié. Cause probable : droits du dossier wp-content. Action : rendre wp-content inscriptible par PHP, puis relancer.', 'g2rd-connector' ),
 			self::TOO_MANY_SEGMENTS => __( 'La sauvegarde a été arrêtée : le site dépasse la taille maximale d’une sauvegarde (4 095 morceaux, environ 256 Gio). Rien n’est gardé comme sauvegarde. Cause probable : site très volumineux, ou dossier de cache ou d’archives à exclure. Action : exclure les dossiers inutiles de la sauvegarde, ou contacter le support G2RD.', 'g2rd-connector' ),
 			self::QUEUE_UNSUPPORTED => __( 'La commande de sauvegarde n’a pas été exécutée : elle est arrivée par la file des commandes, que les sauvegardes n’emploient pas encore. Rien n’a été modifié. Cause probable : plateforme plus récente que ce connecteur. Action : mettre le connecteur à jour ; la plateforme envoie les commandes de sauvegarde directement au site.', 'g2rd-connector' ),
+			self::DB_CHARSET_MISMATCH => sprintf(
+				/* translators: 1: jeu de caractères qu'annonce la sauvegarde, 2: jeux lus par la connexion (client, connexion, résultats). */
+				__( 'La sauvegarde a été arrêtée : la base de données du site n’est pas lue dans le jeu de caractères qu’annonce la sauvegarde (annoncé : %1$s ; lu par la connexion : %2$s), et la copie pourrait ne pas se restaurer telle quelle. Rien n’est gardé comme sauvegarde. Cause probable : constante DB_CHARSET absente de wp-config.php, ou réglage de la connexion à la base modifié par une extension. Action : définir DB_CHARSET dans wp-config.php — au jeu que la connexion emploie déjà si les trois valeurs lues sont identiques, ce qui ne change rien à l’affichage du site — ou désactiver l’extension qui modifie la connexion, puis relancer la sauvegarde.', 'g2rd-connector' ),
+				...self::charset_detail( $detail )
+			),
+			self::DB_NAME_UNSUPPORTED => sprintf(
+				/* translators: %s: nom de la table (ou table.colonne), sous une forme affichable. */
+				__( 'La sauvegarde a été arrêtée : le nom « %s » (table, ou table.colonne) ne peut pas s’écrire tel quel dans le jeu de caractères de la connexion à la base, et la copie ne se restaurerait pas telle quelle. Rien n’est gardé comme sauvegarde. Cause probable : caractère absent de ce jeu (DB_CHARSET de wp-config.php), par exemple une lettre accentuée avec un jeu japonais ou chinois. Action : faire renommer cette table ou cette colonne, ou faire passer la connexion en utf8mb4 (DB_CHARSET) après vérification par le développeur du site, puis relancer la sauvegarde.', 'g2rd-connector' ),
+				'' === $detail ? '?' : $detail
+			),
+			self::DB_TABLES_NOT_FOUND => sprintf(
+				/* translators: %s: nom de la table des réglages du site, par exemple « wp_options ». */
+				__( 'La sauvegarde a été arrêtée : les tables du site n’ont pas été trouvées sur la base de données (table des réglages « %s » absente de la liste lue), et la copie aurait été enregistrée sans les données du site. Rien n’est gardé comme sauvegarde. Cause probable : préfixe des tables ($table_prefix de wp-config.php) qui n’est pas celui des tables de la base, ou qui contient un autre caractère que des lettres, des chiffres et _ ; ou utilisateur de la base qui ne peut pas lire la liste des tables. Action : vérifier $table_prefix dans wp-config.php, et les droits de l’utilisateur de la base auprès de l’hébergeur, puis relancer la sauvegarde.', 'g2rd-connector' ),
+				'' === $detail ? '?' : $detail
+			),
+			self::DB_CURSOR_INVALID => __( 'La sauvegarde a été arrêtée : l’avancement de la copie de la base de données, gardé entre deux étapes, est illisible, et la reprendre pourrait copier des lignes deux fois ou en oublier. Rien n’est gardé comme sauvegarde. Cause probable : réglage g2rd_backup_state modifié hors du connecteur (extension, outil d’administration de la base), ou clé primaire d’une table changée pendant la sauvegarde. Action : relancer la sauvegarde, qui repartira du début ; si le refus revient, vérifier qu’aucune extension ne modifie les réglages du site.', 'g2rd-connector' ),
 			default => throw new \InvalidArgumentException( 'Code de refus de sauvegarde sans message : ' . esc_html( $code ) ),
 		};
+	}
+
+	/**
+	 * Détail d'un refus DB_CHARSET_MISMATCH, « <jeu annoncé>|<client>, <connexion>, <résultats> » :
+	 * les deux parties, « ? » pour une partie absente.
+	 *
+	 * @return array{0: string, 1: string}
+	 */
+	private static function charset_detail( string $detail ): array {
+		$parts = explode( '|', $detail, 2 );
+
+		return [ '' === $parts[0] ? '?' : $parts[0], ( $parts[1] ?? '' ) === '' ? '?' : $parts[1] ];
 	}
 
 	private static function interruption( string $reason ): string {

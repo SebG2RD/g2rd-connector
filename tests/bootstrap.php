@@ -44,6 +44,9 @@ if ( ! defined( 'DAY_IN_SECONDS' ) ) {
 if ( ! defined( 'ARRAY_A' ) ) {
 	define( 'ARRAY_A', 'ARRAY_A' );
 }
+if ( ! defined( 'ARRAY_N' ) ) {
+	define( 'ARRAY_N', 'ARRAY_N' );
+}
 
 require_once __DIR__ . '/stubs/wp-classes.php';
 

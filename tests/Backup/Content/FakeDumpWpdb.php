@@ -1,0 +1,388 @@
+<?php
+/**
+ * Faux $wpdb du dump : des tables en mémoire (colonnes et types, clé primaire, lignes), une session
+ * (les trois variables de jeu), des noms perdus, une connexion qui peut être rouverte, et les seules
+ * requêtes de Backup\Content\DatabaseDumper (docs/backup-payload.md § 4), reconnues à leur texte.
+ * Toute autre requête lève, de même qu'un motif LIKE qui contient \ ou n'est pas celui du préfixe,
+ * un identifiant passé par %i, un motif échappé par esc_like() et une valeur de reprise qui n'est
+ * pas écrite comme le fait key_literal() : un test ne valide jamais une requête que la vraie base
+ * lirait autrement, ni une écriture qui dépend du sql_mode du site.
+ *
+ * @package G2RD\Connector
+ */
+
+declare(strict_types=1);
+
+namespace G2RD\Connector\Tests\Backup\Content;
+
+use G2RD\Connector\Backup\Commands\BackupRefused;
+use G2RD\Connector\Backup\Content\DatabaseDumper;
+
+final class FakeDumpWpdb {
+
+	/** Requête des variables de jeu de la session, au texte exact (docs/backup-payload.md § 4). */
+	public const SESSION_QUERY = 'SELECT @@character_set_client, @@character_set_connection, @@character_set_results';
+
+	/** Début de la liste des tables et de leur taille moyenne (§ 4, « Tables copiées »). */
+	private const LIST_START = 'SELECT TABLE_NAME, AVG_ROW_LENGTH FROM information_schema.TABLES';
+
+	/** Début de la détection des noms perdus (§ 4, « Noms perdus »). */
+	private const LOST_START = 'SELECT HEX(CONVERT(TABLE_NAME USING utf8mb4))';
+
+	public string $options = 'wp_options';
+
+	public string $base_prefix = 'wp_';
+
+	public string $charset = 'utf8mb4';
+
+	public string $last_error = '';
+
+	/** @var array<string, array{columns: array<string, string>, pk: list<string>, rows: list<array<string, string|null>>, view?: bool, avg_row_length?: int}> Noms et valeurs : octets tels que lus dans $charset. */
+	public array $tables = [];
+
+	/** @var list<string> Requêtes reçues, dans l'ordre. */
+	public array $queries = [];
+
+	/** Nom de table dont la lecture des lignes échoue, ou null. */
+	public ?string $fails_on = null;
+
+	/** @var list<string|null> Variables de jeu de la session : client, connexion, résultats. */
+	public array $session = [ 'utf8mb4', 'utf8mb4', 'utf8mb4' ];
+
+	/**
+	 * Lignes rendues par la détection des noms perdus : hexadécimal de la table et de la colonne en
+	 * UTF-8, puis TABLE_NAME tel que lu dans $charset (les trois champs de la requête).
+	 *
+	 * @var list<array{0: string, 1: string, 2: string}>
+	 */
+	public array $lost = [];
+
+	/** Connexion courante : un nouvel objet à chaque reconnexion, comme wpdb::db_connect(). */
+	private object $dbh;
+
+	/** @var list<object> Connexions fermées, gardées pour que leur identifiant ne soit pas repris. */
+	private array $closed = [];
+
+	/** @var array{0: string, 1: list<string|null>}|null Reconnexion attendue : texte cherché, session suivante. */
+	private ?array $reconnect = null;
+
+	public function __construct() {
+		$this->dbh = new \stdClass();
+	}
+
+	/**
+	 * Comme wpdb::__get() : la connexion protégée se lit par son nom.
+	 */
+	public function __get( string $name ): mixed {
+		if ( 'dbh' === $name ) {
+			return $this->dbh;
+		}
+		throw new \LogicException( 'Propriété non prévue par le faux $wpdb du dump : ' . $name );
+	}
+
+	/**
+	 * À la première requête dont le texte contient $needle, la connexion est rouverte (nouvel objet)
+	 * dans la session $session, avant que le résultat de cette requête soit rendu : la reconnexion de
+	 * wpdb::query() rejoue la requête dans la nouvelle session.
+	 *
+	 * @param list<string|null> $session
+	 */
+	public function reconnect_on( string $needle, array $session ): void {
+		$this->reconnect = [ $needle, $session ];
+	}
+
+	/**
+	 * Le dump n'échappe aucun motif par \ : avec NO_BACKSLASH_ESCAPES, \ n'échappe rien (§ 4).
+	 */
+	public function esc_like( string $text ): string {
+		throw new \LogicException( 'esc_like() appelé par le dump (motif échappé par \\, muet sous NO_BACKSLASH_ESCAPES) : ' . $text );
+	}
+
+	/**
+	 * %s et %d comme wpdb::prepare() ; %i refusé : un identifiant s'écrit par ident() (§ 4).
+	 */
+	public function prepare( string $query, mixed ...$args ): string {
+		if ( str_contains( $query, '%i' ) ) {
+			throw new \LogicException( 'Identifiant passé par %i (docs/backup-payload.md § 4 : ident() seul) : ' . $query );
+		}
+		$values = array_values( $args );
+
+		return (string) preg_replace_callback(
+			'/%[sd]/',
+			static function ( array $m ) use ( &$values ): string {
+				$v = array_shift( $values );
+				return '%d' === $m[0] ? (string) (int) $v : "'" . addslashes( (string) $v ) . "'";
+			},
+			$query
+		);
+	}
+
+	/**
+	 * @return list<array<string, mixed>>
+	 */
+	public function get_results( string $sql, string $output = 'OBJECT' ): array {
+		unset( $output );
+		$this->receive( $sql );
+
+		if ( str_starts_with( $sql, self::LIST_START ) ) {
+			$motif = $this->motif( $sql );
+			$rows  = [];
+			foreach ( $this->tables as $name => $table ) {
+				if ( empty( $table['view'] ) && self::like( $motif, (string) $name ) ) {
+					$rows[] = [
+						'TABLE_NAME'     => (string) $name,
+						'AVG_ROW_LENGTH' => (string) self::avg_row_length( $table ),
+					];
+				}
+			}
+			return $rows;
+		}
+		if ( str_starts_with( $sql, self::LOST_START ) ) {
+			$this->motif( $sql );
+			if ( ! str_contains( $sql, 'USING ' . DatabaseDumper::charset_of( $this ) . ')' ) ) {
+				throw new \LogicException( 'Détection des noms perdus hors du jeu de la connexion : ' . $sql );
+			}
+			return array_map(
+				static fn ( array $l ): array => [
+					'HEX(CONVERT(TABLE_NAME USING utf8mb4))'  => $l[0],
+					'HEX(CONVERT(COLUMN_NAME USING utf8mb4))' => $l[1],
+					'TABLE_NAME'                              => $l[2],
+				],
+				$this->lost
+			);
+		}
+		$name = $this->table_named( $sql, 'SHOW FULL COLUMNS FROM ', '' );
+		if ( null !== $name ) {
+			$rows = [];
+			foreach ( $this->tables[ $name ]['columns'] as $field => $type ) {
+				$rows[] = [
+					'Field' => (string) $field,
+					'Type'  => $type,
+				];
+			}
+			return $rows;
+		}
+		$name = $this->table_named( $sql, 'SHOW KEYS FROM ', " WHERE Key_name = 'PRIMARY'" );
+		if ( null !== $name ) {
+			$rows = [];
+			foreach ( $this->tables[ $name ]['pk'] as $i => $column ) {
+				$rows[] = [
+					'Column_name'  => $column,
+					'Seq_in_index' => (string) ( $i + 1 ),
+				];
+			}
+			return array_reverse( $rows );
+		}
+		foreach ( array_keys( $this->tables ) as $candidate ) {
+			$ident = self::ident_or_null( (string) $candidate, $this->charset );
+			$start = 'SELECT * FROM ' . $ident . ' ';
+			if ( null !== $ident && str_starts_with( $sql, $start ) ) {
+				return $this->select( (string) $candidate, substr( $sql, strlen( $start ) - 1 ) );
+			}
+		}
+		throw new \LogicException( 'Lecture non prévue par le faux $wpdb du dump : ' . $sql );
+	}
+
+	/**
+	 * @return array<int|string, string|null>|null
+	 */
+	public function get_row( string $sql, string $output = 'OBJECT' ): ?array {
+		$this->receive( $sql );
+		if ( self::SESSION_QUERY === $sql ) {
+			if ( 'ARRAY_N' !== $output ) {
+				throw new \LogicException( 'Variables de session lues autrement que par ARRAY_N : ' . $output );
+			}
+			return $this->session;
+		}
+		$name = $this->table_named( $sql, 'SHOW CREATE TABLE ', '' );
+		if ( null === $name ) {
+			throw new \LogicException( 'Lecture non prévue par le faux $wpdb du dump : ' . $sql );
+		}
+		$columns = array_map( fn ( int|string $c ): string => DatabaseDumper::ident( (string) $c, $this->charset ), array_keys( $this->tables[ $name ]['columns'] ) );
+
+		return [
+			'Table'        => $name,
+			'Create Table' => 'CREATE TABLE ' . DatabaseDumper::ident( $name, $this->charset ) . ' (' . implode( ',', $columns ) . ')',
+		];
+	}
+
+	/**
+	 * Lignes d'un SELECT * FROM : LIMIT … OFFSET … pour une table sans clé primaire, ORDER BY la clé
+	 * puis LIMIT sinon, avec WHERE (clé) > (valeurs) pour reprendre ; les valeurs se relisent par
+	 * l'inverse de key_literal(), et lui seul.
+	 *
+	 * @param string $rest Texte qui suit le nom de la table (commence par une espace).
+	 * @return list<array<string, string|null>>
+	 */
+	private function select( string $name, string $rest ): array {
+		$table = $this->tables[ $name ];
+		$pk    = $table['pk'];
+		if ( [] === $pk ) {
+			if ( 1 !== preg_match( '/\A LIMIT (\d+) OFFSET (\d+)\z/', $rest, $m ) ) {
+				throw new \LogicException( 'Lecture d\'une table sans clé primaire hors de LIMIT … OFFSET … : ' . $rest );
+			}
+			return array_slice( $this->rows_of( $name ), (int) $m[2], (int) $m[1] );
+		}
+		$columns = implode( ',', array_map( fn ( string $c ): string => DatabaseDumper::ident( $c, $this->charset ), $pk ) );
+		$order   = ' ORDER BY ' . $columns . ' LIMIT ';
+		$where   = ' WHERE (' . $columns . ') > (';
+		$after   = null;
+		if ( str_starts_with( $rest, $where ) ) {
+			$tail = substr( $rest, strlen( $where ) );
+			$cut  = strpos( $tail, ')' . $order );
+			if ( false === $cut ) {
+				throw new \LogicException( 'Reprise sans ORDER BY de la clé : ' . $rest );
+			}
+			$after = array_map( [ $this, 'key_value' ], explode( ',', substr( $tail, 0, $cut ) ) );
+			if ( count( $after ) !== count( $pk ) ) {
+				throw new \LogicException( 'Reprise dont le nombre de valeurs n\'est pas celui de la clé : ' . $rest );
+			}
+			$limit = substr( $tail, $cut + strlen( ')' . $order ) );
+		} elseif ( str_starts_with( $rest, $order ) ) {
+			$limit = substr( $rest, strlen( $order ) );
+		} else {
+			throw new \LogicException( 'Lecture d\'une table à clé primaire hors de ORDER BY la clé : ' . $rest );
+		}
+		if ( 1 !== preg_match( '/\A[1-9]\d*\z/', $limit ) ) {
+			throw new \LogicException( 'LIMIT illisible : ' . $rest );
+		}
+		$rows = $this->rows_of( $name );
+		usort( $rows, static fn ( array $a, array $b ): int => self::compare_keys( $a, $b, $pk ) );
+		if ( null !== $after ) {
+			$key  = array_combine( $pk, $after );
+			$rows = array_values( array_filter( $rows, static fn ( array $row ): bool => self::compare_keys( $row, $key, $pk ) > 0 ) );
+		}
+
+		return array_slice( $rows, 0, (int) $limit );
+	}
+
+	/**
+	 * Lignes de la table, ou aucune et last_error renseignée si sa lecture échoue (fails_on).
+	 *
+	 * @return list<array<string, string|null>>
+	 */
+	private function rows_of( string $name ): array {
+		if ( $name === $this->fails_on ) {
+			$this->last_error = 'Table is marked as crashed';
+			return [];
+		}
+		return $this->tables[ $name ]['rows'];
+	}
+
+	/**
+	 * Inverse de DatabaseDumper::key_literal() : '' ; 0x suivi d'hexadécimal ; _<jeu du faux> 0x
+	 * suivi d'hexadécimal. Toute autre forme lève, chaîne entre apostrophes et NULL compris : une
+	 * valeur de reprise écrite par quote() serait la faille du § 4 (NO_BACKSLASH_ESCAPES).
+	 */
+	private function key_value( string $text ): string {
+		if ( "''" === $text ) {
+			return '';
+		}
+		if ( 1 === preg_match( '/\A(?:_' . preg_quote( $this->charset, '/' ) . ' )?0x((?:[0-9a-f]{2})+)\z/', $text, $m ) ) {
+			return (string) hex2bin( $m[1] );
+		}
+		throw new \LogicException( 'Valeur de reprise hors de key_literal() (apostrophes, \\, NULL ou autre jeu) : ' . $text );
+	}
+
+	/**
+	 * Motif du préfixe lu dans une requête d'information_schema : jamais de \, et toujours
+	 * LIKE '<motif>%' ESCAPE '!' du préfixe du faux (§ 4, « Motifs LIKE sans \ »).
+	 */
+	private function motif( string $sql ): string {
+		$like = DatabaseDumper::like_prefix( $this->base_prefix );
+		if ( str_contains( $sql, '\\' ) || ! str_contains( $sql, ' LIKE ' . $like ) ) {
+			throw new \LogicException( 'Motif LIKE hors de docs/backup-payload.md § 4 (barre oblique inverse, ou pas celui du préfixe) : ' . $sql );
+		}
+
+		return substr( $like, 1, - strlen( "' ESCAPE '!'" ) );
+	}
+
+	/**
+	 * Table du faux dont le nom, écrit par ident() dans le jeu du faux, fait le texte exact
+	 * $before . nom . $after ; null sinon.
+	 */
+	private function table_named( string $sql, string $before, string $after ): ?string {
+		foreach ( array_keys( $this->tables ) as $name ) {
+			$ident = self::ident_or_null( (string) $name, $this->charset );
+			if ( null !== $ident && $before . $ident . $after === $sql ) {
+				return (string) $name;
+			}
+		}
+		return null;
+	}
+
+	/** Le nom écrit par ident(), ou null s'il est refusé dans ce jeu (le faux peut en contenir). */
+	private static function ident_or_null( string $name, string $charset ): ?string {
+		try {
+			return DatabaseDumper::ident( $name, $charset );
+		} catch ( BackupRefused $refus ) {
+			unset( $refus );
+			return null;
+		}
+	}
+
+	/**
+	 * @param array{columns: array<string, string>, pk: list<string>, rows: list<array<string, string|null>>, view?: bool, avg_row_length?: int} $table
+	 */
+	private static function avg_row_length( array $table ): int {
+		if ( isset( $table['avg_row_length'] ) ) {
+			return $table['avg_row_length'];
+		}
+		if ( [] === $table['rows'] ) {
+			return 0;
+		}
+		$octets = 0;
+		foreach ( $table['rows'] as $row ) {
+			$octets += array_sum( array_map( static fn ( ?string $v ): int => null === $v ? 0 : strlen( $v ), $row ) );
+		}
+		return intdiv( $octets, count( $table['rows'] ) );
+	}
+
+	/**
+	 * @param array<string, mixed> $a
+	 * @param array<string, mixed> $b
+	 * @param list<string>         $pk
+	 */
+	private static function compare_keys( array $a, array $b, array $pk ): int {
+		foreach ( $pk as $column ) {
+			$x     = (string) $a[ $column ];
+			$y     = (string) $b[ $column ];
+			$order = is_numeric( $x ) && is_numeric( $y ) ? ( (float) $x <=> (float) $y ) : strcmp( $x, $y );
+			if ( 0 !== $order ) {
+				return $order;
+			}
+		}
+		return 0;
+	}
+
+	/**
+	 * Motif LIKE relu avec ! pour échappement (ESCAPE '!').
+	 */
+	private static function like( string $pattern, string $value ): bool {
+		$regex = '';
+		for ( $i = 0, $n = strlen( $pattern ); $i < $n; $i++ ) {
+			$c = $pattern[ $i ];
+			if ( '!' === $c && $i + 1 < $n ) {
+				$regex .= preg_quote( $pattern[ ++$i ], '/' );
+				continue;
+			}
+			$regex .= '%' === $c ? '.*' : ( '_' === $c ? '.' : preg_quote( $c, '/' ) );
+		}
+		return 1 === preg_match( '/\A' . $regex . '\z/s', $value );
+	}
+
+	/**
+	 * Requête reçue : comptée, erreur précédente oubliée ; reconnexion attendue faite avant le
+	 * résultat.
+	 */
+	private function receive( string $sql ): void {
+		$this->queries[]  = $sql;
+		$this->last_error = '';
+		if ( null !== $this->reconnect && str_contains( $sql, $this->reconnect[0] ) ) {
+			$this->closed[]  = $this->dbh;
+			$this->dbh       = new \stdClass();
+			$this->session   = $this->reconnect[1];
+			$this->reconnect = null;
+		}
+	}
+}

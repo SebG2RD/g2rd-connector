@@ -54,6 +54,10 @@ final class BackupRefusedTest extends TestCase {
 				'backup_work_dir_unavailable',
 				'backup_too_many_segments',
 				'backup_queue_unsupported',
+				'backup_db_charset_mismatch',
+				'backup_db_name_unsupported',
+				'backup_db_tables_not_found',
+				'backup_db_cursor_invalid',
 			],
 			BackupRefused::CODES
 		);

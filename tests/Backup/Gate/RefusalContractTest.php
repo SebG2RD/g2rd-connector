@@ -39,6 +39,19 @@ final class RefusalContractTest extends BackupTestCase {
 		);
 	}
 
+	public function test_refus_du_dump(): void {
+		$codes = [ BackupRefused::DB_CHARSET_MISMATCH, BackupRefused::DB_NAME_UNSUPPORTED, BackupRefused::DB_TABLES_NOT_FOUND, BackupRefused::DB_CURSOR_INVALID ];
+
+		self::assertSame( $codes, $this->contrat['dump_refusal']['codes'] );
+		self::assertFalse( $this->contrat['dump_refusal']['retryable'] );
+		foreach ( $codes as $code ) {
+			$refus = new BackupRefused( $code );
+			self::assertNull( $refus->retry_after(), $code . ' : non réessayable' );
+			self::assertArrayNotHasKey( 'retry_after', $refus->outcome(), $code . ' : sans retry_after' );
+			self::assertSame( $code, $refus->outcome()['error_code'] );
+		}
+	}
+
 	public function test_corps_de_command(): void {
 		$this->settings( [ 'backup_enabled' => true ] );
 		$this->put_state( [ 'phase' => BackupState::DB ] );
