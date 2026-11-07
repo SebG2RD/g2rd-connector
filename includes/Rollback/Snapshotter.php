@@ -18,6 +18,8 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Rollback;
 
+use G2RD\Connector\Support\DiskSpace;
+
 // phpcs:disable WordPress.WP.AlternativeFunctions -- système de fichiers direct, voir RestorePointStore.
 
 final class Snapshotter {
@@ -254,11 +256,7 @@ final class Snapshotter {
 	 * Espace libre en octets, ou null si la mesure est impossible.
 	 */
 	private function free_space( string $dir ): ?int {
-		if ( ! function_exists( 'disk_free_space' ) ) {
-			return null;
-		}
-		$free = @disk_free_space( $dir ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- désactivée chez certains hébergeurs : « inconnu », pas « insuffisant ».
-		return false === $free ? null : (int) $free;
+		return DiskSpace::free_bytes( $dir );
 	}
 
 	private function safe( string $value ): string {
