@@ -29,10 +29,15 @@ abstract class BackupTestCase extends TestCase {
 		Functions\when( 'is_multisite' )->justReturn( false );
 		// Résultat de signature d'une requête d'un test précédent : état statique du processus.
 		( new \ReflectionProperty( \G2RD\Connector\Rest\Auth::class, 'last_signature_check' ) )->setValue( null, null );
+		// Passage de la porte des mises à jour laissé ouvert par un test précédent : état statique.
+		( new \ReflectionProperty( \G2RD\Connector\Backup\Gate\UpdateGate::class, 'current' ) )->setValue( null, null );
+		( new \ReflectionProperty( \G2RD\Connector\Backup\Gate\UpdateGate::class, 'transparent' ) )->setValue( null, false );
 	}
 
 	protected function tearDown(): void {
 		unset( $GLOBALS['wpdb'] );
+		( new \ReflectionProperty( \G2RD\Connector\Backup\Gate\UpdateGate::class, 'current' ) )->setValue( null, null );
+		( new \ReflectionProperty( \G2RD\Connector\Backup\Gate\UpdateGate::class, 'transparent' ) )->setValue( null, false );
 		parent::tearDown();
 	}
 
