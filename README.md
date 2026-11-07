@@ -42,9 +42,13 @@ g2rd-connector/
 │   ├── CommandRuns/            commandes en arrière-plan : stockage, créneau, cycle de vie, exécution après la réponse
 │   ├── Environment/            mesure de l'environnement (bloc environment du snapshot)
 │   ├── PhpErrors/              relevé des erreurs PHP (1.16) : arrêt de PHP, filtre, tampon, journal, commande, blocs php_errors et php_logging
-│   ├── Backup/                 sauvegardes chiffrées : préparation, rien de branché
+│   ├── Backup/                 sauvegardes chiffrées : bibliothèque (phase 2) et lot 4-A (état, porte des mises à jour, parcours), éteintes par défaut
 │   │   ├── Crypto/             AES-256-GCM, HKDF, X25519 et Ed25519 (sodium ou sodium_compat), autotest
-│   │   └── Format/             format G2BK v1 : en-tête, HPKE, segments, index signé, certificat
+│   │   ├── Format/             format G2BK v1 : en-tête, HPKE, segments, index signé, certificat
+│   │   ├── Commands/           refus à code stable et délai (BackupRefused)
+│   │   ├── State/              état de la sauvegarde (option du site principal, écritures conditionnelles)
+│   │   ├── Gate/               porte des mises à jour, témoin « mise à jour en cours », verrou des tranches, second filet
+│   │   └── Files/              parcours reprenable de la racine du site (FileWalker)
 │   ├── Backup/Upload/          envoi d'une partie de sauvegarde vers une URL présignée ; non branché avant la phase 4
 │   ├── Security/
 │   │   ├── KeyDerivation       dérivation des clés du SiteToken (trois contextes)
@@ -916,15 +920,22 @@ chacun s'additionne.
 
   Les champs JSON sont inchangés.
 
-## Sauvegardes chiffrées (préparation, rien de branché)
+## Sauvegardes chiffrées (préparation, éteintes par défaut)
 
-`includes/Backup/` prépare les sauvegardes chiffrées de bout en bout (phase 2 du chantier) : c'est
-une bibliothèque **que rien n'appelle encore**. Aucune commande (`CommandExecutor::ALLOWED` et
-`SIGNED_ONLY` sont inchangées), aucun crochet, aucune option, aucune route, aucune tâche planifiée,
-aucun appel réseau, et rien ne s'exécute au chargement de ses fichiers. Rien n'est envoyé et rien
+`includes/Backup/` prépare les sauvegardes chiffrées de bout en bout. À la phase 2 du chantier, c'était
+une bibliothèque **que rien n'appelait**. Aujourd'hui encore, aucune commande `backup_*` n'existe
+(`CommandExecutor::ALLOWED` et `SIGNED_ONLY` sont inchangées), aucune route ni tâche planifiée
+ajoutée, aucun appel réseau, et rien ne s'exécute au chargement de ses fichiers. Rien n'est envoyé et rien
 ne change pour un site : `readme.txt` n'en dit donc rien. `tests/Backup/NoWiringTest.php` le
 contrôle sur le code. Les commandes `backup_*` et la capacité `encrypted_backup` viendront en
 phase 4.
+
+Depuis le lot 4-A de la phase 4, le module compte aussi `Backup/State/` (état de la sauvegarde),
+`Backup/Gate/` (porte des mises à jour, témoin, verrou, second filet), `Backup/Files/` (parcours
+reprenable) et `Backup/Commands/` (refus à code stable). Seuls quatre fichiers le citent hors de
+`includes/Backup/` (`CommandExecutor`, `CommandRunsController`, `AfterResponseRunner`, `Plugin`) :
+c'est la liste fermée de `tests/Backup/NoWiringTest.php`. Porte des mises à jour transparente tant
+que les sauvegardes sont éteintes (case des réglages décochée).
 
 - `Backup/Crypto/` : les primitives. AES-256-GCM par OpenSSL (étiquette de 16 octets imposée),
   HKDF-SHA256, X25519 et Ed25519 par l'extension sodium ou, sans elle, par la copie de
