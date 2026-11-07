@@ -152,7 +152,7 @@ final class NoWiringTest extends TestCase {
 
 	public function test_aucune_fonction_wordpress_dans_le_module(): void {
 		$appels = [];
-		foreach ( self::fichiers_du_module() as $relatif ) {
+		foreach ( self::fichiers_de_la_bibliotheque() as $relatif ) {
 			foreach ( self::appels_interdits( $relatif ) as $appel ) {
 				$appels[] = $appel;
 			}
@@ -252,6 +252,27 @@ final class NoWiringTest extends TestCase {
 		self::assertContains( 'includes/Backup/Crypto/Sodium.php', $fichiers );
 		self::assertContains( 'includes/Backup/Format/SegmentWriter.php', $fichiers );
 		return $fichiers;
+	}
+
+	/**
+	 * Fichiers de la bibliothèque pure de la phase 2 : includes/Backup/Crypto/ et
+	 * includes/Backup/Format/. Le reste du module parle à WordPress (envoi d'une partie depuis la
+	 * phase 3, module de sauvegarde depuis la phase 4) : exception bornée du lot 4-A, annoncée par
+	 * le docblock de ce fichier.
+	 *
+	 * @return list<string>
+	 */
+	private static function fichiers_de_la_bibliotheque(): array {
+		$bibliotheque = array_values(
+			array_filter(
+				self::fichiers_du_module(),
+				static fn ( string $relatif ): bool => str_starts_with( $relatif, 'includes/Backup/Crypto/' )
+					|| str_starts_with( $relatif, 'includes/Backup/Format/' )
+			)
+		);
+		self::assertNotEmpty( $bibliotheque, 'Aucun fichier sous includes/Backup/Crypto/ ni includes/Backup/Format/ : chemin des fichiers du module changé ?' );
+
+		return $bibliotheque;
 	}
 
 	/**
