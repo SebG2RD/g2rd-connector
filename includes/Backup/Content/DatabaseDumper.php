@@ -12,6 +12,16 @@
  * $wpdb->prepare() ; aucune requête exécutée sur le site ne dépend de \ ni du sql_mode (motifs
  * LIKE … ESCAPE '!', valeurs de la clé de reprise en hexadécimal).
  *
+ * Le curseur passe par l'état JSON entre deux tranches (docs/backup-payload.md § 4, « Curseur du
+ * dump ») : jeu de l'en-tête, clé de reprise en hexadécimal (after_hex), jamais d'octet brut lu dans
+ * la base ; un curseur illisible est refusé, jamais remplacé par un départ.
+ *
+ * Mémoire : un lot vise BATCH_BYTES (8 Mio) de valeurs ; $wpdb garde son résultat et sa conversion
+ * en ARRAY_A (≈ 2 fois), l'instruction INSERT est émise par morceaux de FLUSH_BYTES (512 Kio) : le
+ * pic d'un lot reste sous ≈ 20 Mio au-dessus d'une ligne isolée, quel que soit le site. Limite
+ * écrite : une ligne seule plus grosse que la mémoire disponible reste impossible à copier (lot
+ * d'une ligne).
+ *
  * @package G2RD\Connector
  */
 
@@ -20,6 +30,7 @@ declare(strict_types=1);
 namespace G2RD\Connector\Backup\Content;
 
 use G2RD\Connector\Backup\Commands\BackupRefused;
+use G2RD\Connector\Support\ArrayShape;
 
 /**
  * @phpstan-type Cursor array{table: int, after_hex: list<string>|null, offset: int, started: bool, header: bool, rows: int, create_sha256: string|null, limit: int, charset: string}
@@ -74,8 +85,33 @@ final class DatabaseDumper {
 	/** Types copiés d'information_schema.TABLES : SYSTEM VERSIONED = table à versions système de MariaDB (BASE TABLE pour SHOW FULL TABLES). */
 	private const TABLE_TYPES = "('BASE TABLE', 'SYSTEM VERSIONED')";
 
+	/** Valeur du curseur ou nom de table de l'état : hexadécimal minuscule, sans saut de ligne final (modificateur D). */
+	private const HEX_PATTERN = '/^(?:[0-9a-f]{2})*$/D';
+
+	/** Colonnes binaires (docs/backup-payload.md § 4 : blob, binary, varbinary, bit), lues au début du Type de SHOW FULL COLUMNS. */
+	private const BINARY_TYPE = '/\A(?:tinyblob|blob|mediumblob|longblob|binary|varbinary|bit)\b/i';
+
+	/** Une instruction INSERT est émise dès qu'elle dépasse cette taille (octets). */
+	private const FLUSH_BYTES = 524288;
+
 	/** @var \wpdb */
 	private object $wpdb;
+
+	/** @var array<string, array<string, true>> Lignes exclues : table → noms d'option. */
+	private array $excluded_rows;
+
+	/** Jeu de la connexion au moment de l'instance (charset_of()) : celui de l'en-tête d'un dump qui commence. */
+	private string $charset;
+
+	/** @var array<string, int>|null Taille moyenne des lignes par table, lue une fois par connexion. */
+	private ?array $avg_rows = null;
+
+	/**
+	 * Hexadécimal minuscule de la clé primaire de la dernière ligne du dernier lot, relevé par batch().
+	 *
+	 * @var list<string>|null
+	 */
+	private ?array $last_key = null;
 
 	/** Jeu contrôlé pour cette instance (une instance par requête ou par tranche), ou null. */
 	private ?string $guarded = null;
@@ -90,10 +126,13 @@ final class DatabaseDumper {
 	private ?array $guard_for = null;
 
 	/**
-	 * @param \wpdb $wpdb $wpdb (un double en test).
+	 * @param \wpdb                              $wpdb          $wpdb (un double en test).
+	 * @param array<string, array<string, true>> $excluded_rows Table des options du site principal → noms exclus.
 	 */
-	public function __construct( object $wpdb ) {
-		$this->wpdb = $wpdb;
+	public function __construct( object $wpdb, array $excluded_rows = [] ) {
+		$this->wpdb          = $wpdb;
+		$this->excluded_rows = $excluded_rows;
+		$this->charset       = self::charset_of( $wpdb );
 	}
 
 	/**
@@ -320,6 +359,151 @@ final class DatabaseDumper {
 		return 'INSERT INTO ' . self::ident( $table, $charset ) . ' (' . implode( ',', array_map( static fn ( string $c ): string => self::ident( $c, $charset ), $columns ) ) . ") VALUES\n" . implode( ",\n", $tuples ) . ";\n";
 	}
 
+	/**
+	 * Curseur de départ.
+	 *
+	 * @return Cursor
+	 */
+	public static function start(): array {
+		return [
+			'table'         => 0,
+			'after_hex'     => null,
+			'offset'        => 0,
+			'started'       => false,
+			'header'        => false,
+			'rows'          => 0,
+			'create_sha256' => null,
+			'limit'         => self::BATCH_ROWS,
+			'charset'       => '',
+		];
+	}
+
+	/**
+	 * Avance le dump depuis $cursor jusqu'à ce que $stop() le demande (vérifié après un premier
+	 * progrès, avant chaque lot) ou que tout soit écrit. Le jeu de la session est contrôlé avant le
+	 * premier octet émis (guard()), et de nouveau après chaque requête si la connexion a été rouverte
+	 * (rows()) : une tranche refusée n'écrit rien de ce qu'elle a lu dans une autre session.
+	 *
+	 * @param list<string>              $tables Tables, dans l'ordre (tables(), ou tables_from_hex() de db.tables_hex).
+	 * @param array<string, mixed>|null $cursor Curseur rendu par l'appel précédent (relu de l'état JSON) ; null pour commencer.
+	 * @param \Closure(string): void    $emit   Reçoit le texte SQL, dans l'ordre.
+	 * @param \Closure(): bool          $stop   Vrai quand le segment est plein ou la tranche finie.
+	 * @return array{cursor: Cursor|null, tables_done: list<array{name: string, rows: int, create_sha256: string}>, rows: int}
+	 * @throws BackupRefused DB_CHARSET_MISMATCH, DB_NAME_UNSUPPORTED, DB_CURSOR_INVALID (non réessayables), DB_READ_FAILED.
+	 */
+	public function advance( array $tables, ?array $cursor, \Closure $emit, \Closure $stop ): array {
+		$cursor = self::cursor_from( $cursor );
+		$count  = count( $tables );
+		if ( $cursor['table'] >= $count ) {
+			// Rang hors de la liste (ou liste vide) : la fin du dump serait déclarée sans ses tables.
+			throw new BackupRefused( BackupRefused::DB_CURSOR_INVALID ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+		}
+		$charset = $cursor['header'] ? $cursor['charset'] : $this->charset;
+		$this->guard( $charset, (string) $this->wpdb->base_prefix, $tables );
+		$done     = [];
+		$rows     = 0;
+		$progress = false;
+		if ( ! $cursor['header'] ) {
+			$emit( self::header( $charset ) );
+			$cursor['header']  = true;
+			$cursor['charset'] = $charset;
+			$progress          = true;
+		}
+		while ( $cursor['table'] < $count ) {
+			$table = $tables[ $cursor['table'] ];
+			$meta  = $this->metadata( $table, $charset );
+			if ( ! $cursor['started'] ) {
+				$create = $this->create_statement( $table, $charset );
+				$emit( 'DROP TABLE IF EXISTS ' . self::ident( $table, $charset ) . ";\n" . $create . ";\n" );
+				$cursor['started']       = true;
+				$cursor['rows']          = 0;
+				$cursor['create_sha256'] = hash( 'sha256', $create );
+				$cursor['limit']         = self::initial_limit( $meta['avg_row'] );
+				$progress                = true;
+			}
+			while ( true ) {
+				if ( $progress && $stop() ) {
+					return [
+						'cursor'      => $cursor,
+						'tables_done' => $done,
+						'rows'        => $rows,
+					];
+				}
+				$used  = $cursor['limit'];
+				$batch = $this->batch( $table, $meta, $cursor );
+				$bytes = self::batch_bytes( $batch );
+				$kept  = $this->without_excluded( $table, $batch );
+				$this->emit_inserts( $table, $meta, $kept, $emit, $charset );
+				$cursor['rows'] += count( $kept );
+				$rows           += count( $kept );
+				$progress        = true;
+				$fetched         = count( $batch );
+				unset( $batch, $kept );
+				if ( $fetched > 0 ) {
+					if ( [] === $meta['pk'] ) {
+						$cursor['offset'] += $fetched;
+					} else {
+						$cursor['after_hex'] = $this->last_key;
+					}
+				}
+				if ( $fetched < $used ) {
+					break;
+				}
+				$cursor['limit'] = self::next_limit( $used, $bytes );
+			}
+			$done[]            = [
+				'name'          => $table,
+				'rows'          => $cursor['rows'],
+				'create_sha256' => (string) $cursor['create_sha256'],
+			];
+			$next              = $cursor['table'] + 1;
+			$cursor            = self::start();
+			$cursor['table']   = $next;
+			$cursor['header']  = true;
+			$cursor['charset'] = $charset;
+		}
+		$emit( self::FOOTER );
+
+		return [
+			'cursor'      => null,
+			'tables_done' => $done,
+			'rows'        => $rows,
+		];
+	}
+
+	/**
+	 * Liste non vide de valeurs en hexadécimal minuscule (after_hex, db.tables_hex), chacune relue par
+	 * hex2bin() après le contrôle strict de HEX_PATTERN (sans le modificateur D, $ accepterait « ab\n »).
+	 *
+	 * @phpstan-assert-if-true list<string> $value
+	 */
+	public static function hex_list( mixed $value ): bool {
+		if ( ! is_array( $value ) || [] === $value || ! ArrayShape::is_list( $value ) ) {
+			return false;
+		}
+		foreach ( $value as $hex ) {
+			if ( ! is_string( $hex ) || 1 !== preg_match( self::HEX_PATTERN, $hex ) || false === hex2bin( $hex ) ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Liste des tables relue de l'état (db.tables_hex, docs/backup-payload.md § 4, « Curseur du
+	 * dump ») : noms tels que lus dans le jeu du dump, gardés en hexadécimal minuscule.
+	 *
+	 * @return list<string>
+	 * @throws BackupRefused DB_CURSOR_INVALID (non réessayable) : liste absente, vide, hors de sa forme, ou nom vide.
+	 */
+	public static function tables_from_hex( mixed $value ): array {
+		if ( ! self::hex_list( $value ) || in_array( '', $value, true ) ) {
+			throw new BackupRefused( BackupRefused::DB_CURSOR_INVALID ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+		}
+
+		return array_map( static fn ( string $hex ): string => (string) hex2bin( $hex ), $value );
+	}
+
 	/** @param list<array{0: int, 1: int}> $ranges */
 	private static function in_ranges( array $ranges, int $byte ): bool {
 		foreach ( $ranges as [ $low, $high ] ) {
@@ -426,6 +610,7 @@ final class DatabaseDumper {
 		}
 		$this->guarded   = null;
 		$this->guard_for = null;
+		$this->avg_rows  = null;
 		$this->check_session( $charset );
 		$this->check_names( $charset, $prefix, $tables );
 		$this->end_guard( $charset, $prefix, $tables );
@@ -442,6 +627,7 @@ final class DatabaseDumper {
 		if ( null === $this->identity || $this->connection_identity() === $this->identity ) {
 			return;
 		}
+		$this->avg_rows = null;
 		if ( null === $this->guard_for ) {
 			// Dans tables(), avant que la liste soit connue : la session seulement.
 			$this->check_session( (string) $this->session_charset );
@@ -488,6 +674,236 @@ final class DatabaseDumper {
 		$this->recheck();
 
 		return $rows;
+	}
+
+	/**
+	 * Curseur relu de l'état (JSON), contrôlé champ par champ (docs/backup-payload.md § 4, « Curseur
+	 * du dump ») : tout champ absent ou hors de sa forme est un refus, jamais un repli (un retour à la
+	 * table 0, à l'offset 0 ou au début de la clé recopierait des lignes). Les champs liés le sont
+	 * aussi : une table commencée l'est après l'en-tête et a son CREATE ; une table qui ne l'est pas
+	 * n'a encore rien lu.
+	 *
+	 * @param array<string, mixed>|null $cursor
+	 * @return Cursor
+	 * @throws BackupRefused DB_CURSOR_INVALID (non réessayable).
+	 */
+	private static function cursor_from( ?array $cursor ): array {
+		if ( null === $cursor ) {
+			return self::start();
+		}
+		$table   = $cursor['table'] ?? null;
+		$offset  = $cursor['offset'] ?? null;
+		$rows    = $cursor['rows'] ?? null;
+		$limit   = $cursor['limit'] ?? null;
+		$started = $cursor['started'] ?? null;
+		$header  = $cursor['header'] ?? null;
+		$sha     = array_key_exists( 'create_sha256', $cursor ) ? $cursor['create_sha256'] : false;
+		$after   = array_key_exists( 'after_hex', $cursor ) ? $cursor['after_hex'] : false;
+		$set     = $cursor['charset'] ?? null;
+		if ( ! is_int( $table ) || $table < 0 || ! is_int( $offset ) || $offset < 0 || ! is_int( $rows ) || $rows < 0
+			|| ! is_int( $limit ) || $limit < 1 || $limit > self::BATCH_ROWS || ! is_bool( $started ) || ! is_bool( $header )
+			|| ! ( null === $sha || ( is_string( $sha ) && 1 === preg_match( '/\A[0-9a-f]{64}\z/', $sha ) ) )
+			|| ! ( null === $after || self::hex_list( $after ) )
+			|| ! is_string( $set ) || ! ( $header ? 1 === preg_match( '/\A[a-z0-9]{1,32}\z/', $set ) : '' === $set )
+			|| ( $started ? ( ! $header || null === $sha ) : ( null !== $sha || null !== $after || 0 !== $offset || 0 !== $rows ) ) ) {
+			throw new BackupRefused( BackupRefused::DB_CURSOR_INVALID ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+		}
+
+		return [
+			'table'         => $table,
+			'after_hex'     => null === $after ? null : array_values( $after ),
+			'offset'        => $offset,
+			'started'       => $started,
+			'header'        => $header,
+			'rows'          => $rows,
+			'create_sha256' => $sha,
+			'limit'         => $limit,
+			'charset'       => $set,
+		];
+	}
+
+	/** Premier lot d'une table : BATCH_BYTES divisé par la taille moyenne d'une ligne, de 1 à BATCH_ROWS. */
+	private static function initial_limit( int $average_row ): int {
+		return max( 1, min( self::BATCH_ROWS, intdiv( self::BATCH_BYTES, max( 1, $average_row ) ) ) );
+	}
+
+	/**
+	 * Lot suivant : moitié si le dernier a dépassé BATCH_BYTES (valeurs plus grosses que la moyenne
+	 * annoncée), double s'il en a fait moins du quart ; de 1 à BATCH_ROWS.
+	 */
+	private static function next_limit( int $used, int $bytes ): int {
+		if ( $bytes > self::BATCH_BYTES ) {
+			return max( 1, intdiv( $used, 2 ) );
+		}
+		if ( $bytes < intdiv( self::BATCH_BYTES, 4 ) ) {
+			return min( self::BATCH_ROWS, $used * 2 );
+		}
+		return $used;
+	}
+
+	/**
+	 * @param list<array<string, mixed>> $rows
+	 */
+	private static function batch_bytes( array $rows ): int {
+		$bytes = 0;
+		foreach ( $rows as $row ) {
+			foreach ( $row as $value ) {
+				$bytes += is_string( $value ) ? strlen( $value ) : 8;
+			}
+		}
+		return $bytes;
+	}
+
+	/**
+	 * Colonnes (et lesquelles sont binaires), clé primaire dans son ordre, taille moyenne des lignes.
+	 * Chaque nom de colonne passe par ident() : un nom mal formé dans le jeu est refusé avant le
+	 * premier octet de la table et avant toute lecture de ses lignes.
+	 *
+	 * @return Meta
+	 * @throws BackupRefused DB_CHARSET_MISMATCH, DB_NAME_UNSUPPORTED, DB_TABLES_NOT_FOUND (non réessayables), DB_READ_FAILED.
+	 */
+	private function metadata( string $table, string $charset ): array {
+		$names  = [];
+		$binary = [];
+		foreach ( $this->rows( 'SHOW FULL COLUMNS FROM ' . self::ident( $table, $charset ), $table ) as $column ) {
+			$name = (string) ( $column['Field'] ?? '' );
+			if ( '' === $name ) {
+				continue;
+			}
+			self::ident( $name, $charset );
+			$names[]         = $name;
+			$binary[ $name ] = 1 === preg_match( self::BINARY_TYPE, (string) ( $column['Type'] ?? '' ) );
+		}
+		$keys = $this->rows( 'SHOW KEYS FROM ' . self::ident( $table, $charset ) . " WHERE Key_name = 'PRIMARY'", $table );
+		usort( $keys, static fn ( array $a, array $b ): int => (int) ( $a['Seq_in_index'] ?? 0 ) <=> (int) ( $b['Seq_in_index'] ?? 0 ) );
+
+		return [
+			'columns' => $names,
+			'binary'  => $binary,
+			'pk'      => array_values( array_map( static fn ( array $key ): string => (string) ( $key['Column_name'] ?? '' ), $keys ) ),
+			'avg_row' => $this->avg_row( $table ),
+		];
+	}
+
+	/**
+	 * Taille moyenne d'une ligne de $table (§ 4, « Tables copiées ») : lue par la requête de la liste,
+	 * une fois par connexion ; la ligne retenue est celle dont TABLE_NAME égale $table octet pour
+	 * octet ; 0 sinon (d'où le lot initial de BATCH_ROWS). Aucun nom dans une chaîne (esc_like()).
+	 *
+	 * @throws BackupRefused DB_TABLES_NOT_FOUND, DB_CHARSET_MISMATCH, DB_NAME_UNSUPPORTED (non réessayables), DB_READ_FAILED.
+	 */
+	private function avg_row( string $table ): int {
+		if ( null === $this->avg_rows ) {
+			$read = [];
+			foreach ( $this->rows( self::tables_query( self::like_prefix( (string) $this->wpdb->base_prefix ) ), $table ) as $row ) {
+				$values = array_values( $row );
+				$read[ (string) ( $values[0] ?? '' ) ] = max( 0, (int) ( $values[1] ?? 0 ) );
+			}
+			$this->avg_rows = $read;
+		}
+		return $this->avg_rows[ $table ] ?? 0;
+	}
+
+	/**
+	 * Lot suivant : par clé primaire (comparaison de tuples, ordre de la clé), sinon LIMIT/OFFSET.
+	 * Requête bâtie sans $wpdb->prepare() : noms par ident(), valeurs de la clé par key_literal()
+	 * (hexadécimal, quel que soit le sql_mode du site), entiers convertis.
+	 *
+	 * @param Meta   $meta
+	 * @param Cursor $cursor
+	 * @return list<array<string, mixed>>
+	 * @throws BackupRefused DB_CURSOR_INVALID, DB_CHARSET_MISMATCH, DB_NAME_UNSUPPORTED (non réessayables), DB_READ_FAILED.
+	 */
+	private function batch( string $table, array $meta, array $cursor ): array {
+		$pk      = $meta['pk'];
+		$limit   = $cursor['limit'];
+		$charset = $cursor['charset'];
+		$after   = $cursor['after_hex'];
+		if ( null !== $after && count( $after ) !== count( $pk ) ) {
+			// Table sans clé primaire avec une reprise, ou clé changée pendant la sauvegarde : jamais un WHERE aux valeurs décalées.
+			throw new BackupRefused( BackupRefused::DB_CURSOR_INVALID ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+		}
+		$from = 'SELECT * FROM ' . self::ident( $table, $charset );
+		if ( [] === $pk ) {
+			$sql = $from . ' LIMIT ' . (int) $limit . ' OFFSET ' . (int) $cursor['offset'];
+		} else {
+			$columns = implode( ',', array_map( static fn ( string $c ): string => self::ident( $c, $charset ), $pk ) );
+			if ( null === $after ) {
+				$sql = $from . ' ORDER BY ' . $columns . ' LIMIT ' . (int) $limit;
+			} else {
+				$values = implode(
+					',',
+					array_map(
+						static fn ( string $c, string $h ): string => self::key_literal( (string) hex2bin( $h ), $meta['binary'][ $c ] ?? false, $charset ),
+						$pk,
+						$after
+					)
+				);
+				$sql    = $from . ' WHERE (' . $columns . ') > (' . $values . ') ORDER BY ' . $columns . ' LIMIT ' . (int) $limit;
+			}
+		}
+		$rows = $this->rows( $sql, $table );
+		$last = [] === $rows ? null : $rows[ count( $rows ) - 1 ];
+		// Clé de la dernière ligne relevée ici, en hexadécimal : l'appelant peut libérer le lot avant d'avancer.
+		$this->last_key = null === $last || [] === $pk ? null : array_map( static fn ( string $column ): string => bin2hex( (string) ( $last[ $column ] ?? '' ) ), $pk );
+
+		return $rows;
+	}
+
+	/**
+	 * @throws BackupRefused DB_CHARSET_MISMATCH, DB_NAME_UNSUPPORTED (non réessayables), DB_READ_FAILED.
+	 */
+	private function create_statement( string $table, string $charset ): string {
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.NotPrepared -- requête bâtie ici : nom de la table par ident() (§ 4), aucune valeur ; lecture de la base pour la sauvegarde, rien à mettre en cache.
+		$row = $this->wpdb->get_row( 'SHOW CREATE TABLE ' . self::ident( $table, $charset ), ARRAY_A );
+		$this->fail_on_error( $table );
+		$this->recheck();
+		$create = is_array( $row ) ? ( $row['Create Table'] ?? null ) : null;
+		if ( ! is_string( $create ) || '' === $create ) {
+			throw new BackupRefused( BackupRefused::DB_READ_FAILED, null, $table ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite et nom de table).
+		}
+
+		return $create;
+	}
+
+	/**
+	 * @param Meta                       $meta
+	 * @param list<array<string, mixed>> $rows
+	 * @param \Closure(string): void     $emit
+	 * @throws BackupRefused DB_NAME_UNSUPPORTED (non réessayable).
+	 */
+	private function emit_inserts( string $table, array $meta, array $rows, \Closure $emit, string $charset ): void {
+		$pending = [];
+		$size    = 0;
+		foreach ( $rows as $row ) {
+			$values = [];
+			foreach ( $row as $column => $value ) {
+				$values[ (string) $column ] = null === $value ? null : (string) $value;
+				$size                      += null === $value ? 4 : strlen( (string) $value ) + 3;
+			}
+			$pending[] = $values;
+			if ( $size >= self::FLUSH_BYTES ) {
+				$emit( self::insert( $table, $meta['columns'], $meta['binary'], $pending, $charset ) );
+				$pending = [];
+				$size    = 0;
+			}
+		}
+		if ( [] !== $pending ) {
+			$emit( self::insert( $table, $meta['columns'], $meta['binary'], $pending, $charset ) );
+		}
+	}
+
+	/**
+	 * @param list<array<string, mixed>> $rows
+	 * @return list<array<string, mixed>>
+	 */
+	private function without_excluded( string $table, array $rows ): array {
+		$names = $this->excluded_rows[ $table ] ?? null;
+		if ( null === $names ) {
+			return $rows;
+		}
+
+		return array_values( array_filter( $rows, static fn ( array $row ): bool => ! isset( $names[ (string) ( $row['option_name'] ?? '' ) ] ) ) );
 	}
 
 	/**
