@@ -9,14 +9,19 @@
  * Chemins relatifs à la racine, séparateur `/`. Le parcours ne lève jamais pour une entrée, et ne
  * confond pas « disparu » et « refusé » :
  * - une entrée disparue (entre la liste de son dossier et lstat(), ou un dossier entre lstat() et
- *   sa liste) est sautée sans bruit : elle n'existe plus, c'est son statut vrai ;
+ *   sa liste) est sautée sans bruit : elle n'existe plus, c'est son statut vrai. Avant de le
+ *   conclure, le parcours revérifie que son dossier est toujours traversable (lost_access()) ;
  * - un dossier dont le contenu est refusé (liste refusée, ou dossier listé mais non traversable, où
  *   lstat() de chaque entrée serait refusé) n'est jamais tu : rendu avec `listed` faux, contenu non
  *   parcouru, et inscrit dans unlisted(). À la reprise dans un dossier devenu illisible entre deux
  *   tranches, son entrée, déjà rendue, ne l'est plus : il figure seulement dans unlisted(). Racine
- *   refusée : '' dans unlisted().
- * L'appelant compte ces dossiers illisibles et n'inscrit jamais « supprimé » un chemin pour lequel
- * within_unlisted() est vrai.
+ *   refusée : '' dans unlisted() ;
+ * - un dossier qui perd sa traversée pendant le parcours (droits retirés pendant une pause du
+ *   générateur, par exemple pendant l'archivage d'un gros fichier de ce dossier) a déjà été rendu
+ *   avec `listed` vrai : le plus haut dossier fautif du chemin (lui, ou un parent) est inscrit dans
+ *   unlisted() et la suite de son contenu n'est pas parcourue.
+ * L'appelant compte ces dossiers illisibles par unlisted(), pas par `listed` faux qui ne les montre
+ * pas tous, et n'inscrit jamais « supprimé » un chemin pour lequel within_unlisted() est vrai.
  *
  * @package G2RD\Connector
  */
@@ -160,6 +165,9 @@ final class FileWalker {
 			}
 			$entry = $this->stat( $child );
 			if ( null === $entry ) {
+				if ( $this->lost_access( $relative ) ) {
+					return;
+				}
 				continue;
 			}
 			if ( 'dir' !== $entry['type'] ) {
@@ -170,9 +178,15 @@ final class FileWalker {
 			}
 			$inner = $this->names( $child );
 			if ( null === $inner ) {
-				if ( $this->refuse( $child ) && ! $resumed ) {
-					$entry['listed'] = false;
-					yield $entry;
+				if ( $this->refuse( $child ) ) {
+					if ( ! $resumed ) {
+						$entry['listed'] = false;
+						yield $entry;
+					}
+					continue;
+				}
+				if ( $this->lost_access( $relative ) ) {
+					return;
 				}
 				continue;
 			}
@@ -228,6 +242,33 @@ final class FileWalker {
 		return true;
 	}
 
+	/**
+	 * Une entrée de $relative n'a pu être relue (lstat() en échec, ou sous-dossier introuvable par
+	 * refuse()) : vrai si $relative a perdu sa traversée depuis names(), droits retirés à lui ou à un
+	 * parent pendant une pause du générateur. Le dossier fautif (le plus haut dossier non traversable
+	 * du chemin, celui dont le parent l'est encore, ou la racine), toujours un dossier, est alors
+	 * inscrit dans unlisted() et la suite de $relative n'est pas parcourue. Faux pour une vraie
+	 * disparition (de l'entrée, ou du dossier fautif lui-même) : le parcours continue. Toujours faux
+	 * sous Windows, où traversable() est toujours vrai.
+	 */
+	private function lost_access( string $relative ): bool {
+		clearstatcache();
+		if ( self::traversable( $this->absolute( $relative ) ) ) {
+			return false;
+		}
+		$culprit = $relative;
+		while ( '' !== $culprit ) {
+			$slash  = strrpos( $culprit, '/' );
+			$parent = false === $slash ? '' : substr( $culprit, 0, $slash );
+			if ( self::traversable( $this->absolute( $parent ) ) ) {
+				break;
+			}
+			$culprit = $parent;
+		}
+
+		return $this->refuse( $culprit );
+	}
+
 	private function absolute( string $relative ): string {
 		return '' === $relative ? $this->root : $this->root . '/' . $relative;
 	}
@@ -244,7 +285,7 @@ final class FileWalker {
 			return null;
 		}
 		$absolute = $this->root . '/' . $relative;
-		$stat     = @lstat( $absolute ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- entrée disparue entre la liste et lstat() (son dossier est traversable, vérifié par names()) : sautée sans avertissement.
+		$stat     = @lstat( $absolute ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- entrée disparue entre la liste et lstat(), ou droits de son dossier retirés depuis names() : walk_dir() les départage par lost_access() ; sans avertissement (le message porterait le chemin).
 		if ( false === $stat ) {
 			return null;
 		}

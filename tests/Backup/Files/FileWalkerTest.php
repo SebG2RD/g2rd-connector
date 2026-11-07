@@ -144,6 +144,48 @@ final class FileWalkerTest extends TestCase {
 		self::assertTrue( $parcours->within_unlisted( 'a/z.txt' ), 'la suite du dossier n\'est jamais dite supprimée' );
 	}
 
+	public function test_un_dossier_qui_perd_ses_droits_pendant_le_parcours_n_est_jamais_tu(): void {
+		foreach ( [ 0000, 0644 ] as $mode ) {
+			$libelle  = sprintf( 'droits de a passés en %04o pendant une pause du parcours', $mode );
+			$parcours = new FileWalker( $this->racine );
+			$chemins  = [];
+			foreach ( $parcours->walk() as $entree ) {
+				$chemins[] = $entree['path'];
+				if ( 'a/b/c.php' === $entree['path'] ) {
+					// Le générateur est en pause, comme pendant l'archivage d'un gros fichier de « a ».
+					$this->retirer_droits( 'a', $mode );
+				}
+			}
+			chmod( $this->racine . '/a', 0755 );
+
+			self::assertSame( array_merge( [ 'B.txt', 'a', 'a/b', 'a/b/c.php' ], array_slice( $this->arbre_sans_le_contenu_de_a(), 2 ) ), $chemins, $libelle );
+			self::assertNotContains( 'a/z.txt', $chemins, $libelle );
+			self::assertSame( [ 'a' ], $parcours->unlisted(), $libelle );
+			self::assertTrue( $parcours->within_unlisted( 'a/z.txt' ), $libelle . ' : la suite du dossier n\'est jamais dite supprimée' );
+		}
+	}
+
+	public function test_des_droits_retires_a_un_parent_pendant_le_parcours_designent_ce_parent(): void {
+		// « p » ne contient que « q » : seul lost_access() depuis « p/q » peut désigner « p ».
+		mkdir( $this->racine . '/p/q', 0777, true );
+		file_put_contents( $this->racine . '/p/q/1.txt', '1' );
+		file_put_contents( $this->racine . '/p/q/2.txt', '2' );
+		$parcours = new FileWalker( $this->racine );
+		$chemins  = [];
+		foreach ( $parcours->walk() as $entree ) {
+			$chemins[] = $entree['path'];
+			if ( 'p/q/1.txt' === $entree['path'] ) {
+				$this->retirer_droits( 'p', 0000 );
+			}
+		}
+		chmod( $this->racine . '/p', 0755 );
+
+		self::assertNotContains( 'p/q/2.txt', $chemins );
+		self::assertContains( 'wp-content/uploads/m.jpg', $chemins, 'le parcours continue après le dossier fautif' );
+		self::assertSame( [ 'p' ], $parcours->unlisted(), 'le parent fautif, pas « p/q » qui n\'est plus relisible à travers lui' );
+		self::assertTrue( $parcours->within_unlisted( 'p/q/2.txt' ) );
+	}
+
 	public function test_comparaison_de_l_ordre_du_parcours(): void {
 		self::assertLessThan( 0, FileWalker::compare( 'a/b', 'a.txt' ) );
 		self::assertLessThan( 0, FileWalker::compare( 'a', 'a/b' ) );
