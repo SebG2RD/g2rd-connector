@@ -65,6 +65,10 @@ export interface ConnectorBootData {
 	backup: {
 		enabled: boolean;
 		disabledByConstant: boolean;
+		/** Réglage verrouillé en multisite : site secondaire, ou utilisateur qui n'est pas super-administrateur. */
+		lock: 'secondary' | 'super_admin' | null;
+		/** Phrase qui explique le verrou (quoi, cause, action) ; null si réglable. */
+		lockMessage: string | null;
 		/** Empreinte de comparaison, huit groupes de quatre ; null tant qu'aucune clé n'existe. */
 		fingerprint: string | null;
 		siteKeyVersion: number | null;

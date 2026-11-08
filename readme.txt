@@ -84,7 +84,7 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 
 = Who can turn on encrypted backups on a multisite network? =
 
-Since 1.17, only the main site of the network. A backup covers the whole installation (the database tables of every site of the network and the WordPress files), so on any other site of the network the setting has no effect: it is not saved from the connector settings panel, the site does not offer backups to the manager, every backup command is refused without changing anything, and the `/snapshot` answer reports backups as off (no signing key is created there, and nothing about the network's backups is sent).
+Since 1.17, only a network super administrator, from the main site of the network. A backup covers the whole installation (the database tables of every site of the network and the WordPress files), so a site administrator who is not a super administrator cannot change these settings, and on any other site of the network the setting has no effect: the two boxes are shown unchecked and disabled with an explanation, they are not saved from either connector settings screen, the site does not offer backups to the manager, every backup command is refused without changing anything, and the `/snapshot` answer reports backups as off (no signing key is created there, and nothing about the network's backups is sent).
 
 = Where are backups prepared? =
 

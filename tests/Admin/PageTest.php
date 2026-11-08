@@ -9,6 +9,8 @@ use G2RD\Connector\Admin\Page;
 use G2RD\Connector\BootData;
 use G2RD\Connector\Settings;
 use G2RD\Connector\Tests\TestCase;
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 
 /**
  * Page de réglages autonome (formulaire PHP, sans le thème G2RD) : la case
@@ -31,6 +33,7 @@ final class PageTest extends TestCase {
 		Functions\when( 'sanitize_key' )->alias( static fn ( string $key ): string => strtolower( $key ) );
 		Functions\when( 'settings_errors' )->justReturn( null );
 		Functions\when( 'get_bloginfo' )->justReturn( '7.1.3' );
+		Functions\when( 'is_multisite' )->justReturn( false );
 		Functions\when( 'checked' )->alias(
 			static function ( $checked, $current = true, bool $display = true ): string {
 				$result = (string) $checked === (string) $current ? " checked='checked'" : '';
@@ -134,6 +137,66 @@ final class PageTest extends TestCase {
 		self::assertTrue( $this->options[ Settings::OPTION_KEY ]['allow_direct_login'] );
 	}
 
+	/**
+	 * Réseau multisite : le formulaire PHP suit la même règle que le panneau. Processus séparé,
+	 * comme les autres tests qui simulent is_multisite() (une fonction simulée reste définie).
+	 */
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_site_secondaire_le_formulaire_ignore_les_cases_et_les_affiche_desactivees(): void {
+		Functions\when( 'is_multisite' )->justReturn( true );
+		Functions\when( 'is_main_site' )->justReturn( false );
+		$this->options[ Settings::OPTION_KEY ] = [
+			'backup_enabled' => true,
+			'force_ipv4_to_storage' => true,
+		];
+		$_POST                                 = $this->saved_form() + [ 'g2rd_backup_enabled' => '1' ];
+
+		$html = $this->render();
+
+		self::assertTrue( $this->options[ Settings::OPTION_KEY ]['backup_enabled'], 'valeur enregistrée gardée' );
+		self::assertTrue( $this->options[ Settings::OPTION_KEY ]['force_ipv4_to_storage'], 'valeur enregistrée gardée' );
+		self::assertMatchesRegularExpression( '/name=.g2rd_backup_enabled. value=.1.\s+disabled=.disabled.>/', $html, 'case décochée et désactivée' );
+		self::assertMatchesRegularExpression( '/name=.g2rd_force_ipv4_to_storage. value=.1.\s+disabled=.disabled.>/', $html );
+		self::assertStringContainsString( 'les sauvegardes se règlent sur le site principal', $html );
+		self::assertStringContainsString( 'ouvrez les réglages du connecteur du site principal', $html );
+	}
+
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_administrateur_non_super_administrateur_le_formulaire_garde_la_valeur_enregistree(): void {
+		Functions\when( 'is_multisite' )->justReturn( true );
+		Functions\when( 'is_main_site' )->justReturn( true );
+		Functions\when( 'is_super_admin' )->justReturn( false );
+		$this->options[ Settings::OPTION_KEY ] = [ 'backup_enabled' => false ];
+		$_POST                                 = $this->saved_form() + [
+			'g2rd_backup_enabled' => '1',
+			'g2rd_force_ipv4_to_storage' => '1',
+		];
+
+		$html = $this->render();
+
+		self::assertFalse( $this->options[ Settings::OPTION_KEY ]['backup_enabled'] );
+		self::assertFalse( $this->options[ Settings::OPTION_KEY ]['force_ipv4_to_storage'] ?? false );
+		self::assertMatchesRegularExpression( '/name=.g2rd_backup_enabled. value=.1.\s+disabled=.disabled.>/', $html );
+		self::assertStringContainsString( 'seul un super-administrateur peut régler les sauvegardes', $html );
+	}
+
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_super_administrateur_du_site_principal_le_formulaire_enregistre_les_cases(): void {
+		Functions\when( 'is_multisite' )->justReturn( true );
+		Functions\when( 'is_main_site' )->justReturn( true );
+		Functions\when( 'is_super_admin' )->justReturn( true );
+		$_POST = $this->saved_form() + [ 'g2rd_backup_enabled' => '1' ];
+
+		$html = $this->render();
+
+		self::assertTrue( $this->options[ Settings::OPTION_KEY ]['backup_enabled'] );
+		self::assertDoesNotMatchRegularExpression( '/name=.g2rd_backup_enabled. value=.1.\s+checked=.checked. disabled/', $html );
+		self::assertStringNotContainsString( 'seul un super-administrateur', $html );
+	}
+
 	public function test_la_case_du_releve_est_affichee_decochee_par_defaut(): void {
 		$html = $this->render();
 
@@ -186,13 +249,27 @@ final class PageTest extends TestCase {
 	 * version du thème parent, celui qui fournit la console, qui compte.
 	 */
 	public function test_un_theme_enfant_d_un_theme_g2rd_1_19_ou_plus_donne_l_onglet(): void {
-		$this->active_theme( 'g2rd-child', 'g2rd-theme', [ 'g2rd-child' => '1.0.0', 'g2rd-theme' => '1.39.0' ] );
+		$this->active_theme(
+			'g2rd-child',
+			'g2rd-theme',
+			[
+				'g2rd-child' => '1.0.0',
+				'g2rd-theme' => '1.39.0',
+			]
+		);
 
 		self::assertSame( 'onglet', $this->display_mode() );
 	}
 
 	public function test_un_theme_enfant_d_un_theme_g2rd_plus_ancien_que_1_19_donne_la_page(): void {
-		$this->active_theme( 'g2rd-child', 'g2rd-theme', [ 'g2rd-child' => '1.0.0', 'g2rd-theme' => '1.18.9' ] );
+		$this->active_theme(
+			'g2rd-child',
+			'g2rd-theme',
+			[
+				'g2rd-child' => '1.0.0',
+				'g2rd-theme' => '1.18.9',
+			]
+		);
 
 		self::assertSame( 'page', $this->display_mode() );
 	}
@@ -233,7 +310,14 @@ final class PageTest extends TestCase {
 	 * d'entrée de menu. Elle sert le formulaire PHP, avec ses assets sur son hook.
 	 */
 	public function test_en_mode_onglet_la_page_de_secours_est_enregistree_sans_entree_de_menu(): void {
-		$this->active_theme( 'g2rd-child', 'g2rd-theme', [ 'g2rd-child' => '1.0.0', 'g2rd-theme' => '1.39.0' ] );
+		$this->active_theme(
+			'g2rd-child',
+			'g2rd-theme',
+			[
+				'g2rd-child' => '1.0.0',
+				'g2rd-theme' => '1.39.0',
+			]
+		);
 		$submenu_pages = [];
 		Functions\when( 'add_submenu_page' )->alias(
 			static function ( ...$args ) use ( &$submenu_pages ): string {

@@ -100,6 +100,9 @@ function backupDescription( d: ConnectorBootData ): string {
 	if ( d.backup.disabledByConstant ) {
 		return 'Désactivées par la constante G2RD_CONNECTOR_DISABLE_BACKUP de wp-config.php : aucune sauvegarde ne part de ce site. Retirez cette constante pour pouvoir les activer.';
 	}
+	if ( d.backup.lockMessage ) {
+		return d.backup.lockMessage;
+	}
 	if ( d.backupEnabled ) {
 		return `G2RD WP Manager peut sauvegarder ce site : base et fichiers sont chiffrés avant de quitter le serveur. Empreinte de la clé de signature du site, à comparer à celle de la page d’approbation du service de clés G2RD : ${ d.backup.fingerprint ?? 'créée à l’enregistrement' }.`;
 	}
@@ -781,7 +784,11 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 						onChange={ ( backupEnabled ) =>
 							update( { backupEnabled } )
 						}
-						disabled={ anyBusy || state.backup.disabledByConstant }
+						disabled={
+							anyBusy ||
+							state.backup.disabledByConstant ||
+							state.backup.lock !== null
+						}
 					/>
 					<SettingRow
 						cx={ cx }
@@ -793,7 +800,7 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 						onChange={ ( forceIpv4ToStorage ) =>
 							update( { forceIpv4ToStorage } )
 						}
-						disabled={ anyBusy }
+						disabled={ anyBusy || state.backup.lock !== null }
 					/>
 					<SettingRow
 						cx={ cx }

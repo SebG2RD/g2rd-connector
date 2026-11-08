@@ -392,9 +392,12 @@ final class Page {
 						<td>
 							<label>
 								<input type="checkbox" aria-labelledby="g2rd_backup_enabled_titre" aria-describedby="g2rd_backup_enabled_aide" name="g2rd_backup_enabled" value="1"
-									<?php checked( (bool) ( $settings['backup_enabled'] ?? false ) ); ?> <?php disabled( $backup['disabledByConstant'] ); ?>>
+									<?php checked( BackupSwitch::LOCK_SECONDARY !== $backup['lock'] && (bool) ( $settings['backup_enabled'] ?? false ) ); ?> <?php disabled( $backup['disabledByConstant'] || null !== $backup['lock'] ); ?>>
 								<span id="g2rd_backup_enabled_aide"><?php echo esc_html__( 'G2RD WP Manager peut sauvegarder ce site : base et fichiers sont chiffrés avant de quitter le serveur. Décochée : aucune sauvegarde ne part, et les mises à jour se déroulent exactement comme avant.', 'g2rd-connector' ); ?></span>
 							</label>
+							<?php if ( null !== $backup['lockMessage'] ) : ?>
+							<p class="description"><?php echo esc_html( $backup['lockMessage'] ); ?></p>
+							<?php endif; ?>
 							<?php if ( $backup['disabledByConstant'] ) : ?>
 							<p class="description"><?php echo esc_html__( 'Désactivées par la constante G2RD_CONNECTOR_DISABLE_BACKUP de wp-config.php : aucune sauvegarde ne part de ce site. Retirez cette constante pour pouvoir les activer.', 'g2rd-connector' ); ?></p>
 							<?php endif; ?>
@@ -408,7 +411,7 @@ final class Page {
 						<td>
 							<label>
 								<input type="checkbox" aria-labelledby="g2rd_force_ipv4_to_storage_titre" aria-describedby="g2rd_force_ipv4_to_storage_aide" name="g2rd_force_ipv4_to_storage" value="1"
-									<?php checked( (bool) ( $settings['force_ipv4_to_storage'] ?? false ) ); ?>>
+									<?php checked( BackupSwitch::LOCK_SECONDARY !== $backup['lock'] && (bool) ( $settings['force_ipv4_to_storage'] ?? false ) ); ?> <?php disabled( null !== $backup['lock'] ); ?>>
 								<span id="g2rd_force_ipv4_to_storage_aide"><?php echo esc_html__( 'À activer si l’hébergeur bloque l’IPv6 sortante du serveur : l’envoi des sauvegardes vers le stockage passe alors par l’IPv4. Ne concerne que cet envoi.', 'g2rd-connector' ); ?></span>
 							</label>
 						</td>
@@ -456,22 +459,26 @@ final class Page {
 			? esc_url_raw( wp_unslash( (string) $_POST['g2rd_manager_url'] ) )
 			: '';
 
+		// Sauvegardes : réglage verrouillé (site secondaire, ou non super-administrateur d'un réseau),
+		// la valeur enregistrée est gardée (BackupSwitch::without_locked_settings()).
 		Settings::update(
-			[
-				'manager_url'             => $url,
-				'heartbeat_enabled'       => ! empty( $_POST['g2rd_heartbeat_enabled'] ),
-				'events_enabled'          => ! empty( $_POST['g2rd_events_enabled'] ),
-				'remote_commands_enabled' => ! empty( $_POST['g2rd_remote_commands_enabled'] ),
-				'force_ipv4_to_manager'   => ! empty( $_POST['g2rd_force_ipv4_to_manager'] ),
-				'allow_direct_login'      => ! empty( $_POST['g2rd_allow_direct_login'] ),
-				// Constante d'arrêt posée : la case est désactivée, donc jamais envoyée ; la valeur
-				// enregistrée est gardée (retirer la constante rend tout, essai E19).
-				'backup_enabled'          => BackupSwitch::disabled_by_constant() ? (bool) Settings::get( 'backup_enabled' ) : ! empty( $_POST['g2rd_backup_enabled'] ),
-				'force_ipv4_to_storage'   => ! empty( $_POST['g2rd_force_ipv4_to_storage'] ),
-				'php_errors_enabled'      => ! empty( $_POST['g2rd_php_errors_enabled'] ),
-				// La lecture du journal ne se règle que par le manager ; relevé décoché, elle est coupée.
-				'php_errors_log_tail'     => ! empty( $_POST['g2rd_php_errors_enabled'] ) && true === Settings::get( 'php_errors_log_tail' ),
-			]
+			BackupSwitch::without_locked_settings(
+				[
+					'manager_url'             => $url,
+					'heartbeat_enabled'       => ! empty( $_POST['g2rd_heartbeat_enabled'] ),
+					'events_enabled'          => ! empty( $_POST['g2rd_events_enabled'] ),
+					'remote_commands_enabled' => ! empty( $_POST['g2rd_remote_commands_enabled'] ),
+					'force_ipv4_to_manager'   => ! empty( $_POST['g2rd_force_ipv4_to_manager'] ),
+					'allow_direct_login'      => ! empty( $_POST['g2rd_allow_direct_login'] ),
+					// Constante d'arrêt posée : la case est désactivée, donc jamais envoyée ; la valeur
+					// enregistrée est gardée (retirer la constante rend tout, essai E19).
+					'backup_enabled'          => BackupSwitch::disabled_by_constant() ? (bool) Settings::get( 'backup_enabled' ) : ! empty( $_POST['g2rd_backup_enabled'] ),
+					'force_ipv4_to_storage'   => ! empty( $_POST['g2rd_force_ipv4_to_storage'] ),
+					'php_errors_enabled'      => ! empty( $_POST['g2rd_php_errors_enabled'] ),
+					// La lecture du journal ne se règle que par le manager ; relevé décoché, elle est coupée.
+					'php_errors_log_tail'     => ! empty( $_POST['g2rd_php_errors_enabled'] ) && true === Settings::get( 'php_errors_log_tail' ),
+				]
+			)
 		);
 
 		if ( 'enroll' === $action ) {

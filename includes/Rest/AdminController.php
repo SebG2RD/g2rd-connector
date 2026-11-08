@@ -223,12 +223,9 @@ final class AdminController {
 				$settings[ $flag ] = (bool) $value;
 			}
 		}
-		// Sauvegardes : une sauvegarde couvre tout le réseau, seul le site principal les règle
-		// (BackupSwitch::secondary_site()) ; l'administrateur d'un site secondaire n'y touche pas.
-		$backup_flags = array_intersect_key( $settings, array_flip( BackupSwitch::NETWORK_SETTINGS ) );
-		if ( [] !== $backup_flags && BackupSwitch::secondary_site() ) {
-			$settings = array_diff_key( $settings, $backup_flags );
-		}
+		// Sauvegardes : une sauvegarde couvre tout le réseau, seul un super-administrateur, depuis le
+		// site principal, les règle (BackupSwitch::network_lock()) ; sinon la valeur enregistrée reste.
+		$settings = BackupSwitch::without_locked_settings( $settings );
 		// Relevé décoché : la lecture du journal suit (cf. Settings::sanitize()).
 		if ( false === ( $settings['php_errors_enabled'] ?? null ) ) {
 			$settings['php_errors_log_tail'] = false;

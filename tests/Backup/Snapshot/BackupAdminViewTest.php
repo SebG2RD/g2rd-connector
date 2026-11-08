@@ -15,6 +15,8 @@ final class BackupAdminViewTest extends BackupTestCase {
 			[
 				'enabled'            => false,
 				'disabledByConstant' => false,
+				'lock'               => null,
+				'lockMessage'        => null,
 				'fingerprint'        => null,
 				'siteKeyVersion'     => null,
 				'lastOutcome'        => null,
@@ -34,6 +36,18 @@ final class BackupAdminViewTest extends BackupTestCase {
 		$this->settings( [ 'backup_enabled' => true ] );
 
 		self::assertMatchesRegularExpression( '/\A([0-9a-f]{4} ){7}[0-9a-f]{4}\z/', (string) BackupAdminView::data( 1800000000 )['fingerprint'] );
+	}
+
+	public function test_le_panneau_et_la_page_desactivent_les_cases_verrouillees(): void {
+		$racine  = dirname( __DIR__, 3 );
+		$panneau = (string) file_get_contents( $racine . '/assets/admin/src/ConnectorPanel.tsx' );
+		$page    = (string) file_get_contents( $racine . '/includes/Admin/Page.php' );
+
+		self::assertStringContainsString( 'd.backup.lockMessage', $panneau, "la phrase du verrou remplace l'aide, sans « créée à l'enregistrement »" );
+		self::assertSame( 2, substr_count( $panneau, 'state.backup.lock !== null' ), 'les deux cases du panneau sont désactivées' );
+		self::assertStringContainsString( "disabled( \$backup['disabledByConstant'] || null !== \$backup['lock'] )", $page );
+		self::assertStringContainsString( "disabled( null !== \$backup['lock'] )", $page );
+		self::assertStringContainsString( "esc_html( \$backup['lockMessage'] )", $page );
 	}
 
 	public function test_le_panneau_et_la_page_portent_la_case_et_l_empreinte(): void {
