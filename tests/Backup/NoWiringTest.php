@@ -96,6 +96,7 @@ final class NoWiringTest extends TestCase {
 		'includes/Rest/AdminController.php',
 		'includes/BootData.php',
 		'includes/Admin/Page.php',
+		'includes/Environment/SizeReport.php',
 	];
 
 	/**
