@@ -1,0 +1,57 @@
+# E21 fpm : mise à jour hors plateforme (Plugin_Upgrader::upgrade par WP-CLI eval)
+
+### tranche en vol  [e21-tranche.txt]
+résumé : HTTP 500 {"command": "backup_step", "status": "failed", "error_code": "backup_interrupted"}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://fpm.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=500
+duree_s=13.121
+signature_check=ok
+corps :
+{
+    "command": "backup_step",
+    "status": "failed",
+    "result": null,
+    "error": "La sauvegarde a été interrompue et ne sera pas terminée : une mise à jour a changé le site pendant la copie, et une sauvegarde mélangée ne serait pas restaurable. Ce qu’elle avait préparé sur le site est retiré ; elle n’est pas comptée comme réus
+    "at": "2026-11-08T11:55:14+00:00",
+    "error_code": "backup_interrupted",
+    "signature_check": {
+        "status": "ok"
+    }
+}
+
+
+### backup_start pendant la mise à jour  [e21-start-pendant.txt]
+résumé : HTTP 500 {"command": "backup_start", "status": "failed", "error_code": "update_in_progress", "retry_after": 60}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://fpm.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=500
+duree_s=0.255
+signature_check=ok
+corps :
+{
+    "command": "backup_start",
+    "status": "failed",
+    "result": null,
+    "error": "La sauvegarde n’a pas avancé : une mise à jour est en cours sur ce site. Rien n’a été copié par cette demande. Cause probable : campagne de mises à jour, ou mise à jour lancée depuis l’administration du site. Action : aucune, la plateforme relanc
+    "at": "2026-11-08T11:55:12+00:00",
+    "error_code": "update_in_progress",
+    "retry_after": 60,
+    "signature_check": {
+        "status": "ok"
+    }
+}
+
+
+### témoin pendant la mise à jour  [e21-temoin-pendant.txt]
+{"v":1,"entries":[{"id":"a9275a0fa424bfc1","command":"upgrader","since":1794138903,"held":false,"until":1794139803}]}
+
+
+### mise à jour  [e21-maj-cli.txt]
+ Container g2rd-p4-wordpress-fpm-db-1 Running 
+ Container g2rd-p4-wordpress-fpm-db-1 Waiting 
+ Container g2rd-p4-wordpress-fpm-db-1 Healthy 
+ Container g2rd-p4-wp-cli-fpm-run-6156b3ea152b Creating 
+ Container g2rd-p4-wp-cli-fpm-run-6156b3ea152b Created 
+resultat de Plugin_Upgrader::upgrade(): true
+

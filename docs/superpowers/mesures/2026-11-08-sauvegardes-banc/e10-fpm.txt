@@ -1,0 +1,232 @@
+# E10 fpm : mise à jour lente (40 s) et backup_start
+
+### (a) update_plugin lent sur /command  [e10-maj-command.txt]
+résumé : HTTP 200 {"command": "update_plugin", "status": "done", "result.updated": true, "result.version_before": "1.0", "result.version_after": "1.1", "result.reason": null}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://fpm.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=200
+duree_s=41.377
+signature_check=ok
+corps :
+{
+    "command": "update_plugin",
+    "status": "done",
+    "result": {
+        "updated": true,
+        "file": "banc-extension/banc-extension.php",
+        "version_before": "1.0",
+        "version_after": "1.1",
+        "was_active": true,
+        "reactivated": true,
+        "reason": null
+    },
+    "error": null,
+    "at": "2026-11-08T11:27:03+00:00",
+    "signature_check": {
+        "status": "ok"
+    }
+}
+
+
+### backup_start pendant la mise à jour  [e10-start-pendant.txt]
+résumé : HTTP 500 {"command": "backup_start", "status": "failed", "error_code": "update_in_progress", "retry_after": 60}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://fpm.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=500
+duree_s=0.201
+signature_check=ok
+corps :
+{
+    "command": "backup_start",
+    "status": "failed",
+    "result": null,
+    "error": "La sauvegarde n’a pas avancé : une mise à jour est en cours sur ce site. Rien n’a été copié par cette demande. Cause probable : campagne de mises à jour, ou mise à jour lancée depuis l’administration du site. Action : aucune, la plateforme relanc
+    "at": "2026-11-08T11:26:28+00:00",
+    "error_code": "update_in_progress",
+    "retry_after": 60,
+    "signature_check": {
+        "status": "ok"
+    }
+}
+
+
+### backup_start après la mise à jour  [e10-start-apres.txt]
+résumé : HTTP 200 {"command": "backup_start", "status": "done", "result.phase": "db", "result.segments_written": 0, "result.slice_ms": 0}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://fpm.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=200
+duree_s=0.397
+signature_check=ok
+corps :
+{
+    "command": "backup_start",
+    "status": "done",
+    "result": {
+        "backup_id": "4e8814de1a2bc037542a6e6d1d7f9195",
+        "phase": "db",
+        "type": "full",
+        "scope": "db",
+        "parent_backup_id": null,
+        "downgraded": null,
+        "key_version": 1,
+        "signing_key_id": "bdb977808056774b",
+        "segments_written": 0,
+        "pending": [],
+        "part_failures": [],
+        "progress": {
+            "db_tables_done": 0,
+            "db_tables_total": 14,
+            "db_rows": 0,
+            "files_done": 0,
+            "payload_bytes": 0,
+            "unreadable": 0
+        },
+        "index": null,
+        "slice_ms": 0
+    },
+    "error": null,
+    "at": "2026-11-08T11:27:24+00:00",
+    "signature_check": {
+        "status": "ok"
+    }
+}
+
+
+### (b) update_plugin lent sur /command-runs  [e10-maj-runs.txt]
+résumé : HTTP 202 {"state": "accepted"}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://fpm.test/wp-json/g2rd/v1/command-runs (route signée /g2rd/v1/command-runs, jeton dans Authorization)
+statut=202
+duree_s=0.344
+signature_check=ok
+corps :
+{
+    "command_id": "88a4e0f87b300e7c240ebb78f0489a72",
+    "state": "accepted",
+    "accepted_at": "2026-11-08T11:27:47+00:00",
+    "poll_after_seconds": 2,
+    "served_at": "2026-11-08T11:27:47+00:00"
+}
+
+
+### backup_start pendant la mise à jour  [e10-start-pendant-runs.txt]
+résumé : HTTP 500 {"command": "backup_start", "status": "failed", "error_code": "update_in_progress", "retry_after": 60}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://fpm.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=500
+duree_s=0.155
+signature_check=ok
+corps :
+{
+    "command": "backup_start",
+    "status": "failed",
+    "result": null,
+    "error": "La sauvegarde n’a pas avancé : une mise à jour est en cours sur ce site. Rien n’a été copié par cette demande. Cause probable : campagne de mises à jour, ou mise à jour lancée depuis l’administration du site. Action : aucune, la plateforme relanc
+    "at": "2026-11-08T11:27:54+00:00",
+    "error_code": "update_in_progress",
+    "retry_after": 60,
+    "signature_check": {
+        "status": "ok"
+    }
+}
+
+
+### lecture du compte rendu de l'exécution  [e10-lecture-run.txt]
+résumé : HTTP 200 {"command": "update_plugin", "state": "done", "outcome.status": "done", "outcome.result.updated": true, "outcome.result.version_before": "1.0", "outcome.result.version_after": "1.1"}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : GET http://fpm.test/wp-json/g2rd/v1/command-runs/88a4e0f87b300e7c240ebb78f0489a72 (route signée /g2rd/v1/command-runs/88a4e0f87b300e7c240ebb78f0489a72, jeton dans Authorization)
+statut=200
+duree_s=0.242
+signature_check=ok
+corps :
+{
+    "command_id": "88a4e0f87b300e7c240ebb78f0489a72",
+    "command": "update_plugin",
+    "state": "done",
+    "accepted_at": "2026-11-08T11:27:47+00:00",
+    "started_at": "2026-11-08T11:27:47+00:00",
+    "alive_at": "2026-11-08T11:28:28+00:00",
+    "finished_at": "2026-11-08T11:28:28+00:00",
+    "outcome": {
+        "command": "update_plugin",
+        "status": "done",
+        "result": {
+            "updated": true,
+            "file": "banc-extension/banc-extension.php",
+            "version_before": "1.0",
+            "version_after": "1.1",
+            "was_active": true,
+            "reactivated": true,
+            "reason": null
+        },
+        "error": null,
+        "at": "2026-11-08T11:28:28+00:00"
+    },
+    "served_at": "2026-11-08T11:28:35+00:00"
+}
+
+
+### backup_start après la mise à jour  [e10-start-apres-runs.txt]
+résumé : HTTP 200 {"command": "backup_start", "status": "done", "result.phase": "db", "result.segments_written": 0, "result.slice_ms": 0}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://fpm.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=200
+duree_s=0.348
+signature_check=ok
+corps :
+{
+    "command": "backup_start",
+    "status": "done",
+    "result": {
+        "backup_id": "d4de59e404a5b3cff7aa1c12a3c4316b",
+        "phase": "db",
+        "type": "full",
+        "scope": "db",
+        "parent_backup_id": null,
+        "downgraded": null,
+        "key_version": 1,
+        "signing_key_id": "bdb977808056774b",
+        "segments_written": 0,
+        "pending": [],
+        "part_failures": [],
+        "progress": {
+            "db_tables_done": 0,
+            "db_tables_total": 14,
+            "db_rows": 0,
+            "files_done": 0,
+            "payload_bytes": 0,
+            "unreadable": 0
+        },
+        "index": null,
+        "slice_ms": 0
+    },
+    "error": null,
+    "at": "2026-11-08T11:28:45+00:00",
+    "signature_check": {
+        "status": "ok"
+    }
+}
+
+
+### (c) autres mises à jour  [e10-autres-maj.txt]
+### {"command":"update_theme","payload":{"stylesheet":"twentytwentyfive"}}
+temoin avant: 
+HTTP 200 | {'command': 'update_theme', 'status': 'done'} |  | {}
+"reason": "upgrade_failed"
+"error": null
+temoin apres: 
+enabled True state {'phase': 'idle', 'backup_id': None, 'type': None, 'scope': None, 'segments_written': 0, 'pending': 0, 'slice_started_at': None}
+### {"command":"update_core","payload":{}}
+temoin avant: 
+HTTP 200 | {'command': 'update_core', 'status': 'done'} |  | {}
+"error": null
+temoin apres: 
+enabled True state {'phase': 'idle', 'backup_id': None, 'type': None, 'scope': None, 'segments_written': 0, 'pending': 0, 'slice_started_at': None}
+### {"command":"update_translations","payload":{}}
+temoin avant: 
+HTTP 200 | {'command': 'update_translations', 'status': 'done'} |  | {}
+"reason": "no_updates_available"
+"error": null
+temoin apres: 
+enabled True state {'phase': 'idle', 'backup_id': None, 'type': None, 'scope': None, 'segments_written': 0, 'pending': 0, 'slice_started_at': None}
+

@@ -1,0 +1,38 @@
+# E4 fpm : incrémentale (trois fichiers modifiés, un ajouté, un supprimé)
+
+### modifications du site  [e04-fpm-modifs.txt]
+e35d1389b9493b8645072585b802df16198a432992f9982340948f0fc36724cc  lot/d0/f0.bin
+9f0a6bb64953f79c48c1f046ef41c8f2714a106fc0d3011f98402271c19aa49a  lot/d3/f13.bin
+1bc8aa548d0f34a1ae568b50b43473655545fc8764936644f18c121a95b594eb  lot/d5/f45.bin
+3b1098a83e04606deefeac84d3cf8f4d03d3c84b6e340d5c2cb2575ead8e5b8f  lot/d0/nouveau-e4.bin
+
+
+### pilote et vérifications  [e04-fpm.txt]
+# debut 2026-11-08T12:07:35+01:00
+Clé de site reçue : version 1, empreinte 60c9554e427c729b89ecf08266d461b6
+Sauvegarde 4d9a71261b1ca6f6b8e95e44fd827336 : phase db, type incremental
+Tranche 1 : phase files, 2 segments écrits, 2 en attente, 7915 ms
+Tranche 2 : phase files, 2 segments écrits, 2 en attente, 191 ms
+Segment 0 déposé : stored
+Segment 1 déposé : stored
+Tranche 3 : phase upload, 3 segments écrits, 1 en attente, 109 ms
+Tranche 4 : phase upload, 3 segments écrits, 1 en attente, 38 ms
+Segment 2 déposé : stored
+Tranche 5 : phase finalize, 3 segments écrits, 0 en attente, 99 ms
+Dépôt de index.sig : stored
+Dépôt de index : stored
+Tranche 6 : phase idle, 0 segments écrits, 0 en attente, 0 ms
+OK sauvegarde 4d9a71261b1ca6f6b8e95e44fd827336 : 3 segments, 6 tranches, 12 s
+Segment 0 relu et déchiffré
+Segment 1 relu et déchiffré
+Segment 2 relu et déchiffré
+OK relev� C:\Users\gerar\Downloads\DeveloppementWeb\G2RD-Projet\G2RD_manager_projet\.claude\worktrees\sauvegardes-module/tools/banc-sauvegardes/var/4d9a71261b1ca6f6b8e95e44fd827336/releve.json : 4 fichiers, 14 tables, 4628 lignes de manifeste, 0 illisibles
+OK arbre reconstruit identique au site : 4080 fichiers
+# fin 2026-11-08T12:07:58+01:00 duree_s=23 code=0
+# verifications de E4 (script verif_e4.py)
+fichiers de la sauvegarde : 4 ['wp-content/uploads/banc/lot/d0/f0.bin', 'wp-content/uploads/banc/lot/d0/nouveau-e4.bin', 'wp-content/uploads/banc/lot/d3/f13.bin', 'wp-content/uploads/banc/lot/d5/f45.bin']
+sha256 egaux a ceux du site : OK
+deleted : ['wp-content/uploads/banc/lot/d1/f1.bin'] -> OK
+illisibles : []
+# downgraded : absent de la ligne 'Sauvegarde ... type incremental' (affiche seulement s'il n'est pas nul)
+

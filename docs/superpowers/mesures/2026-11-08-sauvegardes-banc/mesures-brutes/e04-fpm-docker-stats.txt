@@ -1,0 +1,12 @@
+12:07:35
+g2rd-p4-wordpress-fpm-1 cpu=9.25% mem=53.72MiB / 15.53GiB
+g2rd-p4-wordpress-fpm-db-1 cpu=0.19% mem=294.5MiB / 15.53GiB
+12:07:42
+g2rd-p4-wordpress-fpm-1 cpu=48.00% mem=70.34MiB / 15.53GiB
+g2rd-p4-wordpress-fpm-db-1 cpu=10.82% mem=295MiB / 15.53GiB
+12:07:50
+g2rd-p4-wordpress-fpm-1 cpu=7.33% mem=92.89MiB / 15.53GiB
+g2rd-p4-wordpress-fpm-db-1 cpu=2.62% mem=294.2MiB / 15.53GiB
+12:07:57
+g2rd-p4-wordpress-fpm-1 cpu=0.00% mem=97.75MiB / 15.53GiB
+g2rd-p4-wordpress-fpm-db-1 cpu=0.01% mem=294.2MiB / 15.53GiB

@@ -1,0 +1,64 @@
+# E12 ols : processus lsphp tué en pleine tranche
+
+### processus tué  [e12-ols-kill.txt]
+35 327
+kill -9 327 (lsphp:/var/www/vhosts/wordpress/html/index.php )
+
+
+### tranche tuée (réponse du mandataire)  [e12-ols-tranche-tuee.txt]
+résumé : HTTP 401 {"code": "g2rd_connector_signature_replayed"}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://ols.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=401
+duree_s=4.659
+signature_check=failed; code=signature_replayed
+corps :
+{
+    "code": "g2rd_connector_signature_replayed",
+    "message": "Signature de la requête absente ou invalide.",
+    "data": {
+        "status": 401
+    }
+}
+
+
+### reprise et relecture exacte  [e12-ols-reprise.txt]
+# debut 2026-11-08T13:28:11+01:00
+Sauvegarde ebdd4187aa3e36b15d3413e43707cb1c : phase db, type full
+Tranche 1 : phase files, 2 segments écrits, 2 en attente, 13170 ms
+Tranche 2 : phase files, 2 segments écrits, 2 en attente, 2944 ms
+Segment 0 déposé : stored
+Segment 1 déposé : stored
+Tranche 3 : phase files, 4 segments écrits, 2 en attente, 2718 ms
+Tranche 4 : phase files, 4 segments écrits, 2 en attente, 763 ms
+Segment 2 déposé : stored
+Segment 3 déposé : stored
+Tranche 5 : phase files, 6 segments écrits, 2 en attente, 2881 ms
+Tranche 6 : phase files, 6 segments écrits, 2 en attente, 723 ms
+Segment 4 déposé : stored
+Segment 5 déposé : stored
+Tranche 7 : phase files, 8 segments écrits, 2 en attente, 2797 ms
+Tranche 8 : phase files, 8 segments écrits, 2 en attente, 588 ms
+Segment 6 déposé : stored
+Segment 7 déposé : stored
+Tranche 9 : phase upload, 9 segments écrits, 1 en attente, 129 ms
+Tranche 10 : phase upload, 9 segments écrits, 1 en attente, 40 ms
+Segment 8 déposé : stored
+Tranche 11 : phase finalize, 9 segments écrits, 0 en attente, 72 ms
+Dépôt de index.sig : stored
+Dépôt de index : stored
+Tranche 12 : phase idle, 0 segments écrits, 0 en attente, 0 ms
+OK sauvegarde ebdd4187aa3e36b15d3413e43707cb1c : 9 segments, 12 tranches, 36 s
+Segment 0 relu et déchiffré
+Segment 1 relu et déchiffré
+Segment 2 relu et déchiffré
+Segment 3 relu et déchiffré
+Segment 4 relu et déchiffré
+Segment 5 relu et déchiffré
+Segment 6 relu et déchiffré
+Segment 7 relu et déchiffré
+Segment 8 relu et déchiffré
+OK relev� C:\Users\gerar\Downloads\DeveloppementWeb\G2RD-Projet\G2RD_manager_projet\.claude\worktrees\sauvegardes-module/tools/banc-sauvegardes/var/ebdd4187aa3e36b15d3413e43707cb1c/releve.json : 4080 fichiers, 14 tables, 4629 lignes de manifeste, 0 illisibles
+OK arbre reconstruit identique au site : 4080 fichiers
+# fin 2026-11-08T13:29:12+01:00 duree_s=61 code=0
+

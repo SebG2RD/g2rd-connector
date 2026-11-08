@@ -1,0 +1,55 @@
+# E1 ols avec --route=async (exécution après réponse)
+
+### pilote, vérifications et états des exécutions  [e01-ols-async.txt]
+# debut 2026-11-08T13:00:57+01:00
+Clé de site reçue : version 1, empreinte 62cfeaa451873ad1c98d6616c3d1ee91
+Sauvegarde ebea298abd01dce246682638abef2838 : phase db, type full
+Tranche 1 : phase files, 2 segments écrits, 2 en attente, 13110 ms
+Tranche 2 : phase files, 2 segments écrits, 2 en attente, 533 ms
+Segment 0 déposé : stored
+Segment 1 déposé : stored
+Tranche 3 : phase files, 4 segments écrits, 2 en attente, 2738 ms
+Tranche 4 : phase files, 4 segments écrits, 2 en attente, 905 ms
+Segment 2 déposé : stored
+Segment 3 déposé : stored
+Tranche 5 : phase files, 6 segments écrits, 2 en attente, 3239 ms
+Tranche 6 : phase files, 6 segments écrits, 2 en attente, 881 ms
+Segment 4 déposé : stored
+Segment 5 déposé : stored
+Tranche 7 : phase files, 8 segments écrits, 2 en attente, 2864 ms
+Tranche 8 : phase files, 8 segments écrits, 2 en attente, 651 ms
+Segment 6 déposé : stored
+Segment 7 déposé : stored
+Tranche 9 : phase upload, 9 segments écrits, 1 en attente, 110 ms
+Tranche 10 : phase upload, 9 segments écrits, 1 en attente, 58 ms
+Segment 8 déposé : stored
+Tranche 11 : phase finalize, 9 segments écrits, 0 en attente, 92 ms
+Dépôt de index.sig : stored
+Dépôt de index : stored
+Tranche 12 : phase idle, 0 segments écrits, 0 en attente, 0 ms
+OK sauvegarde ebea298abd01dce246682638abef2838 : 9 segments, 12 tranches, 41 s
+Segment 0 relu et déchiffré
+Segment 1 relu et déchiffré
+Segment 2 relu et déchiffré
+Segment 3 relu et déchiffré
+Segment 4 relu et déchiffré
+Segment 5 relu et déchiffré
+Segment 6 relu et déchiffré
+Segment 7 relu et déchiffré
+Segment 8 relu et déchiffré
+OK relev� C:\Users\gerar\Downloads\DeveloppementWeb\G2RD-Projet\G2RD_manager_projet\.claude\worktrees\sauvegardes-module/tools/banc-sauvegardes/var/ebea298abd01dce246682638abef2838/releve.json : 4080 fichiers, 14 tables, 4627 lignes de manifeste, 0 illisibles
+OK arbre reconstruit identique au site : 4080 fichiers
+# fin 2026-11-08T13:02:04+01:00 duree_s=67 code=0
+# verifications de E1 async (script verif_e1.py)
+manifeste : fichiers 4080 dossiers 529 liens 2 | totals.files 4611 = 4611 OK
+releve.json : fichiers reconstruits 4080 (= lignes file/stored avec contenu : 4080 ) OK
+liens vus comme link : ['wp-content/uploads/banc/lien-etc', 'wp-content/uploads/banc/lien-plugins']
+fichiers sous les liens (doit etre vide) : []
+chemins exclus presents (doit etre vide) : []
+tables du dump 14 | tables du site hors wp_new_site_* 14 OK
+nom non UTF-8 present : True | gros-150.bin reparti : True | taille 157286400
+fichier r�parti : wp-content/uploads/banc/gros-150.bin sur 3 segments [1, 2, 3]
+fichier r�parti : hex:77702d636f6e7465� sur 2 segments [6, 7]
+# etats des executions en arriere-plan (g2rd_cmdrun_*) :
+     17 "state":"done"
+

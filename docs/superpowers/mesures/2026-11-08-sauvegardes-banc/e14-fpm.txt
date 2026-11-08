@@ -1,0 +1,100 @@
+# E14 fpm : verrou
+
+### (a) verrou tenu à la main : backup_start  [e14-start.txt]
+résumé : HTTP 500 {"command": "backup_start", "status": "failed", "error_code": "backup_slice_running", "retry_after": 25}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://fpm.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=500
+duree_s=0.260
+signature_check=ok
+corps :
+{
+    "command": "backup_start",
+    "status": "failed",
+    "result": null,
+    "error": "L’opération n’a pas été lancée : une tranche de sauvegarde se termine sur ce site. Rien n’a été modifié. Cause probable : la sauvegarde copiait le site à cet instant. Action : aucune, la plateforme réessaie seule dans quelques secondes.",
+    "at": "2026-11-08T11:36:19+00:00",
+    "error_code": "backup_slice_running",
+    "retry_after": 25,
+    "signature_check": {
+        "status": "ok"
+    }
+}
+
+
+### (a) update_plugin, sauvegardes allumées  [e14-maj.txt]
+résumé : HTTP 500 {"command": "update_plugin", "status": "failed", "error_code": "backup_slice_running", "retry_after": 25}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://fpm.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=500
+duree_s=0.135
+signature_check=ok
+corps :
+{
+    "command": "update_plugin",
+    "status": "failed",
+    "result": null,
+    "error": "L’opération n’a pas été lancée : une tranche de sauvegarde se termine sur ce site. Rien n’a été modifié. Cause probable : la sauvegarde copiait le site à cet instant. Action : aucune, la plateforme réessaie seule dans quelques secondes.",
+    "at": "2026-11-08T11:36:20+00:00",
+    "error_code": "backup_slice_running",
+    "retry_after": 25,
+    "signature_check": {
+        "status": "ok"
+    }
+}
+
+
+### session MariaDB qui tient le verrou  [e14-session.txt]
+1
+0
+
+
+### (b) hébergeur sans GET_LOCK : backup_start  [e14-start-sans-verrou.txt]
+résumé : HTTP 500 {"command": "backup_start", "status": "failed", "error_code": "backup_lock_unavailable", "retry_after": 30}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://fpm.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=500
+duree_s=0.167
+signature_check=ok
+corps :
+{
+    "command": "backup_start",
+    "status": "failed",
+    "result": null,
+    "error": "La sauvegarde n’a pas avancé : elle ne peut pas se protéger d’une mise à jour simultanée sur ce site. Rien n’a été copié par cette demande. Cause probable : la base de données de l’hébergement refuse les verrous, ou elle est momentanément indispo
+    "at": "2026-11-08T11:37:00+00:00",
+    "error_code": "backup_lock_unavailable",
+    "retry_after": 30,
+    "signature_check": {
+        "status": "ok"
+    }
+}
+
+
+### (c) case décochée, verrou tenu : update_plugin  [e14-maj-case-decochee.txt]
+résumé : HTTP 200 {"command": "update_plugin", "status": "done", "result.updated": true, "result.version_before": "1.0", "result.version_after": "1.1", "result.reason": null}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://fpm.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=200
+duree_s=1.591
+signature_check=ok
+corps :
+{
+    "command": "update_plugin",
+    "status": "done",
+    "result": {
+        "updated": true,
+        "file": "banc-extension/banc-extension.php",
+        "version_before": "1.0",
+        "version_after": "1.1",
+        "was_active": true,
+        "reactivated": true,
+        "reason": null
+    },
+    "error": null,
+    "at": "2026-11-08T11:37:39+00:00",
+    "signature_check": {
+        "status": "ok"
+    }
+}
+

@@ -1,0 +1,35 @@
+# E18 ols : IPv4 vers le stockage
+
+### résumé  [e18-ols-resume.txt]
+##### E18 ols
+true
+192.168.0.13
+OK sauvegarde bae96a8442c5ff8e09fa5ebd510b7a4e : 8 segments, 10 tranches, 23 s
+     12 tcp 0120A8C0:8910
+     11 tcp 0120A8C0:8912
+     11 tcp 0120A8C0:8922
+     14 tcp 0120A8C0:8926
+     16 tcp 0120A8C0:8932
+      6 tcp 0120A8C0:8936
+      1 tcp 0120A8C0:C892
+      1 tcp 0120A8C0:C8A2
+      1 tcp 0120A8C0:C8A6
+      1 tcp 0120A8C0:C8AA
+      1 tcp 0120A8C0:DAA4
+      1 tcp 0120A8C0:DAC0
+      1 tcp 0120A8C0:DACC
+      1 tcp 0120A8C0:DAEA
+      1 tcp 0120A8C0:DAF0
+      1 tcp 0120A8C0:DB06
+     14 tcp 0120A8C0:DB08
+      5 tcp 0D00A8C0:ABEC
+      1 tcp 0D00A8C0:ABFA
+      4 tcp 0D00A8C0:AC02
+      3 tcp 0D00A8C0:E92C
+      1 tcp 0D00A8C0:E93A
+      3 tcp 0D00A8C0:E94A
+      3 tcp 0D00A8C0:E956
+      4 tcp 0D00A8C0:E96A
+      2 tcp 0D00A8C0:E97C
+ipv4 stockage remis a faux
+

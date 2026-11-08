@@ -1,0 +1,247 @@
+# E20 ols : écrans (captures dans captures/)
+
+### empreinte attendue (Fingerprint::display)  [e20-empreinte-attendue-ols.txt]
+7c7c 0d9b 0a0a cd1c 70e1 d6a1 0b76 e478
+
+
+### page de secours, case cochée  [e20-ols-case-cochee.json]
+{
+ "g2rd_backup_enabled": {
+  "checked": true,
+  "disabled": false
+ },
+ "g2rd_force_ipv4_to_storage": {
+  "checked": false,
+  "disabled": false
+ },
+ "codes": [
+  "7c7c 0d9b 0a0a cd1c 70e1 d6a1 0b76 e478"
+ ],
+ "ligne_sauvegardes": "Sauvegardes chiffrées G2RD WP Manager peut sauvegarder ce site : base et fichiers sont chiffrés avant de quitter le serveur. Décochée : aucune sauvegarde ne part, et les mises à jour se déroulent exactement comme avant. Empreinte de la c
+ "titre": "G2RD Connector"
+}
+
+### page de secours, case décochée  [e20-ols-case-decochee.json]
+{
+ "g2rd_backup_enabled": {
+  "checked": false,
+  "disabled": false
+ },
+ "g2rd_force_ipv4_to_storage": {
+  "checked": false,
+  "disabled": false
+ },
+ "codes": [
+  "7c7c 0d9b 0a0a cd1c 70e1 d6a1 0b76 e478"
+ ],
+ "ligne_sauvegardes": "Sauvegardes chiffrées G2RD WP Manager peut sauvegarder ce site : base et fichiers sont chiffrés avant de quitter le serveur. Décochée : aucune sauvegarde ne part, et les mises à jour se déroulent exactement comme avant. Empreinte de la c
+ "titre": "G2RD Connector"
+}
+
+### page de secours, constante  [e20-ols-constante.json]
+{
+ "g2rd_backup_enabled": {
+  "checked": true,
+  "disabled": true
+ },
+ "g2rd_force_ipv4_to_storage": {
+  "checked": false,
+  "disabled": false
+ },
+ "codes": [
+  "7c7c 0d9b 0a0a cd1c 70e1 d6a1 0b76 e478"
+ ],
+ "ligne_sauvegardes": "Sauvegardes chiffrées G2RD WP Manager peut sauvegarder ce site : base et fichiers sont chiffrés avant de quitter le serveur. Décochée : aucune sauvegarde ne part, et les mises à jour se déroulent exactement comme avant. Désactivées par l
+ "titre": "G2RD Connector"
+}
+
+### panneau React, case cochée  [e20-ols-panneau-case-cochee.json]
+{
+ "racine": true,
+ "texte": "Connexion au manager\n\nLie ce site WordPress au tableau de bord centralisé G2RD WP Manager.\n\nConnecté\nSITE\nn° 990001\nDERNIER SIGNE DE VIE\n8 nov. 2026, 13:42\nADRESSE DU MANAGER\n\nAdresse de votre tableau",
+ "lignes": [
+  "IPv4 vers le manager",
+  "À activer si l’hébergeur bloque l’IPv6 sortante du serveur : signes de vie, événements et enrôlement passent alors par l’IPv4. Ne concerne que les appels vers le manager.",
+  "Sauvegardes chiffrées",
+  "G2RD WP Manager peut sauvegarder ce site : base et fichiers sont chiffrés avant de quitter le serveur. Empreinte de la clé de signature du site, à comparer à celle de la page d’approbation du service de clés G2RD : 7c7c 0d9b 0a0a cd1c 70e1 d6a1 0b76 e478.",
+  "IPv4 vers le stockage des sauvegardes",
+  "À activer si l’hébergeur bloque l’IPv6 sortante du serveur : l’envoi des sauvegardes vers le stockage passe alors par l’IPv4. Ne concerne que cet envoi."
+ ],
+ "cases": [
+  {
+   "label": "",
+   "checked": true,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": true,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": true,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": false,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": true,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": true,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": false,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": false,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": false,
+   "disabled": false
+  }
+ ],
+ "groupes": [
+  "7c7c 0d9b 0a0a cd1c 70e1 d6a1 0b76 e478"
+ ],
+ "erreurs_js": []
+}
+
+### panneau React, case décochée  [e20-ols-panneau-case-decochee.json]
+{
+ "racine": true,
+ "texte": "Connexion au manager\n\nLie ce site WordPress au tableau de bord centralisé G2RD WP Manager.\n\nConnecté\nSITE\nn° 990001\nDERNIER SIGNE DE VIE\n8 nov. 2026, 13:42\nADRESSE DU MANAGER\n\nAdresse de votre tableau",
+ "lignes": [
+  "IPv4 vers le manager",
+  "À activer si l’hébergeur bloque l’IPv6 sortante du serveur : signes de vie, événements et enrôlement passent alors par l’IPv4. Ne concerne que les appels vers le manager.",
+  "Sauvegardes chiffrées",
+  "Désactivées : aucune sauvegarde ne part de ce site, et les mises à jour se déroulent exactement comme avant.",
+  "IPv4 vers le stockage des sauvegardes",
+  "À activer si l’hébergeur bloque l’IPv6 sortante du serveur : l’envoi des sauvegardes vers le stockage passe alors par l’IPv4. Ne concerne que cet envoi."
+ ],
+ "cases": [
+  {
+   "label": "",
+   "checked": true,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": true,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": true,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": false,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": true,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": false,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": false,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": false,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": false,
+   "disabled": false
+  }
+ ],
+ "groupes": [],
+ "erreurs_js": []
+}
+
+### panneau React, constante  [e20-ols-panneau-constante.json]
+{
+ "racine": true,
+ "texte": "Connexion au manager\n\nLie ce site WordPress au tableau de bord centralisé G2RD WP Manager.\n\nConnecté\nSITE\nn° 990001\nDERNIER SIGNE DE VIE\n8 nov. 2026, 13:42\nADRESSE DU MANAGER\n\nAdresse de votre tableau",
+ "lignes": [
+  "IPv4 vers le manager",
+  "À activer si l’hébergeur bloque l’IPv6 sortante du serveur : signes de vie, événements et enrôlement passent alors par l’IPv4. Ne concerne que les appels vers le manager.",
+  "Sauvegardes chiffrées",
+  "Désactivées par la constante G2RD_CONNECTOR_DISABLE_BACKUP de wp-config.php : aucune sauvegarde ne part de ce site. Retirez cette constante pour pouvoir les activer.",
+  "IPv4 vers le stockage des sauvegardes",
+  "À activer si l’hébergeur bloque l’IPv6 sortante du serveur : l’envoi des sauvegardes vers le stockage passe alors par l’IPv4. Ne concerne que cet envoi."
+ ],
+ "cases": [
+  {
+   "label": "",
+   "checked": true,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": true,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": true,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": false,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": true,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": true,
+   "disabled": true
+  },
+  {
+   "label": "",
+   "checked": false,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": false,
+   "disabled": false
+  },
+  {
+   "label": "",
+   "checked": false,
+   "disabled": false
+  }
+ ],
+ "groupes": [],
+ "erreurs_js": []
+}

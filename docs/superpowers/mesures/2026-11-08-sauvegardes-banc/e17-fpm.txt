@@ -1,0 +1,50 @@
+# E17 fpm : case cochée pendant une mise à jour lente (après correction du crochet du banc)
+
+### update_plugin  [e17-maj.txt]
+résumé : HTTP 200 {"command": "update_plugin", "status": "done", "result.updated": true, "result.version_before": "1.0", "result.version_after": "1.1", "result.reason": null}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://fpm.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=200
+duree_s=41.383
+signature_check=ok
+corps :
+{
+    "command": "update_plugin",
+    "status": "done",
+    "result": {
+        "updated": true,
+        "file": "banc-extension/banc-extension.php",
+        "version_before": "1.0",
+        "version_after": "1.1",
+        "was_active": true,
+        "reactivated": true,
+        "reason": null
+    },
+    "error": null,
+    "at": "2026-11-08T11:44:11+00:00",
+    "signature_check": {
+        "status": "ok"
+    }
+}
+
+
+### tranche après la mise à jour  [e17-tranche-apres.txt]
+résumé : HTTP 500 {"command": "backup_step", "status": "failed", "error_code": "backup_interrupted"}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://fpm.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=500
+duree_s=0.537
+signature_check=ok
+corps :
+{
+    "command": "backup_step",
+    "status": "failed",
+    "result": null,
+    "error": "La sauvegarde a été interrompue et ne sera pas terminée : une mise à jour a changé le site pendant la copie, et une sauvegarde mélangée ne serait pas restaurable. Ce qu’elle avait préparé sur le site est retiré ; elle n’est pas comptée comme réus
+    "at": "2026-11-08T11:44:20+00:00",
+    "error_code": "backup_interrupted",
+    "signature_check": {
+        "status": "ok"
+    }
+}
+

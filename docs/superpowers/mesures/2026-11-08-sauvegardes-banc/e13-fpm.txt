@@ -1,0 +1,64 @@
+# E13 fpm : rejeu du CDN (mandataire à 8 s)
+
+### tranche sur /command  [e13-tranche.txt]
+résumé : HTTP 401 {"code": "g2rd_connector_signature_replayed"}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://fpm.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=401
+duree_s=8.160
+signature_check=failed; code=signature_replayed
+corps :
+{
+    "code": "g2rd_connector_signature_replayed",
+    "message": "Signature de la requête absente ou invalide.",
+    "data": {
+        "status": 401
+    }
+}
+
+
+### journal du mandataire  [e13-journal-mandataire.txt]
+2026-11-08T11:34:46+00:00 client=192.168.0.3 "POST /wp-json/g2rd/v1/command" statut=200 amont=[192.168.0.10:8080] statuts_amont=[200] durees_amont=[0.417] duree=0.416
+2026/11/08 11:34:56 [error] 45#45: *4 upstream timed out (110: Operation timed out) while reading response header from upstream, client: 192.168.0.3, server: fpm.test, request: "POST /wp-json/g2rd/v1/command HTTP/1.1", upstream: "http://192.168.0.10:80/wp-json
+2026-11-08T11:34:56+00:00 client=192.168.0.3 "POST /wp-json/g2rd/v1/command" statut=401 amont=[192.168.0.10:80, 192.168.0.10:8080] statuts_amont=[504, 401] durees_amont=[8.008, 0.150] duree=8.159
+
+
+### reprise et relecture exacte  [e13-fpm-reprise.txt]
+# debut 2026-11-08T12:35:08+01:00
+Sauvegarde 515f0b749275bbdd1abeb8681a8e5dc8 : phase files, type full
+Tranche 1 : phase files, 2 segments écrits, 2 en attente, 661 ms
+Segment 0 déposé : stored
+Segment 1 déposé : stored
+Tranche 2 : phase files, 4 segments écrits, 2 en attente, 3121 ms
+Tranche 3 : phase files, 4 segments écrits, 2 en attente, 1011 ms
+Segment 2 déposé : stored
+Segment 3 déposé : stored
+Tranche 4 : phase files, 6 segments écrits, 2 en attente, 3338 ms
+Tranche 5 : phase files, 6 segments écrits, 2 en attente, 971 ms
+Segment 4 déposé : stored
+Segment 5 déposé : stored
+Tranche 6 : phase files, 8 segments écrits, 2 en attente, 2821 ms
+Tranche 7 : phase files, 8 segments écrits, 2 en attente, 756 ms
+Segment 6 déposé : stored
+Segment 7 déposé : stored
+Tranche 8 : phase upload, 9 segments écrits, 1 en attente, 150 ms
+Tranche 9 : phase upload, 9 segments écrits, 1 en attente, 49 ms
+Segment 8 déposé : stored
+Tranche 10 : phase finalize, 9 segments écrits, 0 en attente, 97 ms
+Dépôt de index.sig : stored
+Dépôt de index : stored
+Tranche 11 : phase idle, 0 segments écrits, 0 en attente, 0 ms
+OK sauvegarde 515f0b749275bbdd1abeb8681a8e5dc8 : 9 segments, 11 tranches, 19 s
+Segment 0 relu et déchiffré
+Segment 1 relu et déchiffré
+Segment 2 relu et déchiffré
+Segment 3 relu et déchiffré
+Segment 4 relu et déchiffré
+Segment 5 relu et déchiffré
+Segment 6 relu et déchiffré
+Segment 7 relu et déchiffré
+Segment 8 relu et déchiffré
+OK relev� C:\Users\gerar\Downloads\DeveloppementWeb\G2RD-Projet\G2RD_manager_projet\.claude\worktrees\sauvegardes-module/tools/banc-sauvegardes/var/515f0b749275bbdd1abeb8681a8e5dc8/releve.json : 4080 fichiers, 14 tables, 4629 lignes de manifeste, 0 illisibles
+OK arbre reconstruit identique au site : 4080 fichiers
+# fin 2026-11-08T12:35:55+01:00 duree_s=46 code=0
+

@@ -1,0 +1,17 @@
+# E16 fpm : commande de sauvegarde tirée de la file
+
+### HeartbeatJob::queue_outcome  [e16-fpm.txt]
+# E16 : commande backup_* tiree de la file (HeartbeatJob::queue_outcome puis result_of, le chemin de execute())
+etat avant:
+enabled True state {'phase': 'idle', 'backup_id': None, 'type': None, 'scope': None, 'segments_written': 0, 'pending': 0, 'slice_started_at': None}
+-- backup_start
+{"status":"failed","error_code":"backup_queue_unsupported","result_envoye_a_la_plateforme":{"error_code":"backup_queue_unsupported"}}
+-- backup_step
+{"status":"failed","error_code":"backup_queue_unsupported","result_envoye_a_la_plateforme":{"error_code":"backup_queue_unsupported"}}
+-- backup_abort
+{"status":"failed","error_code":"backup_queue_unsupported","result_envoye_a_la_plateforme":{"error_code":"backup_queue_unsupported"}}
+-- backup_set_key
+{"status":"failed","error_code":"backup_queue_unsupported","result_envoye_a_la_plateforme":{"error_code":"backup_queue_unsupported"}}
+etat apres:
+enabled True state {'phase': 'idle', 'backup_id': None, 'type': None, 'scope': None, 'segments_written': 0, 'pending': 0, 'slice_started_at': None}
+
