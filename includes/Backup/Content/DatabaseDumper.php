@@ -2,10 +2,14 @@
 /**
  * Dump de la base du site pour les sauvegardes (docs/backup-payload.md § 4) : tables du préfixe
  * exact, sans celles d'une installation voisine ni les vues ; `SHOW CREATE TABLE` ; lignes par lots
- * ordonnés par clé primaire (repli LIMIT/OFFSET pour une table sans clé : une ligne ajoutée ou
- * retirée pendant le dump peut alors être vue deux fois ou pas du tout, limite écrite) ; colonnes
- * binaires en hexadécimal ; lignes des options du module exclues. Reprenable par curseur, borné par
- * l'appelant ($stop). Aucune écriture dans la base.
+ * ordonnés par clé primaire et repris après la clé de la dernière ligne lue ; repli LIMIT/OFFSET
+ * pour une table sans clé, et ORDER BY la clé LIMIT/OFFSET pour une clé qui contient un ENUM ou un
+ * SET (ORDER BY les trie par leur rang, WHERE les compare comme du texte : la reprise par la clé
+ * perdrait ou doublerait des lignes). Par offset, une ligne ajoutée ou retirée pendant le dump peut
+ * être vue deux fois ou pas du tout, limite écrite (une ligne vue deux fois dans une table à clé fait
+ * échouer sa restauration sur une clé en double). Colonnes binaires en hexadécimal ; lignes des
+ * options du module exclues. Reprenable par curseur, borné par l'appelant ($stop). Aucune écriture
+ * dans la base.
  *
  * Avant toute lecture, le jeu de caractères de la session est vérifié, et de nouveau si la connexion
  * a été rouverte ; les noms s'écrivent entre accents graves selon ce jeu (ident()), jamais par
@@ -16,10 +20,13 @@
  * dump ») : jeu de l'en-tête, clé de reprise en hexadécimal (after_hex), jamais d'octet brut lu dans
  * la base ; un curseur illisible est refusé, jamais remplacé par un départ. Les lignes se lisent par
  * leurs colonnes nommées, jamais par SELECT * (une colonne INVISIBLE n'y est pas rendue) ; une
- * reprise qui repartirait du début de la table est refusée (batch()). Limite écrite : une clé
+ * reprise qui repartirait du début de la table est refusée (batch()). Limites écrites : une clé
  * primaire remplacée entre deux tranches par une autre du même nombre de colonnes n'est pas
- * détectée (la reprise compare alors les valeurs gardées à d'autres colonnes) ; une clé ajoutée
- * ou retirée, elle, est refusée.
+ * détectée (la reprise compare alors les valeurs gardées à d'autres colonnes), ni une clé qui
+ * contient un ENUM ou un SET ajoutée à une table sans clé, ou retirée (la lecture par offset
+ * continue, dans un autre ordre) ; une fois des lignes de la table lues, toute autre clé ajoutée ou
+ * retirée, et une colonne de la clé devenue ENUM ou SET ou qui cesse de l'être (la lecture
+ * changerait de sorte), sont refusées.
  *
  * Mémoire : un lot vise BATCH_BYTES (8 Mio) de valeurs ; $wpdb garde son résultat et sa conversion
  * en ARRAY_A (≈ 2 fois), l'instruction INSERT est émise par morceaux de FLUSH_BYTES (512 Kio) : le
@@ -39,7 +46,7 @@ use G2RD\Connector\Support\ArrayShape;
 
 /**
  * @phpstan-type Cursor array{table: int, after_hex: list<string>|null, offset: int, started: bool, header: bool, rows: int, create_sha256: string|null, limit: int, charset: string}
- * @phpstan-type Meta array{columns: list<string>, binary: array<string, bool>, pk: list<string>, avg_row: int}
+ * @phpstan-type Meta array{columns: list<string>, binary: array<string, bool>, pk: list<string>, seek: bool, avg_row: int}
  */
 final class DatabaseDumper {
 
@@ -95,6 +102,14 @@ final class DatabaseDumper {
 
 	/** Colonnes binaires (docs/backup-payload.md § 4 : blob, binary, varbinary, bit), lues au début du Type de SHOW FULL COLUMNS. */
 	private const BINARY_TYPE = '/\A(?:tinyblob|blob|mediumblob|longblob|binary|varbinary|bit)\b/i';
+
+	/**
+	 * Colonnes que ORDER BY trie par leur rang (ENUM : ordre de la définition ; SET : valeur
+	 * numérique) et que WHERE (clé) > (valeurs) compare comme du texte : une clé qui en contient une
+	 * ne sert pas à la reprise (essai du 08/11/2026 sur MariaDB 10.11.19 : la reprise par la clé
+	 * perdait ou doublait des lignes, clé simple comme composée). Lues au début du Type.
+	 */
+	private const RANKED_TYPE = '/\A(?:enum|set)\(/i';
 
 	/** Une instruction INSERT est émise dès qu'elle dépasse cette taille (octets). */
 	private const FLUSH_BYTES = 524288;
@@ -445,7 +460,7 @@ final class DatabaseDumper {
 				$fetched         = count( $batch );
 				unset( $batch, $kept );
 				if ( $fetched > 0 ) {
-					if ( [] === $meta['pk'] ) {
+					if ( ! $meta['seek'] ) {
 						$cursor['offset'] += $fetched;
 					} else {
 						$cursor['after_hex'] = $this->last_key;
@@ -760,9 +775,14 @@ final class DatabaseDumper {
 	}
 
 	/**
-	 * Colonnes (et lesquelles sont binaires), clé primaire dans son ordre, taille moyenne des lignes.
-	 * Chaque nom de colonne passe par ident() : un nom mal formé dans le jeu est refusé avant le
-	 * premier octet de la table et avant toute lecture de ses lignes.
+	 * Colonnes (et lesquelles sont binaires), clé primaire dans son ordre, lecture de la table (seek),
+	 * taille moyenne des lignes. Chaque nom de colonne passe par ident() : un nom mal formé dans le jeu
+	 * est refusé avant le premier octet de la table et avant toute lecture de ses lignes.
+	 *
+	 * seek est vrai pour une table dont la clé primaire sert à la reprise (WHERE (clé) > (curseur)) :
+	 * elle en a une, et aucune de ses colonnes n'est un ENUM ou un SET (RANKED_TYPE). Faux, la table se
+	 * lit par offset : ORDER BY la clé LIMIT … OFFSET … si elle en a une (ordre déterministe, la clé
+	 * étant unique), LIMIT … OFFSET … sinon.
 	 *
 	 * @return Meta
 	 * @throws BackupRefused DB_CHARSET_MISMATCH, DB_NAME_UNSUPPORTED, DB_TABLES_NOT_FOUND (non réessayables), DB_READ_FAILED.
@@ -770,14 +790,17 @@ final class DatabaseDumper {
 	private function metadata( string $table, string $charset ): array {
 		$names  = [];
 		$binary = [];
+		$ranked = [];
 		foreach ( $this->rows( 'SHOW FULL COLUMNS FROM ' . self::ident( $table, $charset ), $table ) as $column ) {
 			$name = (string) ( $column['Field'] ?? '' );
 			if ( '' === $name ) {
 				continue;
 			}
 			self::ident( $name, $charset );
+			$type            = (string) ( $column['Type'] ?? '' );
 			$names[]         = $name;
-			$binary[ $name ] = 1 === preg_match( self::BINARY_TYPE, (string) ( $column['Type'] ?? '' ) );
+			$binary[ $name ] = 1 === preg_match( self::BINARY_TYPE, $type );
+			$ranked[ $name ] = 1 === preg_match( self::RANKED_TYPE, $type );
 		}
 		if ( [] === $names ) {
 			// Aucune colonne lue : ni SELECT ni INSERT ne s'écriraient ; refus avant le premier octet de la table.
@@ -785,11 +808,13 @@ final class DatabaseDumper {
 		}
 		$keys = $this->rows( 'SHOW KEYS FROM ' . self::ident( $table, $charset ) . " WHERE Key_name = 'PRIMARY'", $table );
 		usort( $keys, static fn ( array $a, array $b ): int => (int) ( $a['Seq_in_index'] ?? 0 ) <=> (int) ( $b['Seq_in_index'] ?? 0 ) );
+		$pk = array_values( array_map( static fn ( array $key ): string => (string) ( $key['Column_name'] ?? '' ), $keys ) );
 
 		return [
 			'columns' => $names,
 			'binary'  => $binary,
-			'pk'      => array_values( array_map( static fn ( array $key ): string => (string) ( $key['Column_name'] ?? '' ), $keys ) ),
+			'pk'      => $pk,
+			'seek'    => [] !== $pk && [] === array_filter( $pk, static fn ( string $c ): bool => $ranked[ $c ] ?? false ),
 			'avg_row' => $this->avg_row( $table ),
 		];
 	}
@@ -814,7 +839,8 @@ final class DatabaseDumper {
 	}
 
 	/**
-	 * Lot suivant : par clé primaire (comparaison de tuples, ordre de la clé), sinon LIMIT/OFFSET.
+	 * Lot suivant : par clé primaire (comparaison de tuples, ordre de la clé) si elle sert à la
+	 * reprise (seek, metadata()) ; sinon par offset, ORDER BY la clé s'il y en a une (ENUM ou SET).
 	 * Colonnes nommées, celles de SHOW FULL COLUMNS dans leur ordre, jamais SELECT * : une colonne
 	 * INVISIBLE (MySQL 8.0.23+, MariaDB 10.3+), dont my_row_id, la clé que MySQL 8.0.30+ ajoute avec
 	 * sql_generate_invisible_primary_key, n'est rendue que nommée ; les colonnes lues sont ainsi
@@ -822,10 +848,13 @@ final class DatabaseDumper {
 	 * par key_literal() (hexadécimal, quel que soit le sql_mode du site), entiers convertis.
 	 *
 	 * Jamais une reprise au début de la table, qui recopierait des lignes (§ 4, « Curseur du dump ») :
-	 * refus avant la requête si le curseur n'a pas autant de valeurs que la clé, ou avance par offset
-	 * une table qui a maintenant une clé (ajoutée entre deux tranches) ; refus avant d'émettre le lot
-	 * si une ligne lue n'a pas une colonne de la clé (key_hex()), ou a la clé du curseur : la reprise
-	 * n'a pas avancé (WHERE (clé) > (curseur) ne rend jamais la ligne du curseur, déjà écrite).
+	 * refus avant la requête si le curseur a une clé de reprise et que la table ne se lit pas par la
+	 * clé (clé retirée, ou colonne devenue ENUM ou SET), ou pas autant de valeurs que la clé, ou s'il
+	 * avance par offset une table qui se lit maintenant par la clé (clé ajoutée entre deux tranches,
+	 * ou colonne qui n'est plus un ENUM ou un SET) ;
+	 * refus avant d'émettre le lot si une ligne lue n'a pas une colonne de la clé (key_hex()), ou a la
+	 * clé du curseur : la reprise n'a pas avancé (WHERE (clé) > (curseur) ne rend jamais la ligne du
+	 * curseur, déjà écrite).
 	 *
 	 * @param Meta   $meta
 	 * @param Cursor $cursor
@@ -834,39 +863,41 @@ final class DatabaseDumper {
 	 */
 	private function batch( string $table, array $meta, array $cursor ): array {
 		$pk      = $meta['pk'];
+		$seek    = $meta['seek'];
 		$limit   = $cursor['limit'];
 		$charset = $cursor['charset'];
 		$after   = $cursor['after_hex'];
-		if ( null !== $after && count( $after ) !== count( $pk ) ) {
-			// Table sans clé primaire avec une reprise, ou clé changée pendant la sauvegarde : jamais un WHERE aux valeurs décalées.
+		if ( null !== $after && ( ! $seek || count( $after ) !== count( $pk ) ) ) {
+			// Reprise par la clé d'une table qui se lit par offset (sans clé, ou clé devenue ENUM ou SET), ou clé changée
+			// pendant la sauvegarde : jamais un WHERE aux valeurs décalées, ni un offset 0 qui recopierait la table.
 			throw new BackupRefused( BackupRefused::DB_CURSOR_INVALID ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
 		}
-		if ( [] !== $pk && 0 !== $cursor['offset'] ) {
-			// Table commencée par LIMIT/OFFSET (sans clé) qui a reçu une clé primaire entre deux tranches : le lot
-			// par la clé repartirait du début et recopierait les lignes déjà écrites. Une table à clé n'avance jamais par offset.
+		if ( $seek && 0 !== $cursor['offset'] ) {
+			// Table commencée par offset (sans clé, ou clé à ENUM ou SET) qui se lit maintenant par la clé (clé ajoutée ou
+			// colonne changée entre deux tranches) : le lot par la clé repartirait du début et recopierait les lignes déjà écrites.
 			throw new BackupRefused( BackupRefused::DB_CURSOR_INVALID ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
 		}
-		$from = 'SELECT ' . implode( ',', array_map( static fn ( string $c ): string => self::ident( $c, $charset ), $meta['columns'] ) ) . ' FROM ' . self::ident( $table, $charset );
-		if ( [] === $pk ) {
-			$sql = $from . ' LIMIT ' . (int) $limit . ' OFFSET ' . (int) $cursor['offset'];
+		$from    = 'SELECT ' . implode( ',', array_map( static fn ( string $c ): string => self::ident( $c, $charset ), $meta['columns'] ) ) . ' FROM ' . self::ident( $table, $charset );
+		$columns = implode( ',', array_map( static fn ( string $c ): string => self::ident( $c, $charset ), $pk ) );
+		if ( ! $seek ) {
+			// ORDER BY une clé (unique) qui contient un ENUM ou un SET : ordre déterministe d'un lot à l'autre.
+			$sql = $from . ( [] === $pk ? '' : ' ORDER BY ' . $columns ) . ' LIMIT ' . (int) $limit . ' OFFSET ' . (int) $cursor['offset'];
+		} elseif ( null === $after ) {
+			$sql = $from . ' ORDER BY ' . $columns . ' LIMIT ' . (int) $limit;
 		} else {
-			$columns = implode( ',', array_map( static fn ( string $c ): string => self::ident( $c, $charset ), $pk ) );
-			if ( null === $after ) {
-				$sql = $from . ' ORDER BY ' . $columns . ' LIMIT ' . (int) $limit;
-			} else {
-				$values = implode(
-					',',
-					array_map(
-						static fn ( string $c, string $h ): string => self::key_literal( (string) hex2bin( $h ), $meta['binary'][ $c ] ?? false, $charset ),
-						$pk,
-						$after
-					)
-				);
-				$sql    = $from . ' WHERE (' . $columns . ') > (' . $values . ') ORDER BY ' . $columns . ' LIMIT ' . (int) $limit;
-			}
+			$values = implode(
+				',',
+				array_map(
+					static fn ( string $c, string $h ): string => self::key_literal( (string) hex2bin( $h ), $meta['binary'][ $c ] ?? false, $charset ),
+					$pk,
+					$after
+				)
+			);
+			$sql    = $from . ' WHERE (' . $columns . ') > (' . $values . ') ORDER BY ' . $columns . ' LIMIT ' . (int) $limit;
 		}
 		$rows = $this->rows( $sql, $table );
-		// Clé de la dernière ligne relevée ici, en hexadécimal : l'appelant peut libérer le lot avant d'avancer.
+		// Clé de chaque ligne contrôlée (présente, non nulle), même lue par offset ; celle de la dernière, relevée ici en
+		// hexadécimal, sert à la reprise par la clé : l'appelant peut libérer le lot avant d'avancer.
 		$this->last_key = null;
 		if ( [] !== $pk ) {
 			foreach ( $rows as $row ) {

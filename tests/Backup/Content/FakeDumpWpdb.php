@@ -8,6 +8,9 @@
  * pas écrite comme le fait key_literal(), et SELECT * (une colonne INVISIBLE n'y est pas rendue :
  * les lignes se lisent par la liste exacte des colonnes de la table) : un test ne valide jamais une
  * requête que la vraie base lirait autrement, ni une écriture qui dépend du sql_mode du site.
+ * Comme la vraie base (essai du 08/11/2026 sur MariaDB 10.11.19), ORDER BY trie une colonne ENUM
+ * par le rang de sa valeur dans la définition et un SET par sa valeur numérique, alors que
+ * WHERE (clé) > (valeurs) les compare comme du texte.
  *
  * @package G2RD\Connector
  */
@@ -269,8 +272,9 @@ final class FakeDumpWpdb {
 
 	/**
 	 * Lignes d'un SELECT <colonnes> FROM : LIMIT … OFFSET … pour une table sans clé primaire, ORDER BY
-	 * la clé puis LIMIT sinon, avec WHERE (clé) > (valeurs) pour reprendre ; les valeurs se relisent
-	 * par l'inverse de key_literal(), et lui seul.
+	 * la clé puis LIMIT sinon, avec WHERE (clé) > (valeurs) pour reprendre, ou OFFSET … après LIMIT
+	 * (sans WHERE) ; les valeurs se relisent par l'inverse de key_literal(), et lui seul. Le tri de
+	 * ORDER BY et la comparaison de WHERE sont ceux de la vraie base (compare_keys()).
 	 *
 	 * @param string $rest Texte qui suit le nom de la table (commence par une espace).
 	 * @return list<array<string, string|null>>
@@ -278,6 +282,7 @@ final class FakeDumpWpdb {
 	private function select( string $name, string $rest ): array {
 		$table = $this->tables[ $name ];
 		$pk    = $table['pk'];
+		$types = $table['columns'];
 		if ( [] === $pk ) {
 			if ( 1 !== preg_match( '/\A LIMIT (\d+) OFFSET (\d+)\z/', $rest, $m ) ) {
 				throw new \LogicException( 'Lecture d\'une table sans clé primaire hors de LIMIT … OFFSET … : ' . $rest );
@@ -304,17 +309,22 @@ final class FakeDumpWpdb {
 		} else {
 			throw new \LogicException( 'Lecture d\'une table à clé primaire hors de ORDER BY la clé : ' . $rest );
 		}
+		$offset = 0;
+		if ( null === $after && 1 === preg_match( '/\A([1-9]\d*) OFFSET (\d+)\z/', $limit, $m ) ) {
+			$limit  = $m[1];
+			$offset = (int) $m[2];
+		}
 		if ( 1 !== preg_match( '/\A[1-9]\d*\z/', $limit ) ) {
 			throw new \LogicException( 'LIMIT illisible : ' . $rest );
 		}
 		$rows = $this->rows_of( $name );
-		usort( $rows, static fn ( array $a, array $b ): int => self::compare_keys( $a, $b, $pk ) );
+		usort( $rows, static fn ( array $a, array $b ): int => self::compare_keys( $a, $b, $pk, $types, true ) );
 		if ( null !== $after && empty( $table['where_ignored'] ) ) {
 			$key  = array_combine( $pk, $after );
-			$rows = array_values( array_filter( $rows, static fn ( array $row ): bool => self::compare_keys( $row, $key, $pk ) > 0 ) );
+			$rows = array_values( array_filter( $rows, static fn ( array $row ): bool => self::compare_keys( $row, $key, $pk, $types, false ) > 0 ) );
 		}
 
-		return $this->projected( $name, array_slice( $rows, 0, (int) $limit ) );
+		return $this->projected( $name, array_slice( $rows, $offset, (int) $limit ) );
 	}
 
 	/**
@@ -400,20 +410,69 @@ final class FakeDumpWpdb {
 	}
 
 	/**
-	 * @param array<string, mixed> $a
-	 * @param array<string, mixed> $b
-	 * @param list<string>         $pk
+	 * Deux clés comparées colonne après colonne (ordre lexicographique, comme une comparaison de
+	 * tuples). Une colonne ENUM ou SET se compare par son rang pour ORDER BY ($by_rank vrai), comme du
+	 * texte pour WHERE (clé) > (valeurs) ; toute autre colonne, de la même façon des deux côtés.
+	 *
+	 * @param array<string, mixed>  $a
+	 * @param array<string, mixed>  $b
+	 * @param list<string>          $pk
+	 * @param array<string, string> $types Type de chaque colonne (SHOW FULL COLUMNS).
 	 */
-	private static function compare_keys( array $a, array $b, array $pk ): int {
+	private static function compare_keys( array $a, array $b, array $pk, array $types, bool $by_rank ): int {
 		foreach ( $pk as $column ) {
-			$x     = (string) $a[ $column ];
-			$y     = (string) $b[ $column ];
-			$order = is_numeric( $x ) && is_numeric( $y ) ? ( (float) $x <=> (float) $y ) : strcmp( $x, $y );
+			$x       = (string) $a[ $column ];
+			$y       = (string) $b[ $column ];
+			$members = self::members( $types[ $column ] ?? '' );
+			if ( null !== $members ) {
+				$order = $by_rank ? ( self::rank( $members, $x ) <=> self::rank( $members, $y ) ) : strcmp( $x, $y );
+			} else {
+				$order = is_numeric( $x ) && is_numeric( $y ) ? ( (float) $x <=> (float) $y ) : strcmp( $x, $y );
+			}
 			if ( 0 !== $order ) {
 				return $order;
 			}
 		}
 		return 0;
+	}
+
+	/**
+	 * Sorte (enum ou set) et membres d'un type ENUM ou SET, dans l'ordre de la définition ; null pour
+	 * tout autre type.
+	 *
+	 * @return array{0: string, 1: list<string>}|null
+	 */
+	private static function members( string $type ): ?array {
+		if ( 1 !== preg_match( '/\A(enum|set)\((.*)\)\z/is', $type, $m ) ) {
+			return null;
+		}
+		preg_match_all( "/'((?:[^']|'')*)'/", $m[2], $values );
+
+		return [ strtolower( $m[1] ), array_map( static fn ( string $v ): string => str_replace( "''", "'", $v ), $values[1] ) ];
+	}
+
+	/**
+	 * Rang que trie ORDER BY : pour un ENUM, la position de la valeur dans la définition (1 pour la
+	 * première, 0 pour la valeur d'erreur '') ; pour un SET, la somme des bits de ses membres (le
+	 * premier vaut 1, le deuxième 2…).
+	 *
+	 * @param array{0: string, 1: list<string>} $members
+	 */
+	private static function rank( array $members, string $value ): int {
+		[ $kind, $list ] = $members;
+		if ( 'enum' === $kind ) {
+			$position = array_search( $value, $list, true );
+			return false === $position ? 0 : $position + 1;
+		}
+		$bits = 0;
+		foreach ( '' === $value ? [] : explode( ',', $value ) as $member ) {
+			$position = array_search( $member, $list, true );
+			if ( false === $position ) {
+				throw new \LogicException( 'Valeur hors du SET : ' . $value );
+			}
+			$bits |= 1 << $position;
+		}
+		return $bits;
 	}
 
 	/**

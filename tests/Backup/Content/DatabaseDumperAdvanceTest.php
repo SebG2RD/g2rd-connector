@@ -873,4 +873,142 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 			self::assertLessThanOrEqual( 1, substr_count( $sql, "'ligne-" . $i . "'" ), 'ligne ' . $i . ' jamais copiée deux fois' );
 		}
 	}
+
+	/**
+	 * Table du faux dont la clé contient un ENUM ou un SET, lue par lots d'une ligne au départ (taille
+	 * moyenne annoncée) : chaque ligne a sa valeur v, ligne-<clé>.
+	 *
+	 * @param array<string, string>       $columns
+	 * @param list<string>                $pk
+	 * @param list<array<string, string>> $rows
+	 */
+	private function table_a_cle_ordinale( string $table, array $columns, array $pk, array $rows, int $avg_row ): void {
+		$this->wpdb->tables[ $table ] = [
+			'columns'        => $columns + [ 'v' => 'varchar(20)' ],
+			'pk'             => $pk,
+			'rows'           => array_map( static fn ( array $row ): array => $row + [ 'v' => 'ligne-' . implode( '-', $row ) ], $rows ),
+			'avg_row_length' => $avg_row,
+		];
+	}
+
+	public function test_cle_enum_ou_set_lue_par_offset_chaque_ligne_une_fois(): void {
+		// ORDER BY trie un ENUM par son rang dans la définition (z, a, m) et un SET par sa valeur numérique (z = 1,
+		// a = 2, z,a = 3), WHERE (clé) > (…) les compare comme du texte : une reprise par la clé perdrait ou doublerait des lignes.
+		$cas = [
+			'clé ENUM simple'             => [
+				[ 'k' => "enum('z','a','m')" ],
+				[ 'k' ],
+				[ [ 'k' => 'a' ], [ 'k' => 'm' ], [ 'k' => 'z' ] ],
+				[ 'ligne-z', 'ligne-a', 'ligne-m' ],
+			],
+			'clé composée (x, ENUM)'      => [
+				[
+					'x' => 'int(11)',
+					'k' => "enum('z','a','m')",
+				],
+				[ 'x', 'k' ],
+				[
+					[
+						'x' => '2',
+						'k' => 'm',
+					],
+					[
+						'x' => '1',
+						'k' => 'a',
+					],
+					[
+						'x' => '2',
+						'k' => 'z',
+					],
+					[
+						'x' => '1',
+						'k' => 'm',
+					],
+					[
+						'x' => '2',
+						'k' => 'a',
+					],
+					[
+						'x' => '1',
+						'k' => 'z',
+					],
+				],
+				[ 'ligne-1-z', 'ligne-1-a', 'ligne-1-m', 'ligne-2-z', 'ligne-2-a', 'ligne-2-m' ],
+			],
+			'clé SET (type en capitales)' => [
+				[ 'k' => "SET('z','a')" ],
+				[ 'k' ],
+				[ [ 'k' => 'z,a' ], [ 'k' => 'a' ], [ 'k' => 'z' ] ],
+				[ 'ligne-z', 'ligne-a', 'ligne-z,a' ],
+			],
+		];
+		foreach ( $cas as $nom => [ $colonnes, $pk, $lignes, $ordre ] ) {
+			$this->wpdb = self::faux();
+			$this->table_a_cle_ordinale( 'wp_ord', $colonnes, $pk, $lignes, DatabaseDumper::BATCH_BYTES );
+			$liste = [ 'wp_ord' ];
+
+			[ $entier, $faites ]              = $this->dump( $liste, static fn (): bool => false );
+			$this->wpdb->queries              = [];
+			[ $repris, , $appels, $curseurs ] = $this->dump( $liste, static fn (): bool => true );
+
+			self::assertSame( $entier, $repris, $nom . ' : reprise par lots identique au dump d\'une traite' );
+			self::assertGreaterThan( 2, $appels, $nom . ' : plusieurs lots' );
+			self::assertSame( count( $lignes ), $faites[0]['rows'], $nom . ' : toutes les lignes annoncées' );
+			$position = -1;
+			foreach ( $ordre as $valeur ) {
+				self::assertSame( 1, substr_count( $repris, "'" . $valeur . "'" ), $nom . ' : ' . $valeur . ' copiée une fois et une seule' );
+				$ici = (int) strpos( $repris, "'" . $valeur . "'" );
+				self::assertGreaterThan( $position, $ici, $nom . ' : ' . $valeur . ' dans l\'ordre de ORDER BY la clé' );
+				$position = $ici;
+			}
+			self::assertSame( array_fill( 0, count( $curseurs ), null ), array_column( $curseurs, 'after_hex' ), $nom . ' : jamais de reprise par la clé' );
+			self::assertGreaterThan( 0, max( array_column( $curseurs, 'offset' ) ), $nom . ' : la reprise avance par offset' );
+			$lectures = array_values( array_filter( $this->wpdb->queries, static fn ( string $q ): bool => str_starts_with( $q, FakeDumpWpdb::ROWS_START ) ) );
+			self::assertNotSame( [], $lectures );
+			$cle = implode( ',', array_map( static fn ( string $c ): string => '`' . $c . '`', $pk ) );
+			foreach ( $lectures as $lecture ) {
+				self::assertStringNotContainsString( ' WHERE ', $lecture, $nom );
+				self::assertMatchesRegularExpression( '/ FROM `wp_ord` ORDER BY ' . preg_quote( $cle, '/' ) . ' LIMIT [1-9]\d* OFFSET \d+\z/', $lecture, $nom . ' : ordre déterministe (la clé est unique)' );
+			}
+		}
+	}
+
+	public function test_cle_changee_de_sorte_entre_deux_tranches_refusee_sans_rien_emettre(): void {
+		$cas = [
+			// Reprise par la clé commencée (after_hex), clé devenue ENUM : l'offset, resté à 0, recopierait la table depuis le début.
+			'clé devenue ENUM'         => [ 'bigint(20) unsigned', "enum('1','2','3','4','5')", 'after_hex' ],
+			// Lecture par offset commencée, clé qui n'est plus un ENUM : la reprise par la clé repartirait du début.
+			'clé qui n\'est plus ENUM' => [ "enum('1','2','3','4','5')", 'varchar(1)', 'offset' ],
+		];
+		foreach ( $cas as $nom => [ $avant_type, $apres_type, $avance ] ) {
+			$this->wpdb = self::faux();
+			$this->lignes( 'wp_t', 'id', [ 'id' ], 5 );
+			$this->wpdb->tables['wp_t']['columns']['id'] = $avant_type;
+
+			$liste   = [ 'wp_t' ];
+			$sql     = '';
+			$emit    = static function ( string $morceau ) use ( &$sql ): void {
+				$sql .= $morceau;
+			};
+			$curseur = null;
+			// Deux tranches : l'en-tête et le CREATE, puis un lot de deux lignes.
+			for ( $i = 0; $i < 2; $i++ ) {
+				$curseur = self::par_l_etat( $this->dumper()->advance( $liste, $curseur, $emit, static fn (): bool => true )['cursor'] );
+			}
+			self::assertIsArray( $curseur );
+			self::assertSame( 'after_hex' === $avance ? [ bin2hex( '2' ) ] : null, $curseur['after_hex'], $nom );
+			self::assertSame( 'offset' === $avance ? 2 : 0, $curseur['offset'], $nom );
+
+			// Une extension change le type de la colonne de la clé (migration) avant la tranche suivante.
+			$this->wpdb->tables['wp_t']['columns']['id'] = $apres_type;
+			$this->wpdb->queries                         = [];
+			$avant                                       = $sql;
+			$refus                                       = self::refus( fn () => $this->dumper()->advance( $liste, $curseur, $emit, static fn (): bool => false ) );
+
+			self::assertSame( BackupRefused::DB_CURSOR_INVALID, $refus->reason_code(), $nom );
+			self::assertNull( $refus->retry_after(), $nom . ' : non réessayable' );
+			self::assertSame( $avant, $sql, $nom . ' : rien émis par la tranche refusée' );
+			self::assertSame( [], array_filter( $this->wpdb->queries, static fn ( string $q ): bool => str_starts_with( $q, FakeDumpWpdb::ROWS_START ) ), $nom . ' : refus avant la lecture du lot' );
+		}
+	}
 }
