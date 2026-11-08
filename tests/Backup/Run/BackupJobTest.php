@@ -1032,6 +1032,46 @@ final class BackupJobTest extends BackupTestCase {
 		self::assertNotEmpty( $this->envois );
 	}
 
+	/**
+	 * Décision n° 4 du point de contrôle n° 2 de la phase 4 : un backup_start rejoué avec
+	 * l'identifiant de la sauvegarde terminée est refusé ; son résultat `done` reste, rien n'est créé
+	 * ni écrit (avant : repartie de zéro, et le `done` écrasé par l'issue suivante).
+	 */
+	public function test_backup_start_d_une_sauvegarde_terminee_est_refuse_sans_rien_ecrire(): void {
+		$this->jouer( self::depart( self::B1 ) );
+		$avant               = BackupState::load()['raw'];
+		$options             = $this->options;
+		$lignes              = $this->wpdb->tables;
+		$this->wpdb->queries = [];
+
+		try {
+			$this->job()->start( self::depart( self::B1 ) );
+			self::fail( 'Refus attendu : sauvegarde déjà terminée sous ce numéro.' );
+		} catch ( BackupRefused $refus ) {
+			self::assertSame( BackupRefused::ALREADY_FINISHED, $refus->reason_code() );
+			self::assertNull( $refus->retry_after() );
+		}
+		self::assertSame( $avant, BackupState::load()['raw'], 'état intact' );
+		self::assertSame( [ BackupState::IDLE, 'done', self::B1 ], [ BackupState::load()['state']['phase'], BackupState::load()['state']['last']['outcome'], BackupState::load()['state']['last']['backup_id'] ] );
+		self::assertSame( $options, $this->options, 'aucune option écrite (clés comprises)' );
+		self::assertSame( $lignes, $this->wpdb->tables, 'aucune ligne écrite' );
+		self::assertSame( [], $this->wpdb->locks_and_writes(), 'ni verrou ni écriture' );
+		self::assertDirectoryDoesNotExist( $this->dossier( self::B1 ), 'aucun dossier de sauvegarde créé' );
+	}
+
+	/** Arrêtée ou en échec : le même numéro repart du début, comme avant (choix de la décision n° 4). */
+	public function test_backup_start_d_une_sauvegarde_arretee_repart_comme_avant(): void {
+		$job = $this->job();
+		$job->start( self::depart( self::B1 ) );
+		$job->abort( [ 'backup_id' => self::B1 ] );
+
+		$rapport = $job->start( self::depart( self::B1 ) );
+
+		self::assertSame( BackupState::FILES, $rapport['phase'] );
+		self::assertSame( [ 'aborted', self::B1 ], [ BackupState::load()['state']['last']['outcome'], BackupState::load()['state']['last']['backup_id'] ] );
+		self::assertFileExists( $this->dossier( self::B1 ) . '/manifest.jsonl', 'repartie du début' );
+	}
+
 	public function test_complete_a_la_fin_de_tranche_perdue_puis_incrementale_sans_suppression_fausse(): void {
 		$job = $this->job();
 		$job->start( self::depart( self::B1 ) );

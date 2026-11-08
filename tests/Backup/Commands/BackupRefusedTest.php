@@ -60,6 +60,7 @@ final class BackupRefusedTest extends TestCase {
 				'backup_db_cursor_invalid',
 				'site_key_other_site',
 				'backup_files_root_unreadable',
+				'backup_already_finished',
 			],
 			BackupRefused::CODES
 		);
@@ -89,6 +90,16 @@ final class BackupRefusedTest extends TestCase {
 		self::assertStringContainsString( 'Aucun index n’a été envoyé', ( new BackupRefused( BackupRefused::CRYPTO_UNAVAILABLE ) )->in_progress()->getMessage() );
 		$autre = new BackupRefused( BackupRefused::DISK_LOW, null, '114 Mio' );
 		self::assertSame( $autre, $autre->in_progress(), 'sans effet pour un autre code' );
+	}
+
+	/** Décision n° 4 : backup_start de l'identifiant d'une sauvegarde déjà terminée, non réessayable. */
+	public function test_une_sauvegarde_terminee_n_est_pas_relancee(): void {
+		$issue = ( new BackupRefused( BackupRefused::ALREADY_FINISHED ) )->outcome();
+
+		self::assertSame( 'backup_already_finished', $issue['error_code'] );
+		self::assertArrayNotHasKey( 'retry_after', $issue );
+		self::assertStringStartsWith( 'La sauvegarde n’a pas été relancée : elle est déjà terminée sur ce site', $issue['error'] );
+		self::assertStringContainsString( 'son résultat est gardé', $issue['error'] );
 	}
 
 	public function test_une_cle_non_enregistree_a_sa_propre_phrase(): void {

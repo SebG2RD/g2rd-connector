@@ -1,9 +1,10 @@
 {
-  "description": "Refus d'une commande par la porte des mises à jour ou par une tranche de sauvegarde (vue d'ensemble des phases 2 à 5, § 6, lot 4-A, point 4 bis). Les clés de « variable_keys » changent d'une réponse à l'autre ; les autres valeurs sont exactes. « codes » : refus réessayables, avec retry_after ; « dump_refusal » : refus du dump de la base, au départ ou pendant une tranche, non réessayables, sans retry_after.",
+  "description": "Refus d'une commande par la porte des mises à jour ou par une tranche de sauvegarde (vue d'ensemble des phases 2 à 5, § 6, lot 4-A, point 4 bis). Les clés de « variable_keys » changent d'une réponse à l'autre ; les autres valeurs sont exactes. « codes » : refus réessayables, avec retry_after ; « dump_refusal » : refus du dump de la base, au départ ou pendant une tranche, non réessayables, sans retry_after ; « start_refusal » : refus de backup_start pour l'identifiant de la dernière sauvegarde du site, déjà terminée (son résultat est gardé, rien n'est créé ni écrit), non réessayable, sans retry_after.",
   "version": 1,
   "retry_after": { "min": 1, "max": 60 },
   "codes": [ "backup_slice_running", "update_in_progress", "backup_lock_unavailable" ],
   "dump_refusal": { "codes": [ "backup_db_charset_mismatch", "backup_db_name_unsupported", "backup_db_tables_not_found", "backup_db_cursor_invalid" ], "retryable": false, "spec": "docs/backup-payload.md § 4" },
+  "start_refusal": { "codes": [ "backup_already_finished" ], "retryable": false, "command": "backup_start" },
   "stage": { "when_error_code": "self_test_failed", "values": [ "start", "segment", "index" ], "copied_into": [ "command_failed.body", "queue_result.body.result" ] },
   "command_failed": {
     "route": "POST /wp-json/g2rd/v1/command",

@@ -176,6 +176,13 @@ final class BackupJob {
 			}
 			throw new BackupRefused( BackupRefused::ALREADY_RUNNING ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
 		}
+		// Même numéro que la dernière sauvegarde, terminée : refus avant toute écriture, son résultat
+		// `done` reste (décision n° 4 du point de contrôle n° 2 de la phase 4). Arrêtée ou en échec :
+		// elle repart du début, comme avant. Seule la dernière issue est connue du site.
+		$last = is_array( $state['last'] ?? null ) ? $state['last'] : [];
+		if ( ( $last['backup_id'] ?? null ) === $backup_id && 'done' === ( $last['outcome'] ?? null ) ) {
+			throw new BackupRefused( BackupRefused::ALREADY_FINISHED ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+		}
 		if ( BackupState::ABORT === $state['phase'] && is_string( $state['backup_id'] ?? null ) ) {
 			WorkDir::clear_job( $state['backup_id'] );
 		}

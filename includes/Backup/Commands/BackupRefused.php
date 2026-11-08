@@ -83,6 +83,14 @@ final class BackupRefused extends \RuntimeException {
 	public const FILES_ROOT_UNREADABLE = 'backup_files_root_unreadable';
 
 	/**
+	 * backup_start de l'identifiant de la dernière sauvegarde, terminée (`last.outcome` done) ; non
+	 * réessayable : son résultat est gardé, rien n'est créé ni écrit (décision n° 4 du point de
+	 * contrôle n° 2 de la phase 4 ; contrat backup-refusal-v1.json, « start_refusal »). Une
+	 * sauvegarde arrêtée ou en échec repart du début sous le même numéro, comme avant.
+	 */
+	public const ALREADY_FINISHED = 'backup_already_finished';
+
+	/**
 	 * Détail de STORE_UNAVAILABLE quand c'est une clé (clé de site reçue, clé de signature du site)
 	 * qui n'a pas pu être enregistrée, et non l'état de la sauvegarde : seule la phrase change.
 	 */
@@ -135,6 +143,7 @@ final class BackupRefused extends \RuntimeException {
 		self::DB_CURSOR_INVALID,
 		self::KEY_OTHER_SITE,
 		self::FILES_ROOT_UNREADABLE,
+		self::ALREADY_FINISHED,
 	];
 
 	/** Délai par défaut des refus réessayables (secondes). */
@@ -274,6 +283,7 @@ final class BackupRefused extends \RuntimeException {
 			self::BAD_SITE_KEY => __( 'La clé de chiffrement reçue a été refusée : elle ne permet pas de chiffrer. Aucune clé n’a été enregistrée. Cause probable : erreur du service de clés. Action : demander une nouvelle clé (rotation) depuis la plateforme ; si le refus se répète, le signaler au support G2RD.', 'g2rd-connector' ),
 			self::INVALID_PAYLOAD => __( 'La commande de sauvegarde n’a pas été exécutée : ses paramètres sont absents ou d’un format inattendu. Rien n’a été modifié. Cause probable : plateforme et connecteur de versions différentes. Action : mettre le connecteur à jour, puis relancer ; si le refus se répète, contacter le support G2RD.', 'g2rd-connector' ),
 			self::ALREADY_RUNNING => __( 'La sauvegarde n’a pas été lancée : une autre sauvegarde est en cours sur ce site. Rien n’a été modifié. Cause probable : sauvegarde précédente pas encore terminée. Action : attendre sa fin, ou l’arrêter depuis la plateforme, puis relancer.', 'g2rd-connector' ),
+			self::ALREADY_FINISHED => __( 'La sauvegarde n’a pas été relancée : elle est déjà terminée sur ce site, sous le même numéro. Rien n’a été modifié ; son résultat est gardé. Cause probable : commande répétée par la plateforme ou par le réseau. Action : aucune ; une nouvelle sauvegarde se lance depuis la plateforme, sous un nouveau numéro.', 'g2rd-connector' ),
 			self::UNKNOWN_BACKUP => __( 'La commande de sauvegarde n’a pas été exécutée : cette sauvegarde n’est pas celle en cours sur ce site. Rien n’a été modifié. Cause probable : sauvegarde déjà terminée, arrêtée, ou remplacée par une autre. Action : aucune, la plateforme vérifie l’état du site à la prochaine synchronisation.', 'g2rd-connector' ),
 			self::INTERRUPTED => sprintf(
 				/* translators: %s: raison de l'interruption, en clair. */

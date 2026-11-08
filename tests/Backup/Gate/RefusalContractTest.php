@@ -52,6 +52,18 @@ final class RefusalContractTest extends BackupTestCase {
 		}
 	}
 
+	public function test_refus_d_une_sauvegarde_terminee(): void {
+		self::assertSame( [ BackupRefused::ALREADY_FINISHED ], $this->contrat['start_refusal']['codes'] );
+		self::assertFalse( $this->contrat['start_refusal']['retryable'] );
+		self::assertSame( 'backup_start', $this->contrat['start_refusal']['command'] );
+		foreach ( $this->contrat['start_refusal']['codes'] as $code ) {
+			$refus = new BackupRefused( $code );
+			self::assertNull( $refus->retry_after(), $code . ' : non réessayable' );
+			self::assertArrayNotHasKey( 'retry_after', $refus->outcome(), $code . ' : sans retry_after' );
+			self::assertSame( $code, $refus->outcome()['error_code'] );
+		}
+	}
+
 	public function test_corps_de_command(): void {
 		$this->settings( [ 'backup_enabled' => true ] );
 		$this->put_state( [ 'phase' => BackupState::DB ] );
