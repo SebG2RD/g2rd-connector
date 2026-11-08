@@ -100,6 +100,7 @@ final class SyntaxePhp81Test extends PHPUnitTestCase {
 			'classe finale lecture seule' => 'final readonly class A {}',
 			'constante typée'             => 'class A { const string B = "b"; }',
 			'constante typée publique'    => 'class A { public const int B = 1; }',
+			'fléchée never'               => '$f = static fn (): never => throw new \\RuntimeException();',
 		];
 		foreach ( $cas as $nom => $code ) {
 			self::assertNotSame( [], self::syntaxes_php82_plus( '<?php ' . $code ), $nom );
@@ -115,6 +116,7 @@ final class SyntaxePhp81Test extends PHPUnitTestCase {
 			'use const'             => 'use const Foo\\BAR;',
 			'valeur par défaut'     => 'function f( bool $a = true, $b = null ) { return $a ? true : false; }',
 			'fermeture'             => '$f = fn ( int $a ): int => $a; $g = function () use ( $f ): ?int { return null; };',
+			'never classique'       => '$f = static function (): never { throw new \\RuntimeException(); };',
 			'type intersection 8.1' => 'function f( A&B $a ) {}',
 			'référence, variadique' => 'function f( array &$a, int ...$b ) {}',
 			'if alternatif, ternaire' => 'if ( $a ): $b = $c ? f( $d ) : g(); endif;',
@@ -158,6 +160,22 @@ final class SyntaxePhp81Test extends PHPUnitTestCase {
 				}
 				if ( $noms > 1 ) {
 					$problemes[] = $jeton->line . ' : constante de classe typée (PHP 8.3)';
+				}
+			}
+
+			// Fonction fléchée `fn (…): never =>` : PHP 8.1 la refuse à la compilation (« A
+			// never-returning function must not return »), PHP 8.2 l'accepte. Fonction classique à la place.
+			if ( $jeton->is( T_FN ) ) {
+				$profondeur = 0;
+				for ( $k = $i + 1; $k < $n; $k++ ) {
+					if ( '(' === $jetons[ $k ]->text ) {
+						++$profondeur;
+					} elseif ( ')' === $jetons[ $k ]->text && 0 === --$profondeur ) {
+						break;
+					}
+				}
+				if ( isset( $jetons[ $k + 2 ] ) && ':' === $jetons[ $k + 1 ]->text && 0 === strcasecmp( 'never', $jetons[ $k + 2 ]->text ) ) {
+					$problemes[] = $jeton->line . ' : fonction fléchée « fn (): never => » (refusée par PHP 8.1)';
 				}
 			}
 

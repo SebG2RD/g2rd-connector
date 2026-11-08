@@ -183,7 +183,7 @@ final class UpdateGateTest extends BackupTestCase {
 		$this->settings( [ 'backup_enabled' => true ] );
 
 		try {
-			UpdateGate::around( 'update_core', static fn (): never => throw new \RuntimeException( 'panne' ) );
+			UpdateGate::around( 'update_core', static function (): never { throw new \RuntimeException( 'panne' ); } );
 		} catch ( \RuntimeException ) {
 			// Attendu.
 		}

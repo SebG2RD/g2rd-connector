@@ -22,7 +22,7 @@ final class BackupLockTest extends BackupTestCase {
 
 	public function test_le_verrou_est_rendu_meme_si_la_tranche_leve(): void {
 		try {
-			BackupLock::for_slice( static fn (): never => throw new \RuntimeException( 'panne' ), self::NOW );
+			BackupLock::for_slice( static function (): never { throw new \RuntimeException( 'panne' ); }, self::NOW );
 		} catch ( \RuntimeException ) {
 			// Attendu.
 		}
