@@ -1,0 +1,231 @@
+<?php
+/**
+ * Banc de mesure (phase 4, tâche 26) du module de contenu : débit d'un segment (compression, puis
+ * chiffrement), mémoire ajoutée, dump de la base. WordPress est amorcé en SHORTINIT sur une vraie base
+ * MariaDB ($wpdb réel), le connecteur par son autochargeur, le tout dans l'ordre d'un site.
+ *
+ * Usage : php -d memory_limit=128M mesure.php <mode>
+ *   texte    64 Mio de texte (64 fichiers de 1 Mio) archivés dans un segment à blocs de 8 Mio ;
+ *   medias   64 Mio de médias (16 fichiers .jpg de 4 Mio, stockés tels quels), idem ;
+ *   petites  dump de wp_petites (100 000 lignes), segments de 64 Mio de charge utile ;
+ *   grosses  dump de wp_grosses (300 lignes de 2 Mio) ;
+ *   perimees idem grosses, mais information_schema annonce une ligne moyenne minuscule (statistiques périmées) ;
+ *   lots     idem grosses, un lot par appel de advance() : relevé du LIMIT à chaque lot.
+ * Sortie : une ligne JSON par mesure. « ajoute » = pic réel (memory_get_peak_usage( true )) moins la
+ * mémoire réelle occupée juste avant l'opération, une fois le site amorcé.
+ */
+
+declare(strict_types=1);
+
+use G2RD\Connector\Backup\Content\DatabaseDumper;
+use G2RD\Connector\Backup\Content\FileArchiver;
+use G2RD\Connector\Backup\Crypto\Sodium;
+use G2RD\Connector\Backup\Format\Hpke;
+use G2RD\Connector\Backup\Format\SegmentHeader;
+use G2RD\Connector\Backup\Payload\PayloadWriter;
+use G2RD\Connector\Backup\Run\SegmentProducer;
+
+$mode   = (string) ( $argv[1] ?? 'texte' );
+$sortie = [ 'mode' => $mode, 'memory_limit' => ini_get( 'memory_limit' ) ];
+
+register_shutdown_function(
+	static function () use ( &$sortie ): void {
+		$erreur = error_get_last();
+		if ( null !== $erreur && in_array( $erreur['type'], [ E_ERROR, E_CORE_ERROR, E_COMPILE_ERROR ], true ) ) {
+			$sortie['issue']        = 'erreur_fatale';
+			$sortie['erreur']       = $erreur['message'];
+			$sortie['pic_au_arret'] = memory_get_peak_usage( true );
+			echo json_encode( $sortie, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ), PHP_EOL;
+		}
+	}
+);
+
+define( 'ABSPATH', '/usr/src/wordpress/' );
+define( 'WP_CONTENT_DIR', '/tmp/wp-content' );
+define( 'SHORTINIT', true );
+define( 'WP_DEBUG', false );
+define( 'DB_NAME', 'essai' );
+define( 'DB_USER', 'root' );
+define( 'DB_PASSWORD', 'essai' );
+define( 'DB_HOST', 'g2rd-4b-mariadb' );
+define( 'DB_CHARSET', 'utf8mb4' );
+define( 'DB_COLLATE', '' );
+if ( ! is_dir( WP_CONTENT_DIR ) ) {
+	mkdir( WP_CONTENT_DIR, 0777, true );
+}
+$table_prefix = 'wp_'; // phpcs:ignore
+require ABSPATH . 'wp-settings.php';
+define( 'G2RD_CONNECTOR_DIR', '/connector/' );
+require '/connector/includes/autoload.php';
+
+global $wpdb;
+$sortie['wordpress'] = $GLOBALS['wp_version'];
+$sortie['php']       = PHP_VERSION;
+
+$sodium  = new Sodium();
+$hpke    = new Hpke( $sodium );
+$secrete = random_bytes( 32 );
+$publiq  = $sodium->x25519_base( $secrete );
+$dossier = '/tmp/sauvegarde-' . $mode;
+if ( ! is_dir( $dossier ) ) {
+	mkdir( $dossier, 0777, true );
+}
+foreach ( (array) glob( $dossier . '/*' ) as $reste ) {
+	unlink( (string) $reste );
+}
+const BLOC   = 8 * 1048576;
+const SEGMAX = 64 * 1048576;
+$producteur  = new SegmentProducer( $hpke, $sodium, $dossier, bin2hex( random_bytes( 16 ) ), 1, $publiq, BLOC );
+
+/**
+ * Jeu de fichiers du banc, créé une fois (hors mesure).
+ *
+ * @return list<array{path: string, type: string, size: int, mtime: int, mode: int, target: string|null}>
+ */
+function jeu( string $mode ): array {
+	$racine = '/tmp/jeu-' . $mode;
+	if ( ! is_dir( $racine ) ) {
+		mkdir( $racine, 0777, true );
+		mt_srand( 4 );
+		$mots = [ 'function', 'return', 'array', 'foreach', 'wp_enqueue_script', 'get_option', 'esc_html', 'class', 'public', 'private', 'static', 'namespace', 'if', 'else', 'null', 'true', 'false', 'string', 'int', 'bonjour', 'article', 'page', 'contenu', 'titre', 'image', 'lien', 'menu', 'style', 'color', 'margin', 'padding', 'display', 'flex', 'width', 'height', 'border' ];
+		$n    = count( $mots );
+		if ( 'texte' === $mode ) {
+			for ( $f = 0; $f < 64; $f++ ) {
+				$h = fopen( $racine . '/f' . $f . '.php', 'wb' );
+				for ( $o = 0; $o < 1048576; ) {
+					$ligne = '';
+					for ( $k = 0, $m = mt_rand( 4, 12 ); $k < $m; $k++ ) {
+						$ligne .= $mots[ mt_rand( 0, $n - 1 ) ] . ( 0 === mt_rand( 0, 5 ) ? '_' . mt_rand( 0, 999 ) : ' ' );
+					}
+					$ligne .= "\n";
+					$o     += strlen( $ligne );
+					fwrite( $h, $ligne );
+				}
+				fclose( $h );
+			}
+		} else {
+			for ( $f = 0; $f < 16; $f++ ) {
+				$h = fopen( $racine . '/m' . $f . '.jpg', 'wb' );
+				for ( $o = 0; $o < 4; $o++ ) {
+					fwrite( $h, random_bytes( 1048576 ) );
+				}
+				fclose( $h );
+			}
+		}
+	}
+	$entrees = [];
+	foreach ( (array) glob( $racine . '/*' ) as $chemin ) {
+		clearstatcache();
+		$stat      = lstat( (string) $chemin );
+		$entrees[] = [ 'path' => basename( (string) $chemin ), 'type' => 'file', 'size' => (int) $stat['size'], 'mtime' => (int) $stat['mtime'], 'mode' => 0644, 'target' => null ];
+	}
+	return $entrees;
+}
+
+if ( 'texte' === $mode || 'medias' === $mode ) {
+	$entrees = jeu( $mode );
+	$entier  = array_sum( array_column( $entrees, 'size' ) );
+	$archive = new FileArchiver( '/tmp/jeu-' . $mode );
+	gc_collect_cycles();
+	$base = memory_get_usage( true );
+	memory_reset_peak_usage();
+	$t0 = hrtime( true );
+	$sg = $producteur->produce(
+		1,
+		SegmentHeader::KIND_FILES,
+		static function ( PayloadWriter $w ) use ( $entrees, $archive ): void {
+			foreach ( $entrees as $e ) {
+				$archive->archive( $e, 0, $w, static fn (): bool => false );
+			}
+		}
+	);
+	$duree   = ( hrtime( true ) - $t0 ) / 1e9;
+	$pic     = memory_get_peak_usage( true );
+	$sortie += [
+		'entree_mio'  => round( $entier / 1048576, 1 ),
+		'segment_mio' => round( $sg['bytes'] / 1048576, 2 ),
+		'blocs'       => $sg['blocks'],
+		'duree_s'     => round( $duree, 2 ),
+		'debit_mio_s' => round( $entier / 1048576 / $duree, 1 ),
+		'base_mio'    => round( $base / 1048576, 1 ),
+		'pic_mio'     => round( $pic / 1048576, 1 ),
+		'ajoute_mio'  => round( ( $pic - $base ) / 1048576, 1 ),
+	];
+	echo json_encode( $sortie, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ), PHP_EOL;
+	exit( 0 );
+}
+
+// ── Dump de la base ──
+$dumper                = new DatabaseDumper( $wpdb );
+$noms                  = [
+	'petites' => [ 'wp_petites' ],
+	'grosses' => [ 'wp_grosses' ],
+	'lots'    => [ 'wp_grosses' ],
+	'perimees' => [ 'wp_perimees' ],
+][ $mode ];
+$sortie['tables_vues'] = $dumper->tables( 'wp_' );
+$moyennes              = [];
+foreach ( (array) $wpdb->get_results( 'SELECT TABLE_NAME, AVG_ROW_LENGTH FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()', ARRAY_A ) as $l ) {
+	$moyennes[ $l['TABLE_NAME'] ] = (int) $l['AVG_ROW_LENGTH'];
+}
+$sortie['avg_row_length'] = $moyennes;
+
+gc_collect_cycles();
+$base = memory_get_usage( true );
+memory_reset_peak_usage();
+$t0            = hrtime( true );
+$curseur       = null;
+$segment       = 0;
+$lignes        = 0;
+$octets        = 0;
+$limites       = [];
+$tables_faites = [];
+$un_lot        = ( 'lots' === $mode );
+do {
+	++$segment;
+	$sg       = $producteur->produce(
+		$segment,
+		SegmentHeader::KIND_DB,
+		static function ( PayloadWriter $w ) use ( $dumper, $noms, &$curseur, &$lignes, &$limites, &$tables_faites, $un_lot ): void {
+			$decalage = 0;
+			$emettre  = static function ( string $sql ) use ( $w, &$decalage ): void {
+				for ( $i = 0, $n = strlen( $sql ); $i < $n; $i += 1048576 ) {
+					$morceau = substr( $sql, $i, 1048576 );
+					$w->sql( $decalage, $morceau );
+					$decalage += strlen( $morceau );
+				}
+			};
+			$arret    = $un_lot
+				? static fn (): bool => true
+				: static fn (): bool => $w->written() >= SEGMAX;
+			$avance   = $dumper->advance( $noms, null === $curseur ? null : json_decode( (string) json_encode( $curseur ), true ), $emettre, $arret );
+			$curseur  = $avance['cursor'];
+			$lignes  += $avance['rows'];
+			foreach ( $avance['tables_done'] as $t ) {
+				$tables_faites[] = $t;
+			}
+			$limites[] = null === $curseur ? 'fin' : ( $curseur['limit'] ?? null );
+		}
+	);
+	$octets  += $sg['bytes'];
+	if ( ! $un_lot ) {
+		unlink( $sg['file'] );
+	}
+	if ( $un_lot && $segment >= 40 ) {
+		break;
+	}
+} while ( null !== $curseur );
+$duree   = ( hrtime( true ) - $t0 ) / 1e9;
+$pic     = memory_get_peak_usage( true );
+$sortie += [
+	'segments'        => $segment,
+	'lignes'          => $lignes,
+	'segments_mio'    => round( $octets / 1048576, 1 ),
+	'duree_s'         => round( $duree, 2 ),
+	'base_mio'        => round( $base / 1048576, 1 ),
+	'pic_mio'         => round( $pic / 1048576, 1 ),
+	'ajoute_mio'      => round( ( $pic - $base ) / 1048576, 1 ),
+	'limit_par_appel' => $limites,
+	'tables_faites'   => $tables_faites,
+];
+echo json_encode( $sortie, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ), PHP_EOL;

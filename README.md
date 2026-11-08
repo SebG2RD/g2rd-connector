@@ -42,13 +42,16 @@ g2rd-connector/
 │   ├── CommandRuns/            commandes en arrière-plan : stockage, créneau, cycle de vie, exécution après la réponse
 │   ├── Environment/            mesure de l'environnement (bloc environment du snapshot)
 │   ├── PhpErrors/              relevé des erreurs PHP (1.16) : arrêt de PHP, filtre, tampon, journal, commande, blocs php_errors et php_logging
-│   ├── Backup/                 sauvegardes chiffrées : bibliothèque (phase 2) et lot 4-A (état, porte des mises à jour, parcours), éteintes par défaut
+│   ├── Backup/                 sauvegardes chiffrées : bibliothèque (phase 2), lots 4-A (état, porte des mises à jour, parcours) et 4-B (contenu, segment, index), éteintes par défaut
 │   │   ├── Crypto/             AES-256-GCM, HKDF, X25519 et Ed25519 (sodium ou sodium_compat), autotest
 │   │   ├── Format/             format G2BK v1 : en-tête, HPKE, segments, index signé, certificat
 │   │   ├── Commands/           refus à code stable et délai (BackupRefused)
 │   │   ├── State/              état de la sauvegarde (option du site principal, écritures conditionnelles)
 │   │   ├── Gate/               porte des mises à jour, témoin « mise à jour en cours », verrou des tranches, second filet
-│   │   └── Files/              parcours reprenable de la racine du site (FileWalker)
+│   │   ├── Files/              parcours reprenable de la racine du site (FileWalker)
+│   │   ├── Payload/            charge utile des segments, format G2P1 : écrivain et lecteur stricts, chemins relatifs, DEFLATE borné
+│   │   ├── Content/            contenu copié : dump SQL par lots bornés en octets, fichiers par morceaux de 1 Mio, journal du manifeste, état local des incrémentales
+│   │   └── Run/                dossier de travail privé, découpage en parties, un segment entier par tranche (autotest après chaque segment), index signé et vérifié par le site
 │   ├── Backup/Upload/          envoi d'une partie de sauvegarde vers une URL présignée ; non branché avant la phase 4
 │   ├── Security/
 │   │   ├── KeyDerivation       dérivation des clés du SiteToken (trois contextes)
@@ -936,6 +939,14 @@ reprenable) et `Backup/Commands/` (refus à code stable). Seuls quatre fichiers 
 `includes/Backup/` (`CommandExecutor`, `CommandRunsController`, `AfterResponseRunner`, `Plugin`) :
 c'est la liste fermée de `tests/Backup/NoWiringTest.php`. Porte des mises à jour transparente tant
 que les sauvegardes sont éteintes (case des réglages décochée).
+
+Le lot 4-B ajoute le contenu d'un segment, toujours sans appelant hors de `includes/Backup/` :
+`Backup/Payload/` (charge utile G2P1), `Backup/Content/` (dump de la base, archive des fichiers, journal du
+manifeste, état local des incrémentales) et `Backup/Run/` (dossier de travail, découpage, producteur de
+segment, finalisation de l'index). La clé de données d'un segment est tirée à neuf et n'est jamais écrite
+ailleurs que scellée dans son en-tête ; le producteur ne reçoit que la clé publique du site. Mesures du lot
+(débit, mémoire, dump de 100 000 lignes et de 300 lignes de 2 Mio sous 128 Mo) :
+`docs/superpowers/mesures/2026-11-08-sauvegardes-module/`.
 
 - `Backup/Crypto/` : les primitives. AES-256-GCM par OpenSSL (étiquette de 16 octets imposée),
   HKDF-SHA256, X25519 et Ed25519 par l'extension sodium ou, sans elle, par la copie de
