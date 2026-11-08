@@ -591,7 +591,7 @@ final class ConnectorPanelTest extends TestCase {
 
 		preg_match( '/function ipv4StorageDescription\( d: ConnectorBootData \): string \{(.*?)\n\}/s', $panneau, $fonction );
 		self::assertArrayHasKey( 1, $fonction, 'ipv4StorageDescription() introuvable.' );
-		self::assertMatchesRegularExpression( '/if \( d\.backup\.lock !== null \) \{\s*return d\.backup\.lockMessage \? `\$\{ base \} \$\{ d\.backup\.lockMessage \}` : base;\s*\}/', $fonction[1], 'verrou : phrase du verrou à la place de la manière de l\'arrêter' );
+		self::assertMatchesRegularExpression( '/if \( d\.backup\.lock !== null \) \{\s*return d\.backup\.lockMessage\s*\?\s*`\$\{ base \} \$\{ d\.backup\.lockMessage \}`\s*:\s*base;\s*\}/', $fonction[1], 'verrou : phrase du verrou à la place de la manière de l\'arrêter' );
 		self::assertSame( 1, substr_count( $fonction[1], 'coupez l’interrupteur' ), 'la manière de l\'arrêter n\'est dite qu\'hors verrou' );
 	}
 

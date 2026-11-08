@@ -98,9 +98,12 @@ function settingsPayload( d: ConnectorBootData ) {
  * @param d État du panneau.
  */
 function ipv4StorageDescription( d: ConnectorBootData ): string {
-	const base = 'À activer si l’hébergeur bloque l’IPv6 sortante du serveur : l’envoi des sauvegardes vers le stockage passe alors par l’IPv4. Ne concerne que cet envoi.';
+	const base =
+		'À activer si l’hébergeur bloque l’IPv6 sortante du serveur : l’envoi des sauvegardes vers le stockage passe alors par l’IPv4. Ne concerne que cet envoi.';
 	if ( d.backup.lock !== null ) {
-		return d.backup.lockMessage ? `${ base } ${ d.backup.lockMessage }` : base;
+		return d.backup.lockMessage
+			? `${ base } ${ d.backup.lockMessage }`
+			: base;
 	}
 	return `${ base } Pour l’arrêter, coupez l’interrupteur puis enregistrez.`;
 }
