@@ -76,6 +76,13 @@ final class BackupRefused extends \RuntimeException {
 	public const KEY_OTHER_SITE = 'site_key_other_site';
 
 	/**
+	 * Racine du site (ABSPATH) dont le contenu est refusé (liste ou traversée), au départ ou pendant la
+	 * copie des fichiers ; non réessayable : jamais une partie fichiers vide, ou privée de sa suite,
+	 * dite réussie (principe n° 6 ; amendement de la tâche 14, point 4).
+	 */
+	public const FILES_ROOT_UNREADABLE = 'backup_files_root_unreadable';
+
+	/**
 	 * Détail de STORE_UNAVAILABLE quand c'est une clé (clé de site reçue, clé de signature du site)
 	 * qui n'a pas pu être enregistrée, et non l'état de la sauvegarde : seule la phrase change.
 	 */
@@ -109,6 +116,7 @@ final class BackupRefused extends \RuntimeException {
 		self::DB_TABLES_NOT_FOUND,
 		self::DB_CURSOR_INVALID,
 		self::KEY_OTHER_SITE,
+		self::FILES_ROOT_UNREADABLE,
 	];
 
 	/** Délai par défaut des refus réessayables (secondes). */
@@ -265,6 +273,7 @@ final class BackupRefused extends \RuntimeException {
 				'' === $detail ? '?' : $detail
 			),
 			self::DB_CURSOR_INVALID => __( 'La sauvegarde a été arrêtée : l’avancement de la copie de la base de données, gardé entre deux étapes, est illisible, et la reprendre pourrait copier des lignes deux fois ou en oublier. Rien n’est gardé comme sauvegarde. Cause probable : réglage g2rd_backup_state modifié hors du connecteur (extension, outil d’administration de la base), ou clé primaire d’une table changée pendant la sauvegarde. Action : relancer la sauvegarde, qui repartira du début ; si le refus revient, vérifier qu’aucune extension ne modifie les réglages du site.', 'g2rd-connector' ),
+			self::FILES_ROOT_UNREADABLE => __( 'La sauvegarde a été arrêtée : le dossier racine du site (celui qui contient wp-admin et wp-includes) ne peut pas être parcouru par PHP, et la copie aurait été enregistrée sans les fichiers du site, ou sans une partie d’entre eux. Rien n’est gardé comme sauvegarde. Cause probable : droits de ce dossier modifiés sur l’hébergement (lecture ou traversée retirée à l’utilisateur qui exécute PHP), par exemple lors d’une migration ou d’un durcissement de la sécurité. Action : rendre ce dossier lisible et traversable par l’utilisateur qui exécute PHP (droits 755 ou 750 en général), depuis le gestionnaire de fichiers de l’hébergement ou en le demandant à l’hébergeur, puis relancer la sauvegarde.', 'g2rd-connector' ),
 			default => throw new \InvalidArgumentException( 'Code de refus de sauvegarde sans message : ' . esc_html( $code ) ),
 		};
 	}

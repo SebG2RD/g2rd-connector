@@ -651,10 +651,10 @@ final class BackupJobTest extends BackupTestCase {
 		}
 	}
 
-	/** Passe un dossier du site d'essai en 0000 ; saute l'essai si ce retrait reste sans effet. */
+	/** Passe un dossier du site d'essai ('' : sa racine) en 0000 ; saute l'essai si ce retrait reste sans effet. */
 	private function retirer_droits( string $relatif ): void {
 		self::sauter_sans_droits_posix();
-		$dossier                = $this->racine . '/' . $relatif;
+		$dossier                = '' === $relatif ? $this->racine : $this->racine . '/' . $relatif;
 		$this->droits_retires[] = $dossier;
 		chmod( $dossier, 0000 );
 		clearstatcache();
@@ -756,5 +756,47 @@ final class BackupJobTest extends BackupTestCase {
 		}
 		self::assertSame( 'unchanged', $lignes['wp-content/uploads/b.jpg']['state'], 'le parcours continue après le dossier' );
 		self::assertSame( 6, BackupState::load()['state']['totals']['unreadable'], 'deux.bin, les quatre entrées de l\'état local après lui, et le dossier (compté par FileWalker::unlisted())' );
+	}
+
+	public function test_racine_refusee_au_depart_sans_rien_laisser(): void {
+		self::sauter_sans_droits_posix();
+		$this->retirer_droits( '' );
+
+		try {
+			$this->job( self::base_du_site() )->start( self::depart( self::B1, 'both' ) );
+			self::fail( 'Refus attendu : racine du site en 0000.' );
+		} catch ( BackupRefused $refus ) {
+			self::assertSame( BackupRefused::FILES_ROOT_UNREADABLE, $refus->reason_code() );
+			self::assertNull( $refus->retry_after(), 'non réessayable : les droits ne reviennent pas seuls' );
+			self::assertStringContainsString( 'dossier racine du site', $refus->getMessage() );
+		}
+		self::assertDirectoryDoesNotExist( $this->dossier( self::B1 ), 'refusée avant la copie de la base : aucun dossier de sauvegarde laissé' );
+		self::assertSame( BackupState::IDLE, BackupState::load()['state']['phase'] );
+
+		$this->job( self::base_du_site() )->start( self::depart( self::B2, 'db' ) );
+		self::assertSame( BackupState::DB, BackupState::load()['state']['phase'], 'la base seule ne lit pas la racine : pas refusée' );
+	}
+
+	public function test_racine_devenue_illisible_en_cours_de_sauvegarde_l_arrete_sans_la_dire_finie(): void {
+		self::sauter_sans_droits_posix();
+		// Réparti sur trois segments de 16 Mio : la première tranche (deux segments au plus en
+		// attente) copie déjà index.php, wp-content et a.txt, et s'arrête dans gros.bin.
+		file_put_contents( $this->racine . '/wp-content/gros.bin', random_bytes( 40 * 1048576 ) );
+		$job = $this->job();
+		$job->start( self::depart( self::B1 ) );
+		$premiere = $job->step( [ 'backup_id' => self::B1 ] );
+		self::assertCount( 2, $premiere['pending'] );
+		$this->retirer_droits( '' );
+
+		try {
+			$job->step( [ 'backup_id' => self::B1, 'completed' => array_column( $premiere['pending'], 'segment' ) ] );
+			self::fail( 'Refus attendu : racine du site passée en 0000 entre deux tranches.' );
+		} catch ( BackupRefused $refus ) {
+			self::assertSame( BackupRefused::FILES_ROOT_UNREADABLE, $refus->reason_code() );
+			self::assertNull( $refus->retry_after() );
+		}
+		$etat = BackupState::load()['state'];
+		self::assertSame( [ BackupState::IDLE, 'failed', 'backup_files_root_unreadable' ], [ $etat['phase'], $etat['last']['outcome'], $etat['last']['code'] ], 'arrêtée en échec, jamais dite finie avec un illisible de plus' );
+		self::assertDirectoryDoesNotExist( $this->dossier( self::B1 ), 'segments et journaux retirés' );
 	}
 }

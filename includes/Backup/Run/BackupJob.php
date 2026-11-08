@@ -195,6 +195,13 @@ final class BackupJob {
 		// hexadécimal minuscule, tels que lus dans le jeu du dump (§ 4, « Curseur du dump ») : un nom
 		// qui n'est pas de l'UTF-8 valide ne passe pas par wp_json_encode sans être réécrit.
 		$tables_hex = 'files' === $scope ? null : array_map( 'bin2hex', ( new DatabaseDumper( $this->wpdb ) )->tables( (string) $this->wpdb->base_prefix ) );
+		if ( 'db' !== $scope ) {
+			// Racine du site refusée : refusée ici, avant la copie de la base et sans rien laisser sur
+			// le disque. Le premier pas du parcours suffit (rien n'est rendu après une racine refusée).
+			$walker = new FileWalker( $this->root );
+			$walker->walk()->valid();
+			self::refuse_unlisted_root( $walker );
+		}
 		WorkDir::clear_job( $backup_id );
 		$job = WorkDir::job( $backup_id );
 		if ( null === $job ) {
@@ -694,8 +701,10 @@ final class BackupJob {
 	 * n'est pas archivé, il est inscrit illisible et absent du futur état local ; une entrée de l'état
 	 * local sous un dossier refusé n'est jamais dite supprimée (absent_line()) ; un dossier refusé
 	 * que le parcours ne rend pas (reprise dans un dossier devenu illisible, droits retirés pendant le
-	 * parcours, racine refusée), dont la ligne éventuelle est déjà écrite, est compté illisible une
-	 * fois, par FileWalker::unlisted().
+	 * parcours), dont la ligne éventuelle est déjà écrite, est compté illisible une fois, par
+	 * FileWalker::unlisted(). Racine refusée ('' dans unlisted(), droits retirés depuis le départ) :
+	 * la suite des fichiers manque, la sauvegarde est arrêtée (FILES_ROOT_UNREADABLE), jamais dite
+	 * finie avec un illisible de plus.
 	 *
 	 * @param array<string, mixed> $state
 	 * @return array<string, mixed>
@@ -805,6 +814,9 @@ final class BackupJob {
 		if ( null !== $reader ) {
 			$reader->close();
 		}
+		// Après la production, quel que soit le chemin de sortie du remplissage : le segment produit
+		// n'est pas enregistré, close() retire le dossier de la sauvegarde.
+		self::refuse_unlisted_root( $walker );
 		// Dossiers refusés que ce parcours n'a pas rendus : chacun est découvert par un seul parcours
 		// (le curseur passe ensuite au-delà de lui), donc compté une seule fois.
 		$totals['unreadable'] = (int) $totals['unreadable'] + count( array_diff_key( array_flip( $walker->unlisted() ), $refused ) );
@@ -815,6 +827,19 @@ final class BackupJob {
 		}
 
 		return $this->record_segment( $state, $entry, $job );
+	}
+
+	/**
+	 * Racine du parcours refusée ('' dans FileWalker::unlisted() : liste ou traversée refusée au
+	 * premier pas, ou perdue pendant le parcours) : les fichiers, ou leur suite, manquent. Jamais une
+	 * partie fichiers dite finie sans eux (principe n° 6).
+	 *
+	 * @throws BackupRefused FILES_ROOT_UNREADABLE (non réessayable).
+	 */
+	private static function refuse_unlisted_root( FileWalker $walker ): void {
+		if ( in_array( '', $walker->unlisted(), true ) ) {
+			throw new BackupRefused( BackupRefused::FILES_ROOT_UNREADABLE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+		}
 	}
 
 	/**

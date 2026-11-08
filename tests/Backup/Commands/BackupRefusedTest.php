@@ -59,6 +59,7 @@ final class BackupRefusedTest extends TestCase {
 				'backup_db_tables_not_found',
 				'backup_db_cursor_invalid',
 				'site_key_other_site',
+				'backup_files_root_unreadable',
 			],
 			BackupRefused::CODES
 		);
