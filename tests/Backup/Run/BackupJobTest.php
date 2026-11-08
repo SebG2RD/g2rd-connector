@@ -113,12 +113,13 @@ final class BackupJobTest extends BackupTestCase {
 	}
 
 	/**
-	 * @param (\Closure(): int)|null $ms   Horloge monotone (millisecondes) ; l'horloge réelle par défaut.
-	 * @param string|null            $root Racine copiée ; $this->racine par défaut.
+	 * @param (\Closure(): int)|null $ms     Horloge monotone (millisecondes) ; l'horloge réelle par défaut.
+	 * @param string|null            $root   Racine copiée ; $this->racine par défaut.
+	 * @param Sodium|null            $sodium Moteur ; celui du poste par défaut.
 	 */
-	private function job( ?object $wpdb = null, ?\Closure $ms = null, ?string $root = null ): BackupJob {
+	private function job( ?object $wpdb = null, ?\Closure $ms = null, ?string $root = null, ?Sodium $sodium = null ): BackupJob {
 		return new BackupJob(
-			new Sodium(),
+			$sodium ?? new Sodium(),
 			static fn (): int => self::NOW,
 			$ms,
 			function ( string $url, string $host, ?int $port, string $file, int $offset, int $length, int $timeout ): PartUploadResult {
@@ -369,9 +370,137 @@ final class BackupJobTest extends BackupTestCase {
 			$job->step( [ 'backup_id' => self::B1 ] );
 			self::fail( 'Refus attendu.' );
 		} catch ( BackupRefused $refus ) {
-			self::assertSame( BackupRefused::WORK_DIR_UNAVAILABLE, $refus->reason_code() );
+			self::assert_arretee_en_cours( $refus, BackupRefused::WORK_DIR_UNAVAILABLE );
 		}
 		self::assertSame( [ 'failed', 'backup_work_dir_unavailable' ], [ BackupState::load()['state']['last']['outcome'], BackupState::load()['state']['last']['code'] ] );
+	}
+
+	/**
+	 * Refus d'une sauvegarde déjà commencée (décision n° 3 du point de contrôle n° 2 de la phase 4) :
+	 * même code stable, phrase qui dit qu'elle est arrêtée et ce qui a été envoyé, jamais « n'a pas
+	 * été lancée … rien n'a été modifié ».
+	 */
+	private static function assert_arretee_en_cours( BackupRefused $refus, string $code ): void {
+		self::assertSame( $code, $refus->reason_code() );
+		self::assertNull( $refus->retry_after() );
+		self::assertStringStartsWith( 'La sauvegarde en cours a été arrêtée et ne sera pas terminée : ', $refus->getMessage() );
+		self::assertStringNotContainsString( 'n’a pas été lancée', $refus->getMessage() );
+		self::assertStringNotContainsString( 'Rien n’a été modifié', $refus->getMessage() );
+		self::assertStringContainsString( 'ce qu’elle avait déjà envoyé au stockage ne compte pas comme une sauvegarde', $refus->getMessage() );
+		self::assertStringContainsString( ' Action : ', $refus->getMessage() );
+	}
+
+	/** Sauvegarde close en échec sous $code : état au repos, issue vraie. */
+	private static function assert_close_en_echec( string $code ): void {
+		$etat = BackupState::load()['state'];
+		self::assertSame( [ BackupState::IDLE, 'failed', $code ], [ $etat['phase'], $etat['last']['outcome'], $etat['last']['code'] ] );
+	}
+
+	/** Moteur sans sodium natif ni copie de WordPress : X25519 et Ed25519 indisponibles. */
+	private static function sans_sodium(): Sodium {
+		return new Sodium( static fn ( string $extension ): bool => false, static fn (): bool => false );
+	}
+
+	public function test_dossier_de_travail_impossible_au_depart_la_sauvegarde_n_a_pas_ete_lancee(): void {
+		Functions\when( 'wp_mkdir_p' )->justReturn( false );
+
+		try {
+			$this->job()->start( self::depart( self::B1 ) );
+			self::fail( 'Refus attendu.' );
+		} catch ( BackupRefused $refus ) {
+			self::assertSame( BackupRefused::WORK_DIR_UNAVAILABLE, $refus->reason_code() );
+			self::assertStringStartsWith( 'La sauvegarde n’a pas été lancée : ', $refus->getMessage(), 'refus au départ : phrase inchangée' );
+		}
+		self::assertSame( BackupState::IDLE, BackupState::load()['state']['phase'] );
+	}
+
+	public function test_dossier_de_la_sauvegarde_perdu_entre_deux_tranches_l_arrete_et_le_dit(): void {
+		$job = $this->job();
+		$job->start( self::depart( self::B1 ) );
+		WorkDir::clear_job( self::B1 );
+		self::assertDirectoryDoesNotExist( $this->dossier( self::B1 ) );
+		Functions\when( 'wp_mkdir_p' )->justReturn( false );
+
+		try {
+			$job->step( [ 'backup_id' => self::B1 ] );
+			self::fail( 'Refus attendu.' );
+		} catch ( BackupRefused $refus ) {
+			self::assert_arretee_en_cours( $refus, BackupRefused::WORK_DIR_UNAVAILABLE );
+		}
+		self::assert_close_en_echec( 'backup_work_dir_unavailable' );
+	}
+
+	public function test_segment_impossible_a_ecrire_en_cours_de_sauvegarde_le_dit(): void {
+		$job = $this->job();
+		$job->start( self::depart( self::B1 ) );
+		mkdir( $this->dossier( self::B1 ) . '/seg-0.part' );
+
+		try {
+			$job->step( [ 'backup_id' => self::B1 ] );
+			self::fail( 'Refus attendu : le segment 0 ne s\'ouvre pas en écriture (SegmentProducer).' );
+		} catch ( BackupRefused $refus ) {
+			self::assert_arretee_en_cours( $refus, BackupRefused::WORK_DIR_UNAVAILABLE );
+		}
+		self::assert_close_en_echec( 'backup_work_dir_unavailable' );
+	}
+
+	public function test_journal_du_manifeste_impossible_a_ecrire_en_cours_de_sauvegarde_le_dit(): void {
+		$job = $this->job();
+		$job->start( self::depart( self::B1 ) );
+		$manifeste = $this->dossier( self::B1 ) . '/manifest.jsonl';
+		unlink( $manifeste );
+		mkdir( $manifeste );
+		$this->poser_etat(
+			[
+				'journals' => [
+					'manifest' => 0,
+					'baseline' => 0,
+					'segments' => 0,
+				],
+			]
+		);
+		// file_put_contents() sur un dossier avertit avant de rendre faux (ManifestJournal::append()).
+		set_error_handler( static fn (): bool => true, E_WARNING );
+		try {
+			$job->step( [ 'backup_id' => self::B1 ] );
+			self::fail( 'Refus attendu : le journal du manifeste ne s\'écrit plus.' );
+		} catch ( BackupRefused $refus ) {
+			self::assert_arretee_en_cours( $refus, BackupRefused::WORK_DIR_UNAVAILABLE );
+		} finally {
+			restore_error_handler();
+		}
+		self::assert_close_en_echec( 'backup_work_dir_unavailable' );
+	}
+
+	public function test_chiffrement_perdu_en_cours_de_copie_le_dit(): void {
+		$this->job()->start( self::depart( self::B1 ) );
+
+		try {
+			$this->job( null, null, null, self::sans_sodium() )->step( [ 'backup_id' => self::B1 ] );
+			self::fail( 'Refus attendu : segment impossible à sceller (SegmentProducer).' );
+		} catch ( BackupRefused $refus ) {
+			self::assert_arretee_en_cours( $refus, BackupRefused::CRYPTO_UNAVAILABLE );
+			self::assertStringContainsString( 'Aucun index n’a été envoyé', $refus->getMessage() );
+		}
+		self::assert_close_en_echec( 'crypto_unavailable' );
+	}
+
+	public function test_signature_de_l_index_impossible_le_dit(): void {
+		$job     = $this->job();
+		$rapport = $job->start( self::depart( self::B1 ) );
+		for ( $tour = 0; BackupState::UPLOAD !== $rapport['phase'] && $tour < 20; $tour++ ) {
+			$rapport = $job->step( [ 'backup_id' => self::B1, 'completed' => array_column( $rapport['pending'], 'segment' ) ] );
+		}
+
+		try {
+			$this->job( null, null, null, self::sans_sodium() )->step( [ 'backup_id' => self::B1, 'completed' => array_column( $rapport['pending'], 'segment' ) ] );
+			self::fail( 'Refus attendu : index impossible à signer.' );
+		} catch ( BackupRefused $refus ) {
+			self::assert_arretee_en_cours( $refus, BackupRefused::CRYPTO_UNAVAILABLE );
+			self::assertStringContainsString( 'Aucun index n’a été envoyé', $refus->getMessage() );
+		}
+		self::assert_close_en_echec( 'crypto_unavailable' );
+		self::assertDirectoryDoesNotExist( $this->dossier( self::B1 ), 'aucun index gardé' );
 	}
 
 	/**

@@ -65,6 +65,32 @@ final class BackupRefusedTest extends TestCase {
 		);
 	}
 
+	/**
+	 * Décision n° 3 du point de contrôle n° 2 de la phase 4 : au départ, « n'a pas été lancée … rien
+	 * n'a été modifié » ; sauvegarde déjà commencée, phrase « en cours », même code stable.
+	 */
+	public function test_une_sauvegarde_commencee_a_sa_propre_phrase(): void {
+		foreach ( [ BackupRefused::WORK_DIR_UNAVAILABLE, BackupRefused::CRYPTO_UNAVAILABLE ] as $code ) {
+			$depart   = new BackupRefused( $code );
+			$en_cours = $depart->in_progress();
+
+			self::assertStringStartsWith( 'La sauvegarde n’a pas été lancée : ', $depart->getMessage(), $code . ' : refus au départ inchangé' );
+			self::assertStringContainsString( 'Rien n’a été modifié.', $depart->getMessage(), $code );
+			self::assertSame( $code, $en_cours->outcome()['error_code'], $code . ' : code stable inchangé' );
+			self::assertArrayNotHasKey( 'retry_after', $en_cours->outcome(), $code );
+			self::assertStringStartsWith( 'La sauvegarde en cours a été arrêtée et ne sera pas terminée : ', $en_cours->getMessage(), $code );
+			self::assertStringNotContainsString( 'n’a pas été lancée', $en_cours->getMessage(), $code );
+			self::assertStringNotContainsString( 'Rien n’a été modifié', $en_cours->getMessage(), $code );
+			self::assertStringContainsString( 'ce qu’elle avait déjà envoyé au stockage ne compte pas comme une sauvegarde', $en_cours->getMessage(), $code . ' : dit ce qui a été envoyé' );
+			self::assertStringContainsString( ' Cause probable : ', $en_cours->getMessage(), $code );
+			self::assertStringContainsString( ' Action : ', $en_cours->getMessage(), $code );
+			self::assertSame( $en_cours->getMessage(), $en_cours->in_progress()->getMessage(), $code . ' : sans effet la seconde fois' );
+		}
+		self::assertStringContainsString( 'Aucun index n’a été envoyé', ( new BackupRefused( BackupRefused::CRYPTO_UNAVAILABLE ) )->in_progress()->getMessage() );
+		$autre = new BackupRefused( BackupRefused::DISK_LOW, null, '114 Mio' );
+		self::assertSame( $autre, $autre->in_progress(), 'sans effet pour un autre code' );
+	}
+
 	public function test_une_cle_non_enregistree_a_sa_propre_phrase(): void {
 		$cle   = ( new BackupRefused( BackupRefused::STORE_UNAVAILABLE, null, BackupRefused::DETAIL_KEY ) )->outcome();
 		$etat  = ( new BackupRefused( BackupRefused::STORE_UNAVAILABLE ) )->outcome();

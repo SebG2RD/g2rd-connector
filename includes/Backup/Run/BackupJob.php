@@ -274,11 +274,28 @@ final class BackupJob {
 	}
 
 	/**
+	 * Une tranche de la sauvegarde en cours. Un refus WORK_DIR_UNAVAILABLE ou CRYPTO_UNAVAILABLE y
+	 * porte la phrase d'une sauvegarde déjà commencée (BackupRefused::in_progress()) : jamais « n'a
+	 * pas été lancée » pour une sauvegarde arrêtée en route.
+	 *
 	 * @param array<mixed> $payload
 	 * @return array<string, mixed> Rapport, ou le résultat de fin (`finished`).
 	 * @throws BackupRefused Voir le contrat.
 	 */
 	public function step( array $payload ): array {
+		try {
+			return $this->run_step( $payload );
+		} catch ( BackupRefused $refusal ) {
+			throw $refusal->in_progress();
+		}
+	}
+
+	/**
+	 * @param array<mixed> $payload
+	 * @return array<string, mixed> Rapport, ou le résultat de fin (`finished`).
+	 * @throws BackupRefused Voir le contrat.
+	 */
+	private function run_step( array $payload ): array {
 		$now     = ( $this->clock )();
 		$started = ( $this->ms )();
 		$opened  = $this->open_slice( $payload, $now, $started );
@@ -410,6 +427,10 @@ final class BackupJob {
 		}
 		$job = WorkDir::job( $backup_id );
 		if ( null === $job ) {
+			// Dossier de la sauvegarde perdu, ou impossible à recréer : ses segments et ses journaux
+			// manquent, elle ne peut pas continuer. Close en échec, comme un journal perdu ci-dessous
+			// (statut vrai : jamais laissée active derrière un refus non réessayable).
+			$this->close( $loaded['raw'], $state, 'failed', BackupRefused::WORK_DIR_UNAVAILABLE, $now );
 			throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
 		}
 		// Choix n° 15 : une ligne ajoutée par une tranche dont l'état n'a pas été enregistré disparaît

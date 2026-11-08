@@ -95,6 +95,17 @@ final class BackupRefused extends \RuntimeException {
 	 */
 	public const DETAIL_SECONDARY_SITE = 'secondary_site';
 
+	/**
+	 * Détail de WORK_DIR_UNAVAILABLE et CRYPTO_UNAVAILABLE quand la sauvegarde est déjà commencée
+	 * (tranche, segment, journal du manifeste, signature de l'index ; cf. in_progress()) : la phrase
+	 * dit qu'elle est arrêtée et ce qui a déjà été envoyé, jamais qu'elle « n'a pas été lancée »
+	 * (statuts vrais, décision n° 3 du point de contrôle n° 2 de la phase 4). Le code ne change pas.
+	 */
+	public const DETAIL_IN_PROGRESS = 'in_progress';
+
+	/** Codes dont la phrase change pour une sauvegarde déjà commencée (DETAIL_IN_PROGRESS). */
+	private const IN_PROGRESS_CODES = [ self::CRYPTO_UNAVAILABLE, self::WORK_DIR_UNAVAILABLE ];
+
 	/** Tous les codes, dans l'ordre du contrat. */
 	public const CODES = [
 		self::SLICE_RUNNING,
@@ -151,8 +162,9 @@ final class BackupRefused extends \RuntimeException {
 	/**
 	 * @param string      $reason_code Un des codes de CODES.
 	 * @param int|null    $retry_after Délai conseillé ; ignoré pour un refus non réessayable.
-	 * @param string      $detail      Raison d'une interruption, nom de table, taille, DETAIL_KEY ou
-	 *                                 DETAIL_SECONDARY_SITE (marqueurs fixes) : jamais la valeur d'une clé.
+	 * @param string      $detail      Raison d'une interruption, nom de table, taille, DETAIL_KEY,
+	 *                                 DETAIL_SECONDARY_SITE ou DETAIL_IN_PROGRESS (marqueurs fixes) :
+	 *                                 jamais la valeur d'une clé.
 	 * @param string|null $stage       Étape d'un autotest en échec (STAGES) ; ignorée pour un autre code.
 	 * @throws \InvalidArgumentException Code inconnu : erreur de programmation.
 	 */
@@ -183,6 +195,18 @@ final class BackupRefused extends \RuntimeException {
 		}
 
 		return new self( $this->reason_code, $this->retry, $this->detail, $stage );
+	}
+
+	/**
+	 * Le même refus, dit pour une sauvegarde déjà commencée (IN_PROGRESS_CODES : phrase
+	 * DETAIL_IN_PROGRESS) ; sans effet pour un autre code ou s'il l'est déjà.
+	 */
+	public function in_progress(): self {
+		if ( self::DETAIL_IN_PROGRESS === $this->detail || ! in_array( $this->reason_code, self::IN_PROGRESS_CODES, true ) ) {
+			return $this;
+		}
+
+		return new self( $this->reason_code, $this->retry, self::DETAIL_IN_PROGRESS, $this->stage );
 	}
 
 	public function stage(): ?string {
@@ -256,14 +280,18 @@ final class BackupRefused extends \RuntimeException {
 				__( 'La sauvegarde a été interrompue et ne sera pas terminée : %s. Ce qu’elle avait préparé sur le site est retiré ; elle n’est pas comptée comme réussie. Action : aucune, la plateforme la refait sous un nouveau numéro.', 'g2rd-connector' ),
 				self::interruption( $detail )
 			),
-			self::CRYPTO_UNAVAILABLE => __( 'La sauvegarde n’a pas été lancée : le PHP de l’hébergement n’offre pas le chiffrement nécessaire (OpenSSL avec AES-256-GCM ; X25519 et Ed25519 par sodium ou par la copie livrée avec WordPress). Rien n’a été modifié. Cause probable : extension OpenSSL désactivée par l’hébergeur. Action : demander à l’hébergeur d’activer OpenSSL, puis relancer.', 'g2rd-connector' ),
+			self::CRYPTO_UNAVAILABLE => self::DETAIL_IN_PROGRESS === $detail
+				? __( 'La sauvegarde en cours a été arrêtée et ne sera pas terminée : le PHP de l’hébergement n’offre plus le chiffrement ou la signature nécessaires (OpenSSL avec AES-256-GCM ; X25519 et Ed25519 par sodium ou par la copie livrée avec WordPress). Aucun index n’a été envoyé : elle n’est pas comptée comme réussie, et ce qu’elle avait déjà envoyé au stockage ne compte pas comme une sauvegarde. Cause probable : extension OpenSSL ou sodium désactivée par l’hébergeur pendant la sauvegarde, ou clés de sécurité de wp-config.php changées pendant la sauvegarde. Action : demander à l’hébergeur de rétablir OpenSSL et sodium (ou remettre les clés de sécurité de wp-config.php), puis relancer la sauvegarde depuis la plateforme.', 'g2rd-connector' )
+				: __( 'La sauvegarde n’a pas été lancée : le PHP de l’hébergement n’offre pas le chiffrement nécessaire (OpenSSL avec AES-256-GCM ; X25519 et Ed25519 par sodium ou par la copie livrée avec WordPress). Rien n’a été modifié. Cause probable : extension OpenSSL désactivée par l’hébergeur. Action : demander à l’hébergeur d’activer OpenSSL, puis relancer.', 'g2rd-connector' ),
 			self::SELF_TEST_FAILED => __( 'La sauvegarde a été arrêtée : le site n’a pas pu chiffrer ou signer de façon fiable (contrôle à valeurs connues en échec). Aucun index n’a été envoyé ; rien n’est gardé comme sauvegarde. Cause probable : calcul cryptographique faux du PHP de l’hébergement, par exemple sous JIT. Action : relancer ; si cela se répète, signaler l’hébergement au support G2RD, les sauvegardes de ce site restant arrêtées.', 'g2rd-connector' ),
 			self::DISK_LOW => sprintf(
 				/* translators: %s: espace nécessaire, par exemple « 114 Mio ». */
 				__( 'La sauvegarde a été arrêtée : il ne reste pas assez d’espace disque sur l’hébergement pour préparer la suite (au moins %s nécessaires). Rien n’est gardé comme sauvegarde. Cause probable : disque de l’hébergement presque plein. Action : libérer de l’espace ou agrandir l’hébergement, puis relancer.', 'g2rd-connector' ),
 				'' === $detail ? '?' : $detail
 			),
-			self::WORK_DIR_UNAVAILABLE => __( 'La sauvegarde n’a pas été lancée : le dossier de travail wp-content/g2rd-backups n’a pas pu être créé, ou n’est pas inscriptible. Rien n’a été modifié. Cause probable : droits du dossier wp-content. Action : rendre wp-content inscriptible par PHP, puis relancer.', 'g2rd-connector' ),
+			self::WORK_DIR_UNAVAILABLE => self::DETAIL_IN_PROGRESS === $detail
+				? __( 'La sauvegarde en cours a été arrêtée et ne sera pas terminée : le dossier de travail wp-content/g2rd-backups n’a plus pu être écrit ou relu pendant la sauvegarde. Elle n’est pas comptée comme réussie, et ce qu’elle avait déjà envoyé au stockage ne compte pas comme une sauvegarde. Cause probable : droits du dossier wp-content modifiés, disque plein, ou fichiers de ce dossier retirés par une extension de nettoyage pendant la sauvegarde. Action : rendre wp-content inscriptible par PHP et vérifier l’espace disque, puis relancer la sauvegarde depuis la plateforme.', 'g2rd-connector' )
+				: __( 'La sauvegarde n’a pas été lancée : le dossier de travail wp-content/g2rd-backups n’a pas pu être créé, ou n’est pas inscriptible. Rien n’a été modifié. Cause probable : droits du dossier wp-content. Action : rendre wp-content inscriptible par PHP, puis relancer.', 'g2rd-connector' ),
 			self::TOO_MANY_SEGMENTS => __( 'La sauvegarde a été arrêtée : le site dépasse la taille maximale d’une sauvegarde (4 095 morceaux, environ 256 Gio). Rien n’est gardé comme sauvegarde. Cause probable : site très volumineux, ou dossier de cache ou d’archives à exclure. Action : exclure les dossiers inutiles de la sauvegarde, ou contacter le support G2RD.', 'g2rd-connector' ),
 			self::QUEUE_UNSUPPORTED => __( 'La commande de sauvegarde n’a pas été exécutée : elle est arrivée par la file des commandes, que les sauvegardes n’emploient pas encore. Rien n’a été modifié. Cause probable : plateforme plus récente que ce connecteur. Action : mettre le connecteur à jour ; la plateforme envoie les commandes de sauvegarde directement au site.', 'g2rd-connector' ),
 			self::DB_CHARSET_MISMATCH => sprintf(
