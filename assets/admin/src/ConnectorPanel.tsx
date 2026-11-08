@@ -91,14 +91,15 @@ function settingsPayload( d: ConnectorBootData ) {
 }
 
 /**
- * Phrase d'aide de la case « Sauvegardes chiffrées » : constante d'arrêt, case cochée
- * (avec l'empreinte à comparer au service de clés), case décochée.
+ * Phrase d'aide de la case « Sauvegardes chiffrées » : constante d'arrêt (case grisée et
+ * décochée, même phrase que la page de secours), verrou du réseau, case cochée (avec
+ * l'empreinte à comparer au service de clés), case décochée.
  *
  * @param d État du panneau.
  */
 function backupDescription( d: ConnectorBootData ): string {
 	if ( d.backup.disabledByConstant ) {
-		return 'Désactivées par la constante G2RD_CONNECTOR_DISABLE_BACKUP de wp-config.php : aucune sauvegarde ne part de ce site. Retirez cette constante pour pouvoir les activer.';
+		return 'Désactivées par la constante G2RD_CONNECTOR_DISABLE_BACKUP de wp-config.php : aucune sauvegarde ne part de ce site, et cette case ne peut pas être changée tant que la constante est posée. Action : retirez cette constante de wp-config.php (ou faites-la retirer par la personne qui gère l’hébergement), puis cochez la case ; si elle était cochée avant la constante, les sauvegardes reprennent dès ce retrait.';
 	}
 	if ( d.backup.lockMessage ) {
 		return d.backup.lockMessage;
@@ -780,7 +781,10 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 						icon="shield"
 						title="Sauvegardes chiffrées"
 						description={ backupDescription( state ) }
-						checked={ state.backupEnabled }
+						checked={
+							state.backupEnabled &&
+							! state.backup.disabledByConstant
+						}
 						onChange={ ( backupEnabled ) =>
 							update( { backupEnabled } )
 						}

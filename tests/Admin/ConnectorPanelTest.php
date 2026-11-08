@@ -541,6 +541,26 @@ final class ConnectorPanelTest extends TestCase {
 		self::assertMatchesRegularExpression( '/\.g2rd-connector-panel \.g2rd-connector-stack > \.notice\s*\{\s*margin: 0;\s*\}/', $css );
 	}
 
+	/**
+	 * Décision n° 5 du point de contrôle n° 2 de la phase 4 : constante d'arrêt posée, la case
+	 * « Sauvegardes chiffrées » est grisée ET décochée (la valeur enregistrée, envoyée telle quelle
+	 * par settingsPayload(), est gardée), avec la phrase de la page de secours, qui dit pourquoi et
+	 * quoi faire ; l'empreinte n'est montrée que case cochée et réglable (même règle que la page).
+	 */
+	public function test_constante_d_arret_la_case_est_decochee_et_dit_pourquoi_comme_la_page(): void {
+		$panneau = self::panneau();
+
+		self::assertMatchesRegularExpression( '/checked=\{\s*state\.backupEnabled\s*&&\s*!\s*state\.backup\.disabledByConstant\s*\}/', $panneau, 'case décochée quand la constante coupe les sauvegardes' );
+		self::assertStringContainsString( 'backup_enabled: d.backupEnabled,', $panneau, 'valeur enregistrée envoyée telle quelle' );
+		preg_match( "/if \\( d\\.backup\\.disabledByConstant \\) \\{\\s*return '([^']*)';/", $panneau, $phrase );
+		self::assertArrayHasKey( 1, $phrase, 'Phrase de la constante introuvable dans backupDescription().' );
+		self::assertStringContainsString( ' Action : ', $phrase[1], 'la phrase dit quoi faire' );
+		self::assertStringContainsString( 'si elle était cochée avant la constante, les sauvegardes reprennent dès ce retrait.', $phrase[1], 'la phrase dit ce que devient la valeur enregistrée' );
+		self::assertStringContainsString( "esc_html__( '" . $phrase[1] . "', 'g2rd-connector' )", self::source( 'includes/Admin/Page.php' ), 'même phrase dans la page de secours' );
+		self::assertSame( 1, substr_count( $panneau, 'd.backup.fingerprint' ), 'empreinte dans une seule branche' );
+		self::assertMatchesRegularExpression( '/if \( d\.backup\.disabledByConstant \).*if \( d\.backup\.lockMessage \).*if \( d\.backupEnabled \) \{\s*return `[^`]*d\.backup\.fingerprint/s', $panneau, 'empreinte seulement case cochée, sans constante ni verrou' );
+	}
+
 	public function test_la_feuille_garde_le_correctif_des_cases_cochees(): void {
 		$css = self::source( 'assets/admin/src/style.css' );
 		self::assertStringContainsString( 'body.wp-admin .g2rd-connector-wrap.g2rd-connector-wrap--wp7 input[type="checkbox"]:checked {', $css );

@@ -6,6 +6,8 @@ namespace G2RD\Connector\Tests\Admin;
 
 use Brain\Monkey\Functions;
 use G2RD\Connector\Admin\Page;
+use G2RD\Connector\Backup\Keys\Fingerprint;
+use G2RD\Connector\Backup\Keys\SigningKey;
 use G2RD\Connector\BootData;
 use G2RD\Connector\Settings;
 use G2RD\Connector\Tests\TestCase;
@@ -195,6 +197,64 @@ final class PageTest extends TestCase {
 		self::assertTrue( $this->options[ Settings::OPTION_KEY ]['backup_enabled'] );
 		self::assertDoesNotMatchRegularExpression( '/name=.g2rd_backup_enabled. value=.1.\s+checked=.checked. disabled/', $html );
 		self::assertStringNotContainsString( 'seul un super-administrateur', $html );
+	}
+
+	/** Clé de signature du site enregistrée : son empreinte est connue des deux écrans. */
+	private function cle_de_signature(): string {
+		$publique                            = str_repeat( 'ab', 32 );
+		$this->options[ SigningKey::OPTION ] = [
+			'seed'       => 'graine-chiffree',
+			'public_key' => $publique,
+			'created_at' => 1800000000,
+		];
+
+		return Fingerprint::display( (string) hex2bin( $publique ) );
+	}
+
+	/**
+	 * Décision n° 5 du point de contrôle n° 2 de la phase 4 : constante d'arrêt posée, case grisée
+	 * ET décochée (valeur enregistrée gardée), phrase qui dit pourquoi et quoi faire, reliée à la
+	 * case ; aucune empreinte, comme le panneau.
+	 */
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_constante_d_arret_case_grisee_et_decochee_avec_son_explication(): void {
+		define( 'G2RD_CONNECTOR_DISABLE_BACKUP', true );
+		$this->options[ Settings::OPTION_KEY ] = [ 'backup_enabled' => true ];
+		$empreinte                             = $this->cle_de_signature();
+
+		$html = $this->render();
+
+		self::assertMatchesRegularExpression( '/name=.g2rd_backup_enabled. value=.1.\s+disabled=.disabled.>/', $html, 'case décochée et désactivée' );
+		self::assertStringContainsString( 'aria-describedby="g2rd_backup_enabled_constante g2rd_backup_enabled_aide" name="g2rd_backup_enabled"', $html, 'explication reliée à la case' );
+		self::assertStringContainsString( '<p class="description" id="g2rd_backup_enabled_constante">Désactivées par la constante G2RD_CONNECTOR_DISABLE_BACKUP de wp-config.php : ', $html );
+		self::assertStringContainsString( 'cette case ne peut pas être changée tant que la constante est posée. Action : retirez cette constante', $html );
+		self::assertStringContainsString( 'si elle était cochée avant la constante, les sauvegardes reprennent dès ce retrait.', $html, 'valeur enregistrée dite' );
+		self::assertStringNotContainsString( $empreinte, $html, 'aucune empreinte, comme le panneau' );
+		self::assertTrue( $this->options[ Settings::OPTION_KEY ]['backup_enabled'], 'valeur enregistrée gardée' );
+	}
+
+	public function test_case_des_sauvegardes_decochee_aucune_empreinte_comme_le_panneau(): void {
+		$this->options[ Settings::OPTION_KEY ] = [ 'backup_enabled' => false ];
+		$empreinte                             = $this->cle_de_signature();
+
+		$html = $this->render();
+
+		self::assertDoesNotMatchRegularExpression( '/name=.g2rd_backup_enabled. value=.1.\s+checked/', $html );
+		self::assertStringNotContainsString( 'Empreinte de la clé de signature du site', $html );
+		self::assertStringNotContainsString( $empreinte, $html );
+		self::assertStringNotContainsString( 'g2rd_backup_enabled_constante', $html, 'sans constante : aucune phrase de constante' );
+	}
+
+	public function test_case_des_sauvegardes_cochee_l_empreinte_est_montree(): void {
+		$this->options[ Settings::OPTION_KEY ] = [ 'backup_enabled' => true ];
+		$empreinte                             = $this->cle_de_signature();
+
+		$html = $this->render();
+
+		self::assertMatchesRegularExpression( '/name=.g2rd_backup_enabled. value=.1.\s+checked=.checked.\s*>/', $html );
+		self::assertStringContainsString( 'aria-describedby="g2rd_backup_enabled_aide" name="g2rd_backup_enabled"', $html );
+		self::assertStringContainsString( 'Empreinte de la clé de signature du site, à comparer à celle de la page d’approbation du service de clés G2RD : <code>' . $empreinte . '</code>', $html );
 	}
 
 	public function test_la_case_du_releve_est_affichee_decochee_par_defaut(): void {

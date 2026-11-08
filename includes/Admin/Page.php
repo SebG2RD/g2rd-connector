@@ -249,6 +249,11 @@ final class Page {
 		$this->maybe_handle_form();
 		$settings = Settings::all();
 		$backup   = BackupAdminView::data( time() );
+		// Case des sauvegardes, comme dans le panneau React : décochée sur un site secondaire et quand
+		// la constante d'arrêt est posée (la valeur enregistrée reste) ; empreinte montrée seulement
+		// case cochée et réglable (ni constante ni verrou du réseau).
+		$backup_checked     = BackupSwitch::LOCK_SECONDARY !== $backup['lock'] && ! $backup['disabledByConstant'] && (bool) ( $settings['backup_enabled'] ?? false );
+		$backup_fingerprint = $backup_checked && null === $backup['lock'] ? $backup['fingerprint'] : null;
 		$enrolled = Settings::is_enrolled();
 		// Jeton stocké mais inutilisable : le site reste « enrôlé » (d'où le bouton
 		// Déconnecter), mais ne parle plus au manager. On montre l'état réel.
@@ -391,18 +396,18 @@ final class Page {
 						<th scope="row" id="g2rd_backup_enabled_titre"><?php echo esc_html__( 'Sauvegardes chiffrées', 'g2rd-connector' ); ?></th>
 						<td>
 							<label>
-								<input type="checkbox" aria-labelledby="g2rd_backup_enabled_titre" aria-describedby="g2rd_backup_enabled_aide" name="g2rd_backup_enabled" value="1"
-									<?php checked( BackupSwitch::LOCK_SECONDARY !== $backup['lock'] && (bool) ( $settings['backup_enabled'] ?? false ) ); ?> <?php disabled( $backup['disabledByConstant'] || null !== $backup['lock'] ); ?>>
+								<input type="checkbox" aria-labelledby="g2rd_backup_enabled_titre" aria-describedby="<?php echo esc_attr( $backup['disabledByConstant'] ? 'g2rd_backup_enabled_constante g2rd_backup_enabled_aide' : 'g2rd_backup_enabled_aide' ); ?>" name="g2rd_backup_enabled" value="1"
+									<?php checked( $backup_checked ); ?> <?php disabled( $backup['disabledByConstant'] || null !== $backup['lock'] ); ?>>
 								<span id="g2rd_backup_enabled_aide"><?php echo esc_html__( 'G2RD WP Manager peut sauvegarder ce site : base et fichiers sont chiffrés avant de quitter le serveur. Décochée : aucune sauvegarde ne part, et les mises à jour se déroulent exactement comme avant.', 'g2rd-connector' ); ?></span>
 							</label>
 							<?php if ( null !== $backup['lockMessage'] ) : ?>
 							<p class="description"><?php echo esc_html( $backup['lockMessage'] ); ?></p>
 							<?php endif; ?>
 							<?php if ( $backup['disabledByConstant'] ) : ?>
-							<p class="description"><?php echo esc_html__( 'Désactivées par la constante G2RD_CONNECTOR_DISABLE_BACKUP de wp-config.php : aucune sauvegarde ne part de ce site. Retirez cette constante pour pouvoir les activer.', 'g2rd-connector' ); ?></p>
+							<p class="description" id="g2rd_backup_enabled_constante"><?php echo esc_html__( 'Désactivées par la constante G2RD_CONNECTOR_DISABLE_BACKUP de wp-config.php : aucune sauvegarde ne part de ce site, et cette case ne peut pas être changée tant que la constante est posée. Action : retirez cette constante de wp-config.php (ou faites-la retirer par la personne qui gère l’hébergement), puis cochez la case ; si elle était cochée avant la constante, les sauvegardes reprennent dès ce retrait.', 'g2rd-connector' ); ?></p>
 							<?php endif; ?>
-							<?php if ( null !== $backup['fingerprint'] ) : ?>
-							<p class="description"><?php echo esc_html__( 'Empreinte de la clé de signature du site, à comparer à celle de la page d’approbation du service de clés G2RD :', 'g2rd-connector' ); ?> <code><?php echo esc_html( $backup['fingerprint'] ); ?></code></p>
+							<?php if ( null !== $backup_fingerprint ) : ?>
+							<p class="description"><?php echo esc_html__( 'Empreinte de la clé de signature du site, à comparer à celle de la page d’approbation du service de clés G2RD :', 'g2rd-connector' ); ?> <code><?php echo esc_html( $backup_fingerprint ); ?></code></p>
 							<?php endif; ?>
 						</td>
 					</tr>
