@@ -125,6 +125,48 @@ final class FileArchiverTest extends TestCase {
 		self::assertSame( 4, $e->written(), 'rien d\'écrit après la magie' );
 	}
 
+	/**
+	 * Fichier du parcours remplacé par un lien (ou un de ses dossiers) avant sa lecture : jamais suivi.
+	 * Les deux cas sont essayés sur le banc Linux (liens indisponibles sans droit sous Windows).
+	 */
+	public function test_un_fichier_remplace_par_un_lien_n_est_jamais_lu(): void {
+		$dehors = str_replace( '\\', '/', sys_get_temp_dir() ) . '/g2rd-hors-' . bin2hex( random_bytes( 4 ) );
+		mkdir( $dehors );
+		file_put_contents( $dehors . '/secret.txt', 'hors de la racine' );
+		$entree = $this->entree( 'd/f.txt', 'hors de la racine' );
+		unlink( $this->racine . '/d/f.txt' );
+		try {
+			if ( ! function_exists( 'symlink' ) || ! @symlink( $dehors . '/secret.txt', $this->racine . '/d/f.txt' ) ) {
+				self::markTestSkipped( 'Liens symboliques indisponibles sur ce poste (Windows sans droit de création) : essai refait sur le banc Linux.' );
+			}
+			[ $e ] = self::ecrivain();
+			$r     = ( new FileArchiver( $this->racine ) )->archive( [ 'size' => 17, 'mtime' => (int) ( lstat( $dehors . '/secret.txt' )['mtime'] ?? 0 ) ] + $entree, 0, $e, static fn (): bool => false );
+
+			self::assertTrue( $r['unreadable'], 'fichier devenu lien : illisible' );
+			self::assertNull( $r['sha256'] );
+			self::assertSame( 4, $e->written(), 'pas un octet du fichier visé' );
+			unlink( $this->racine . '/d/f.txt' );
+
+			// Un dossier remplacé par un lien : le fichier est lu par un chemin qui en traverse un.
+			if ( ! @symlink( $dehors, $this->racine . '/d/dossier' ) ) {
+				self::markTestSkipped( 'Liens symboliques indisponibles sur ce poste.' );
+			}
+			[ $e ] = self::ecrivain();
+			$r     = ( new FileArchiver( $this->racine ) )->archive( [ 'path' => 'd/dossier/secret.txt' ] + $entree, 0, $e, static fn (): bool => false );
+
+			self::assertTrue( $r['unreadable'], 'dossier devenu lien : illisible' );
+			self::assertSame( 4, $e->written() );
+		} finally {
+			foreach ( [ $this->racine . '/d/f.txt', $this->racine . '/d/dossier' ] as $lien ) {
+				if ( is_link( $lien ) ) {
+					unlink( $lien );
+				}
+			}
+			unlink( $dehors . '/secret.txt' );
+			rmdir( $dehors );
+		}
+	}
+
 	public function test_fichier_qui_retrecit_ou_grandit_pendant_la_lecture_est_dit_illisible(): void {
 		$entree = $this->entree( 'd/change.bin', random_bytes( FileArchiver::CHUNK_BYTES * 2 ) );
 		$this->reecrire( 'd/change.bin', random_bytes( 1000 ), self::MTIME );

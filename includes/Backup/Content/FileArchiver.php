@@ -28,8 +28,13 @@ final class FileArchiver {
 
 	private string $root;
 
+	/** Racine résolue (liens compris) : tout fichier lu doit s'y résoudre à son chemin exact (in_place()). */
+	private string $real_root;
+
 	public function __construct( string $root ) {
-		$this->root = rtrim( str_replace( '\\', '/', $root ), '/' );
+		$this->root      = rtrim( str_replace( '\\', '/', $root ), '/' );
+		$real            = realpath( $this->root );
+		$this->real_root = false === $real ? $this->root : rtrim( str_replace( '\\', '/', $real ), '/' );
 	}
 
 	public static function compressible( string $path ): bool {
@@ -57,6 +62,12 @@ final class FileArchiver {
 			return self::outcome( true, 0, null, true );
 		}
 		try {
+			// Aucun lien suivi : le parcours rend un lien comme tel, mais un fichier peut être remplacé par un lien (ou un
+			// de ses dossiers par un lien) entre le parcours et la lecture, tranches plus tard. Le fichier ouvert doit se
+			// résoudre à sa place exacte sous la racine ; sinon il est dit illisible, sans un octet lu.
+			if ( ! $this->in_place( $entry['path'] ) ) {
+				return self::outcome( true, 0, null, true );
+			}
 			if ( $offset > 0 && ( 0 !== fseek( $handle, $offset ) || $offset >= $entry['size'] ) ) {
 				return self::outcome( true, 0, null, true );
 			}
@@ -100,6 +111,17 @@ final class FileArchiver {
 		} finally {
 			fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- fermeture du flux ouvert ci-dessus.
 		}
+	}
+
+	/**
+	 * Le chemin se résout (realpath(), liens suivis) à lui-même sous la racine résolue : aucun de ses
+	 * composants n'est un lien. Une fenêtre minuscule reste entre ce contrôle et la lecture déjà ouverte
+	 * (PHP n'offre pas O_NOFOLLOW) ; la taille et la date relues à la fin (changed()) en détectent l'effet.
+	 */
+	private function in_place( string $path ): bool {
+		$real = realpath( $this->root . '/' . $path );
+
+		return false !== $real && str_replace( '\\', '/', $real ) === $this->real_root . '/' . $path;
 	}
 
 	/**
