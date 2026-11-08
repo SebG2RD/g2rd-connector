@@ -17,6 +17,8 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Cron;
 
+use G2RD\Connector\Backup\Commands\BackupCommands;
+use G2RD\Connector\Backup\Commands\BackupRefused;
 use G2RD\Connector\Commands\CommandExecutor;
 use G2RD\Connector\Outbound\ManagerClient;
 use G2RD\Connector\Security\QueueSignature;
@@ -235,7 +237,7 @@ final class HeartbeatJob {
 		// Le manager envoie un payload JSON pour les commandes qui en ont besoin
 		// (update_plugin, update_theme). Les autres commandes l'ignorent
 		// silencieusement (rétro-compat).
-		$outcome = CommandExecutor::run( $plan['kind'], $plan['payload'] );
+		$outcome = self::queue_outcome( $plan['kind'], $plan['payload'] );
 		if ( null === $outcome ) {
 			$client->send_command_result(
 				$plan['id'],
@@ -251,6 +253,22 @@ final class HeartbeatJob {
 			self::result_of( $outcome ),
 			$outcome['error'] ?? null
 		);
+	}
+
+	/**
+	 * Exécution d'une commande tirée de la file. Les commandes de sauvegarde n'y passent pas avant la
+	 * file signée E8 (lot 5-D) : refus `backup_queue_unsupported`, rien d'exécuté. Publique pour les
+	 * tests.
+	 *
+	 * @param array<string, mixed>|null $payload
+	 * @return array<string, mixed>|null Issue de CommandExecutor::run(), ou du refus ; null si la commande est inconnue.
+	 */
+	public static function queue_outcome( string $kind, ?array $payload ): ?array {
+		if ( BackupCommands::is_backup_command( $kind ) ) {
+			return ( new BackupRefused( BackupRefused::QUEUE_UNSUPPORTED ) )->outcome();
+		}
+
+		return CommandExecutor::run( $kind, $payload );
 	}
 
 	/**

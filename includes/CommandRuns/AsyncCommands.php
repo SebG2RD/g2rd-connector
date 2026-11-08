@@ -9,6 +9,8 @@
  * immédiate : elles restent sur `/command`
  * (décision n° 5 du propriétaire). Chaque commande de CommandExecutor::ALLOWED est
  * rangée dans l'une des deux listes, jamais dans les deux (cf. AsyncCommandsTest).
+ * Les quatre commandes de sauvegarde, admises en arrière-plan : une tranche tient alors
+ * le créneau du site.
  *
  * @package G2RD\Connector
  */
@@ -35,6 +37,10 @@ final class AsyncCommands {
 		'delete_post_revisions',
 		'empty_trashed_posts',
 		'delete_expired_transients',
+		'backup_set_key',
+		'backup_start',
+		'backup_step',
+		'backup_abort',
 	];
 
 	/**

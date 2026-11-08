@@ -40,7 +40,8 @@ final class NoWiringTest extends TestCase {
 
 	/**
 	 * CommandExecutor::ALLOWED relevée le 24/10/2026 sur 64560ac (1.15.0), dans cet ordre ;
-	 * recalée le 07/11/2026 sur 666f084 (1.16.0-rc.1 : set_php_errors_capture).
+	 * recalée le 07/11/2026 sur 666f084 (1.16.0-rc.1 : set_php_errors_capture) ; relevée le
+	 * 08/11/2026 sur `ajout/sauvegardes-module` (phase 4 : les quatre commandes backup_*).
 	 */
 	private const COMMANDES_ADMISES = [
 		'clear_cache',
@@ -58,17 +59,26 @@ final class NoWiringTest extends TestCase {
 		'delete_restore_point',
 		'set_signature_policy',
 		'set_php_errors_capture',
+		'backup_set_key',
+		'backup_start',
+		'backup_step',
+		'backup_abort',
 	];
 
 	/**
 	 * CommandExecutor::SIGNED_ONLY relevée le 24/10/2026 sur 64560ac (1.15.0), dans cet ordre ;
-	 * recalée le 07/11/2026 sur 666f084 (1.16.0-rc.1 : set_php_errors_capture).
+	 * recalée le 07/11/2026 sur 666f084 (1.16.0-rc.1 : set_php_errors_capture) ; relevée le
+	 * 08/11/2026 sur `ajout/sauvegardes-module` (phase 4 : les quatre commandes backup_*).
 	 */
 	private const COMMANDES_SIGNEES_SEULEMENT = [
 		'rollback_plugin',
 		'delete_restore_point',
 		'set_signature_policy',
 		'set_php_errors_capture',
+		'backup_set_key',
+		'backup_start',
+		'backup_step',
+		'backup_abort',
 	];
 
 	/**
@@ -81,6 +91,7 @@ final class NoWiringTest extends TestCase {
 		'includes/Rest/CommandRunsController.php',
 		'includes/CommandRuns/AfterResponseRunner.php',
 		'includes/Plugin.php',
+		'includes/Cron/HeartbeatJob.php',
 	];
 
 	/**
@@ -207,25 +218,26 @@ final class NoWiringTest extends TestCase {
 	}
 
 	public function test_les_listes_de_commandes_sont_exactement_celles_ecrites_ici(): void {
-		self::assertCount( 15, self::COMMANDES_ADMISES );
-		self::assertCount( 4, self::COMMANDES_SIGNEES_SEULEMENT );
+		self::assertCount( 19, self::COMMANDES_ADMISES );
+		self::assertCount( 8, self::COMMANDES_SIGNEES_SEULEMENT );
 
 		self::assertSame(
 			self::COMMANDES_ADMISES,
 			CommandExecutor::ALLOWED,
-			"CommandExecutor::ALLOWED n'est plus la liste relevée sur 666f084 (15 commandes).\n"
-			. "Cause probable : une commande ajoutée, retirée ou déplacée, par exemple une commande backup_* "
-			. "arrivée avant la phase 4.\n"
-			. 'Action : la phase 2 n\'ajoute aucune commande ; si le changement est voulu (lot 4-C : 19 '
-			. 'commandes), mettre la liste écrite dans ce test à jour dans le même commit.'
+			"CommandExecutor::ALLOWED n'est plus la liste relevée sur ajout/sauvegardes-module (19 commandes).\n"
+			. "Cause probable : une commande ajoutée, retirée ou déplacée (les quatre commandes backup_* de la "
+			. "phase 4 y sont déjà, à la fin).\n"
+			. 'Action : si le changement est voulu par un plan, mettre la liste écrite dans ce test à jour '
+			. 'dans le même commit ; sinon, rétablir CommandExecutor::ALLOWED.'
 		);
 		self::assertSame(
 			self::COMMANDES_SIGNEES_SEULEMENT,
 			CommandExecutor::SIGNED_ONLY,
-			"CommandExecutor::SIGNED_ONLY n'est plus la liste relevée sur 666f084 (4 commandes).\n"
-			. "Cause probable : une commande signée ajoutée, retirée ou déplacée avant la phase 4.\n"
-			. 'Action : la phase 2 n\'ajoute aucune commande ; si le changement est voulu (lot 4-C : '
-			. '8 commandes), mettre la liste écrite dans ce test à jour dans le même commit.'
+			"CommandExecutor::SIGNED_ONLY n'est plus la liste relevée sur ajout/sauvegardes-module (8 commandes).\n"
+			. "Cause probable : une commande signée ajoutée, retirée ou déplacée (les quatre commandes "
+			. "backup_* de la phase 4 y sont déjà, à la fin).\n"
+			. 'Action : si le changement est voulu par un plan, mettre la liste écrite dans ce test à jour '
+			. 'dans le même commit ; sinon, rétablir CommandExecutor::SIGNED_ONLY.'
 		);
 	}
 

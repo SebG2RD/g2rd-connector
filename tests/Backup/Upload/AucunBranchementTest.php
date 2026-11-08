@@ -46,7 +46,7 @@ final class AucunBranchementTest extends TestCase {
 		'php_errors_log_tail'     => false,
 	];
 
-	/** CommandExecutor::ALLOWED d'origin/main, dans son ordre. */
+	/** CommandExecutor::ALLOWED d'origin/main, dans son ordre, et les quatre commandes de sauvegarde de la phase 4 (tâche 30). */
 	private const COMMANDES_D_ORIGINE = [
 		'clear_cache',
 		'check_updates',
@@ -63,14 +63,22 @@ final class AucunBranchementTest extends TestCase {
 		'delete_restore_point',
 		'set_signature_policy',
 		'set_php_errors_capture',
+		'backup_set_key',
+		'backup_start',
+		'backup_step',
+		'backup_abort',
 	];
 
-	/** CommandExecutor::SIGNED_ONLY d'origin/main, dans son ordre. */
+	/** CommandExecutor::SIGNED_ONLY d'origin/main, dans son ordre, et les quatre commandes de sauvegarde de la phase 4 (tâche 30). */
 	private const COMMANDES_SIGNEES_D_ORIGINE = [
 		'rollback_plugin',
 		'delete_restore_point',
 		'set_signature_policy',
 		'set_php_errors_capture',
+		'backup_set_key',
+		'backup_start',
+		'backup_step',
+		'backup_abort',
 	];
 
 	/**

@@ -21,6 +21,7 @@ namespace G2RD\Connector\Commands;
 
 use Automatic_Upgrader_Skin;
 use Core_Upgrader;
+use G2RD\Connector\Backup\Commands\BackupCommands;
 use G2RD\Connector\Backup\Commands\BackupRefused;
 use G2RD\Connector\Backup\Gate\UpdateGate;
 use G2RD\Connector\PhpErrors\CaptureCommand;
@@ -51,6 +52,10 @@ final class CommandExecutor {
 		'delete_restore_point',
 		'set_signature_policy',
 		'set_php_errors_capture',
+		'backup_set_key',
+		'backup_start',
+		'backup_step',
+		'backup_abort',
 	];
 
 	/**
@@ -59,7 +64,9 @@ final class CommandExecutor {
 	 * par le cron (cf Cron\HeartbeatJob et Security\QueueSignature). Les commandes
 	 * historiques n'y figurent pas : en politique `report`, elles restent acceptées
 	 * sans signature. `set_php_errors_capture` (1.16) : activer le relevé des erreurs
-	 * PHP fait envoyer des données du site.
+	 * PHP fait envoyer des données du site. Les quatre commandes `backup_*` (sauvegardes
+	 * chiffrées, Backup\Commands\BackupCommands) reçoivent une clé, copient et envoient le
+	 * site.
 	 *
 	 * @var list<string>
 	 */
@@ -68,6 +75,10 @@ final class CommandExecutor {
 		'delete_restore_point',
 		'set_signature_policy',
 		'set_php_errors_capture',
+		'backup_set_key',
+		'backup_start',
+		'backup_step',
+		'backup_abort',
 	];
 
 	/** Longueur maximale de la sortie parasite remontée au manager (diagnostic). */
@@ -176,6 +187,7 @@ final class CommandExecutor {
 				'delete_restore_point'      => ( new RestoreCommands( Services::make() ) )->delete_restore_point( (array) ( $payload ?? [] ) ),
 				'set_signature_policy'      => ( new RestoreCommands( Services::make() ) )->set_signature_policy( (array) ( $payload ?? [] ) ),
 				'set_php_errors_capture'    => ( new CaptureCommand() )->run( (array) ( $payload ?? [] ) ),
+				'backup_set_key', 'backup_start', 'backup_step', 'backup_abort' => BackupCommands::run( $command, (array) ( $payload ?? [] ) ),
 			};
 			$outcome = [
 				'status' => 'done',

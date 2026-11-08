@@ -137,6 +137,10 @@ final class HeartbeatJobSignedQueueTest extends TestCase {
 		yield 'delete_restore_point' => [ 'delete_restore_point', [ 'all' => true ] ];
 		yield 'set_signature_policy' => [ 'set_signature_policy', [ 'policy' => 'report' ] ];
 		yield 'set_php_errors_capture' => [ 'set_php_errors_capture', [ 'capture' => true ] ];
+		yield 'backup_set_key' => [ 'backup_set_key', [ 'version' => 1 ] ];
+		yield 'backup_start' => [ 'backup_start', [ 'backup_id' => str_repeat( 'a', 32 ) ] ];
+		yield 'backup_step' => [ 'backup_step', [ 'backup_id' => str_repeat( 'a', 32 ) ] ];
+		yield 'backup_abort' => [ 'backup_abort', [ 'backup_id' => str_repeat( 'a', 32 ) ] ];
 	}
 
 	public function test_le_fournisseur_couvre_toutes_les_commandes_signed_only(): void {
