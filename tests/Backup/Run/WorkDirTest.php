@@ -247,6 +247,9 @@ final class WorkDirTest extends TestCase {
 			self::assertTrue( is_link( $lien ), 'le lien reste' );
 			self::assertSame( "à garder\n", file_get_contents( $cible ), 'fichier visé intact' );
 			self::assertSame( [ 'manifest.jsonl' ], array_values( array_diff( (array) scandir( $job ), [ '.', '..' ] ) ), 'seul le vrai fichier du module est retiré' );
+			// Le départ qui suit le nettoyage ne reçoit pas ce dossier : le journal serait écrit dans la cible.
+			self::assertNull( WorkDir::job( $id ), 'un lien du module reste dans le dossier : départ refusé' );
+			self::assertSame( "à garder\n", file_get_contents( $cible ), 'rien écrit dans la cible' );
 		} finally {
 			self::retirer_lien( $lien );
 		}
@@ -271,6 +274,22 @@ final class WorkDirTest extends TestCase {
 		} finally {
 			self::retirer_lien( $lien );
 		}
+	}
+
+	/**
+	 * Un vrai dossier `job-<id>` avec de vrais fichiers du module (reprise d'une sauvegarde) reste
+	 * accepté par job(), comme un dossier neuf.
+	 */
+	public function test_le_dossier_d_une_sauvegarde_avec_de_vrais_fichiers_est_accepte(): void {
+		$id = str_repeat( '7', 32 );
+		self::assertTrue( WorkDir::ensure() );
+		$job = WorkDir::private_dir() . '/job-' . $id;
+		mkdir( $job );
+		file_put_contents( $job . '/manifest.jsonl', "{\"t\":\"head\"}\n" );
+		file_put_contents( $job . '/seg-0.part', 'partie' );
+
+		self::assertSame( $job, WorkDir::job( $id ) );
+		self::assertSame( WorkDir::private_dir() . '/job-' . str_repeat( '8', 32 ), WorkDir::job( str_repeat( '8', 32 ) ), 'dossier neuf' );
 	}
 
 	// ── Outils ────────────────────────────────────────────────────────────────

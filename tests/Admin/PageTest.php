@@ -193,6 +193,11 @@ final class PageTest extends TestCase {
 		self::assertFalse( $this->options[ Settings::OPTION_KEY ]['force_ipv4_to_storage'] ?? false );
 		self::assertMatchesRegularExpression( '/name=.g2rd_backup_enabled. value=.1.\s+disabled=.disabled.>/', $html );
 		self::assertStringContainsString( 'seul un super-administrateur peut régler les sauvegardes', $html );
+		// Case IPv4 grisée par le même verrou : son aide ne dit pas de la décocher, elle dit pourquoi.
+		preg_match( '/<p class="description" id="g2rd_force_ipv4_to_storage_aide">(.*?)<\/p>/s', $html, $aide );
+		self::assertArrayHasKey( 1, $aide, 'aide de la case IPv4 introuvable' );
+		self::assertStringNotContainsString( 'décochez la case', $aide[1] );
+		self::assertStringContainsString( 'seul un super-administrateur peut régler les sauvegardes', $aide[1] );
 	}
 
 	#[RunInSeparateProcess]

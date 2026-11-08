@@ -143,13 +143,23 @@ final class WorkDir {
 		if ( ! self::ensure() ) {
 			return null;
 		}
-		$dir = self::private_dir() . '/job-' . $backup_id;
-		// Un lien au chemin du dossier (même vers un dossier) n'est jamais pris pour le dossier : les
-		// fichiers de la sauvegarde seraient écrits ailleurs que dans le dossier privé.
-		if ( is_link( $dir ) ) {
+		$private = self::private_dir();
+		$dir     = $private . '/job-' . $backup_id;
+		clearstatcache( true );
+		// Jamais à travers un lien. Un lien au chemin du dossier (même vers un dossier), un dossier dont
+		// le chemin réel n'est pas directement sous le dossier privé (jonction Windows), ou un fichier du
+		// module qui est un lien (reste d'un départ précédent, que le nettoyage ne touche pas) : null,
+		// le départ ou la tranche est refusé. Sinon le journal, les segments ou l'index seraient écrits
+		// dans la cible du lien (wp-config.php, par exemple). Vérifié à chaque appel, donc à chaque tranche.
+		if ( is_link( $dir ) || ( ! is_dir( $dir ) && ! wp_mkdir_p( $dir ) ) || ! self::directly_under( $dir, $private ) ) {
 			return null;
 		}
-		return is_dir( $dir ) || wp_mkdir_p( $dir ) ? $dir : null;
+		foreach ( (array) @scandir( $dir ) as $name ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- dossier illisible : aucun lien lu, l'écriture qui suit échoue d'elle-même.
+			if ( self::is_job_file( (string) $name ) && is_link( $dir . '/' . $name ) ) {
+				return null;
+			}
+		}
+		return $dir;
 	}
 
 	/** Retire les fichiers que le module a créés pour $backup_id, puis le dossier s'il est vide. */
@@ -183,19 +193,14 @@ final class WorkDir {
 			self::assert_id( $backup_id );
 			$private = self::private_dir();
 			$dir     = $private . '/job-' . $backup_id;
-			clearstatcache();
-			if ( is_link( $dir ) || ! is_dir( $dir ) ) {
-				return false;
-			}
-			$real_private = realpath( $private );
-			$real_dir     = realpath( $dir );
-			if ( false === $real_private || false === $real_dir || dirname( $real_dir ) !== $real_private ) {
+			clearstatcache( true );
+			if ( is_link( $dir ) || ! is_dir( $dir ) || ! self::directly_under( $dir, $private ) ) {
 				return false;
 			}
 			foreach ( (array) @scandir( $dir ) as $name ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- retrait au mieux : un dossier illisible reste, sans avertissement.
 				$name = (string) $name;
 				$file = $dir . '/' . $name;
-				if ( ( in_array( $name, self::JOB_FILES, true ) || 1 === preg_match( '/\Aseg-[0-9]{1,4}\.(part|seg)\z/', $name ) ) && ! is_link( $file ) && is_file( $file ) ) {
+				if ( self::is_job_file( $name ) && ! is_link( $file ) && is_file( $file ) ) {
 					wp_delete_file( $file );
 				}
 			}
@@ -262,25 +267,36 @@ final class WorkDir {
 		self::remove_if_only_guards( $private_path );
 	}
 
+	/** Nom d'un fichier que le module écrit dans un dossier `job-<id>` (journaux, index, segments). */
+	private static function is_job_file( string $name ): bool {
+		return in_array( $name, self::JOB_FILES, true ) || 1 === preg_match( '/\Aseg-[0-9]{1,4}\.(part|seg)\z/', $name );
+	}
+
+	/**
+	 * Le chemin réel de $path est-il directement sous le chemin réel de $base ? Faux pour un lien
+	 * ou une jonction qui mène ailleurs, et pour un chemin qui n'existe pas. Un dossier wp-content
+	 * placé derrière un lien par l'hébergeur reste accepté : les deux chemins réels le traversent.
+	 */
+	private static function directly_under( string $path, string $base ): bool {
+		$real_base = realpath( $base );
+		$real_path = realpath( $path );
+		return false !== $real_base && false !== $real_path && dirname( $real_path ) === $real_base;
+	}
+
 	/**
 	 * Retire les fichiers du module d'un dossier `job-<id>`, puis le dossier s'il est vide. Jamais à
 	 * travers un lien : un dossier qui est un lien, ou dont le chemin réel n'est pas directement sous
 	 * son dossier parent (jonction Windows), n'est pas touché, et un fichier qui est un lien reste.
 	 */
 	private static function clear_job_dir( string $dir ): void {
-		clearstatcache();
-		if ( is_link( $dir ) || ! is_dir( $dir ) ) {
-			return;
-		}
-		$real_parent = realpath( dirname( $dir ) );
-		$real_dir    = realpath( $dir );
-		if ( false === $real_parent || false === $real_dir || dirname( $real_dir ) !== $real_parent ) {
+		clearstatcache( true );
+		if ( is_link( $dir ) || ! is_dir( $dir ) || ! self::directly_under( $dir, dirname( $dir ) ) ) {
 			return;
 		}
 		foreach ( (array) scandir( $dir ) as $name ) {
 			$name = (string) $name;
 			$file = $dir . '/' . $name;
-			if ( ( in_array( $name, self::JOB_FILES, true ) || 1 === preg_match( '/\Aseg-[0-9]{1,4}\.(part|seg)\z/', $name ) ) && ! is_link( $file ) && is_file( $file ) ) {
+			if ( self::is_job_file( $name ) && ! is_link( $file ) && is_file( $file ) ) {
 				wp_delete_file( $file );
 			}
 		}
