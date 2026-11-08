@@ -1,0 +1,37 @@
+2026-11-08T14:02:54+01:00
+Clé de service du service local épinglée sur le site du banc : identifiant 626555509413ba5d
+Le site du banc détient déjà une clé de version 1 (mode A) : rotation de la clé du service
+Clé de site du service reçue : version 2, empreinte c20148e9670e0808c9a78f69982857c7
+Sauvegarde bc105592fbdf0604f2b0cbca64518c51 : phase db, type full
+Tranche 1 : phase files, 2 segments écrits, 2 en attente, 12302 ms
+seal-checks : 2 en-têtes acceptés (segments 0, 1)
+Tranche 2 : phase files, 2 segments écrits, 2 en attente, 489 ms
+Segment 0 déposé : stored
+Segment 1 déposé : stored
+Tranche 3 : phase files, 4 segments écrits, 2 en attente, 2810 ms
+seal-checks : 2 en-têtes acceptés (segments 2, 3)
+Tranche 4 : phase files, 4 segments écrits, 2 en attente, 747 ms
+Segment 2 déposé : stored
+Segment 3 déposé : stored
+Tranche 5 : phase files, 6 segments écrits, 2 en attente, 3361 ms
+seal-checks : 2 en-têtes acceptés (segments 4, 5)
+Tranche 6 : phase files, 6 segments écrits, 2 en attente, 784 ms
+Segment 4 déposé : stored
+Segment 5 déposé : stored
+Tranche 7 : phase files, 8 segments écrits, 2 en attente, 3556 ms
+seal-checks : 2 en-têtes acceptés (segments 6, 7)
+Tranche 8 : phase files, 8 segments écrits, 2 en attente, 663 ms
+Segment 6 déposé : stored
+Segment 7 déposé : stored
+Tranche 9 : phase upload, 9 segments écrits, 1 en attente, 164 ms
+seal-checks : 1 en-têtes acceptés (segments 8)
+Tranche 10 : phase upload, 9 segments écrits, 1 en attente, 48 ms
+Segment 8 déposé : stored
+Tranche 11 : phase finalize, 9 segments écrits, 0 en attente, 77 ms
+Dépôt de index.sig : stored
+Dépôt de index : stored
+Tranche 12 : phase idle, 0 segments écrits, 0 en attente, 0 ms
+OK sauvegarde bc105592fbdf0604f2b0cbca64518c51 : 9 segments, 12 tranches, 38 s
+Mode B : relecture du contenu sautée (la clé secrète du site reste dans le service de clés).
+code=0
+2026-11-08T14:03:38+01:00

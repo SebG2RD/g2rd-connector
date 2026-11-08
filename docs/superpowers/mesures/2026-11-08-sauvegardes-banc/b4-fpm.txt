@@ -1,0 +1,5 @@
+Clé de service du service local épinglée sur le site du banc : identifiant 626555509413ba5d
+Clé de site du service reçue : version 2, empreinte e52e124c32362d092b2f155e50ce8f87
+B4 identifiant d'une clé de service non épinglée : refusée (site_key_certificate_invalid), clé détenue inchangée (version 2, service 626555509413ba5d, reçue 2026-11-08T13:01:58+00:00)
+B4 la clé authentique est encore acceptée : done, version 2, empreinte e52e124c32362d092b2f155e50ce8f87
+OK essai de clé identifiant

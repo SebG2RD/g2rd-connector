@@ -121,6 +121,31 @@ mesuré est celui des 56 000 petits fichiers lus à travers un montage réseau (
 `ols` pèse plus lourd que `fpm` en mémoire (178 contre 110 Mio) et en processeur (un cœur plein
 contre la moitié), sans écart de comportement.
 
+## Mode B : service de clés local (tâche 38)
+
+Service de clés de la phase 2 (copie `sauvegardes-cles`, code non modifié, démarré avec des variables
+d'environnement pointant vers un fichier hors dépôt : KMS simulé, base SQLite locale, port 8791,
+`BACKUP_KEYS_ENV=development`), arrêté après les essais. Pilote : `b0274af8` (plateforme). Jeton du
+service passé par `BANC_CLES_JETON`, jamais écrit dans ce dossier (recherche faite : absent de tous les
+relevés). Chaque relevé est `bN-<cible>.txt` ; `fpm` sur `/command`, `ols` sur `/command-runs`
+(`--route=async`) pour B1.
+
+| N° | Obtenu |
+| --- | --- |
+| B1 | **fpm** : `backup_set_key` `done` (clé du service, version 2, certificat vérifié avec la clé de service épinglée par la constante de banc, identifiant `626555509413ba5d`), 9 segments, 12 tranches, 30 s, **5 appels `seal-checks`, 9 en-têtes, tous acceptés** (segments par deux, un dernier seul). **ols async** : même résultat, 9 segments, 12 tranches, 38 s, 9 en-têtes acceptés. Le service a journalisé 10 `seal_checks` `200` au total |
+| B2 | **fpm** et **ols** : même clé rejouée `done` (version 2, même empreinte, clé détenue inchangée) ; rotation `done` en version 3 (nouvelle empreinte) ; retour à la version 2 : refus `site_key_version_downgrade`, clé détenue inchangée (version 3, même `service_key_id`, même date de réception avant et après) |
+| B3 | **fpm** et **ols** : certificat altéré d'un octet : refus `site_key_certificate_invalid`, snapshot identique avant et après (version, clé de service, date de réception) ; la clé authentique est ensuite encore acceptée (`done`, même empreinte) |
+| B4 | **fpm** et **ols** : `service_key_id` d'une clé non épinglée : refus `site_key_certificate_invalid`, snapshot identique avant et après ; la clé authentique est ensuite encore acceptée |
+
+Écarts avec le plan, et leur sort :
+
+| Écart | Cause | Sort |
+| --- | --- | --- |
+| La clé du service passe en **version 2** (une rotation avant B1), pas en version 1 | Le site du banc détient déjà la clé de version 1 du mode A (essais de la tâche 37) et reste lié à ses références (`site_key_other_site` sinon) : le connecteur refuse une autre clé de même version (`site_key_version_downgrade`). Supprimer l'option du site aurait été une suppression d'existant | Le pilote reprend les références du mode A et fait tourner la clé du service jusqu'à une version supérieure ; B2 « version + 1 » devient donc 2 → 3 |
+| `GET /v1/service-keys` rendait une liste vide au premier passage | La clé de signature du service est tirée à son premier usage (un `PUT …/key`) | Le pilote lit la liste après le premier `PUT` |
+| B2 à B4 ne sont pas des sauvegardes | Le plan les donne comme essais de clé | Option `--essai-cle` du pilote : aucune sauvegarde n'est lancée, seulement des `backup_set_key` et la lecture du snapshot (`backup.site_key`) |
+| Après les essais, le site du banc est en mode B (constante de clé de service du service local, clé du service en version 3) | Conséquence de B1 à B4 | Revenir au mode A demande de reposer la constante du mode A et une version de clé supérieure : documenté dans le README du pilote |
+
 ## Observations hors périmètre des essais
 
 - Un `backup_start` rejoué avec l'identifiant d'une sauvegarde **terminée** la fait repartir de zéro
