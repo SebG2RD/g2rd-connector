@@ -944,6 +944,7 @@ final class SettingsTokenEncryptionTest extends TestCase {
 		Functions\when( 'current_user_can' )->justReturn( true );
 		Functions\when( 'wp_nonce_field' )->justReturn( '' );
 		Functions\when( 'checked' )->justReturn( '' );
+		Functions\when( 'disabled' )->justReturn( '' );
 		Functions\when( 'get_site_option' )->justReturn( false );
 		Functions\when( 'get_bloginfo' )->justReturn( '7.1.3' );
 		ob_start();

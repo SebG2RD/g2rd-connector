@@ -94,6 +94,8 @@ final class NoWiringTest extends TestCase {
 		'includes/Cron/HeartbeatJob.php',
 		'includes/Rest/SnapshotController.php',
 		'includes/Rest/AdminController.php',
+		'includes/BootData.php',
+		'includes/Admin/Page.php',
 	];
 
 	/**

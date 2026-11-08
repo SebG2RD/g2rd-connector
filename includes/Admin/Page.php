@@ -19,6 +19,8 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Admin;
 
+use G2RD\Connector\Backup\BackupSwitch;
+use G2RD\Connector\Backup\Snapshot\BackupAdminView;
 use G2RD\Connector\Outbound\ManagerClient;
 use G2RD\Connector\Settings;
 use G2RD\Connector\Updates\PremiumUpdatesBridge;
@@ -246,6 +248,7 @@ final class Page {
 		}
 		$this->maybe_handle_form();
 		$settings = Settings::all();
+		$backup   = BackupAdminView::data( time() );
 		$enrolled = Settings::is_enrolled();
 		// Jeton stocké mais inutilisable : le site reste « enrôlé » (d'où le bouton
 		// Déconnecter), mais ne parle plus au manager. On montre l'état réel.
@@ -385,6 +388,32 @@ final class Page {
 						</td>
 					</tr>
 					<tr>
+						<th scope="row" id="g2rd_backup_enabled_titre"><?php echo esc_html__( 'Sauvegardes chiffrées', 'g2rd-connector' ); ?></th>
+						<td>
+							<label>
+								<input type="checkbox" aria-labelledby="g2rd_backup_enabled_titre" aria-describedby="g2rd_backup_enabled_aide" name="g2rd_backup_enabled" value="1"
+									<?php checked( (bool) ( $settings['backup_enabled'] ?? false ) ); ?> <?php disabled( $backup['disabledByConstant'] ); ?>>
+								<span id="g2rd_backup_enabled_aide"><?php echo esc_html__( 'G2RD WP Manager peut sauvegarder ce site : base et fichiers sont chiffrés avant de quitter le serveur. Décochée : aucune sauvegarde ne part, et les mises à jour se déroulent exactement comme avant.', 'g2rd-connector' ); ?></span>
+							</label>
+							<?php if ( $backup['disabledByConstant'] ) : ?>
+							<p class="description"><?php echo esc_html__( 'Désactivées par la constante G2RD_CONNECTOR_DISABLE_BACKUP de wp-config.php : aucune sauvegarde ne part de ce site. Retirez cette constante pour pouvoir les activer.', 'g2rd-connector' ); ?></p>
+							<?php endif; ?>
+							<?php if ( null !== $backup['fingerprint'] ) : ?>
+							<p class="description"><?php echo esc_html__( 'Empreinte de la clé de signature du site, à comparer à celle de la page d’approbation du service de clés G2RD :', 'g2rd-connector' ); ?> <code><?php echo esc_html( $backup['fingerprint'] ); ?></code></p>
+							<?php endif; ?>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row" id="g2rd_force_ipv4_to_storage_titre"><?php echo esc_html__( 'IPv4 vers le stockage des sauvegardes', 'g2rd-connector' ); ?></th>
+						<td>
+							<label>
+								<input type="checkbox" aria-labelledby="g2rd_force_ipv4_to_storage_titre" aria-describedby="g2rd_force_ipv4_to_storage_aide" name="g2rd_force_ipv4_to_storage" value="1"
+									<?php checked( (bool) ( $settings['force_ipv4_to_storage'] ?? false ) ); ?>>
+								<span id="g2rd_force_ipv4_to_storage_aide"><?php echo esc_html__( 'À activer si l’hébergeur bloque l’IPv6 sortante du serveur : l’envoi des sauvegardes vers le stockage passe alors par l’IPv4. Ne concerne que cet envoi.', 'g2rd-connector' ); ?></span>
+							</label>
+						</td>
+					</tr>
+					<tr>
 						<th scope="row" id="g2rd_php_errors_enabled_titre"><?php echo esc_html__( 'Relevé des erreurs PHP', 'g2rd-connector' ); ?></th>
 						<td>
 							<label>
@@ -435,6 +464,10 @@ final class Page {
 				'remote_commands_enabled' => ! empty( $_POST['g2rd_remote_commands_enabled'] ),
 				'force_ipv4_to_manager'   => ! empty( $_POST['g2rd_force_ipv4_to_manager'] ),
 				'allow_direct_login'      => ! empty( $_POST['g2rd_allow_direct_login'] ),
+				// Constante d'arrêt posée : la case est désactivée, donc jamais envoyée ; la valeur
+				// enregistrée est gardée (retirer la constante rend tout, essai E19).
+				'backup_enabled'          => BackupSwitch::disabled_by_constant() ? (bool) Settings::get( 'backup_enabled' ) : ! empty( $_POST['g2rd_backup_enabled'] ),
+				'force_ipv4_to_storage'   => ! empty( $_POST['g2rd_force_ipv4_to_storage'] ),
 				'php_errors_enabled'      => ! empty( $_POST['g2rd_php_errors_enabled'] ),
 				// La lecture du journal ne se règle que par le manager ; relevé décoché, elle est coupée.
 				'php_errors_log_tail'     => ! empty( $_POST['g2rd_php_errors_enabled'] ) && true === Settings::get( 'php_errors_log_tail' ),

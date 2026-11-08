@@ -102,6 +102,8 @@ final class ConnectorPanelTest extends TestCase {
 				'Commandes à distance',
 				'IPv4 vers le manager',
 				'Connexion directe depuis G2RD',
+				'Sauvegardes chiffrées',
+				'IPv4 vers le stockage des sauvegardes',
 				'Relevé des erreurs PHP',
 				'Exiger des commandes signées',
 			],
@@ -203,7 +205,7 @@ final class ConnectorPanelTest extends TestCase {
 	 * actif, alors que seul « Enregistrer » (en haut, dans « Connexion au
 	 * manager ») l'applique, et que quitter l'onglet le perd : sous le dernier
 	 * réglage, un rappel annoncé (aria-live) le dit, avec un second bouton
-	 * « Enregistrer ». Le rappel compare les huit réglages envoyés par
+	 * « Enregistrer ». Le rappel compare les dix réglages envoyés par
 	 * l'enregistrement à leur valeur enregistrée.
 	 */
 	public function test_les_modifications_non_enregistrees_sont_signalees_sous_les_reglages(): void {
@@ -214,11 +216,11 @@ final class ConnectorPanelTest extends TestCase {
 		self::assertArrayHasKey( 1, $charge, 'settingsPayload introuvable dans le panneau.' );
 		preg_match_all( '/^\s*(\w+):/m', $charge[1], $cles );
 		self::assertSame(
-			[ 'manager_url', 'heartbeat_enabled', 'events_enabled', 'remote_commands_enabled', 'force_ipv4_to_manager', 'allow_direct_login', 'php_errors_enabled', 'signature_required' ],
+			[ 'manager_url', 'heartbeat_enabled', 'events_enabled', 'remote_commands_enabled', 'force_ipv4_to_manager', 'allow_direct_login', 'backup_enabled', 'force_ipv4_to_storage', 'php_errors_enabled', 'signature_required' ],
 			$cles[1],
-			'« Enregistrer » doit envoyer les huit réglages, relevé des erreurs PHP compris.'
+			'« Enregistrer » doit envoyer les dix réglages, relevé des erreurs PHP compris.'
 		);
-		self::assertStringContainsString( 'Mêmes huit réglages', $panneau );
+		self::assertStringContainsString( 'Mêmes dix réglages', $panneau );
 		self::assertStringContainsString( 'const pending = hasPendingChanges( state, saved );', $panneau );
 		self::assertMatchesRegularExpression(
 			'/aria-live="polite"\s*>\s*\{ pending && \(\s*<Status cx=\{ cx \} tone="warn">\s*Modifications non enregistrées\s*<\/Status>/',

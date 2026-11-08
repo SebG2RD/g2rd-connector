@@ -40,6 +40,15 @@ final class PageTest extends TestCase {
 				return $result;
 			}
 		);
+		Functions\when( 'disabled' )->alias(
+			static function ( $disabled, $current = true, bool $display = true ): string {
+				$result = (string) $disabled === (string) $current ? " disabled='disabled'" : '';
+				if ( $display ) {
+					echo $result; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- doublure de disabled().
+				}
+				return $result;
+			}
+		);
 	}
 
 	/**

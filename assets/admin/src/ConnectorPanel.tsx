@@ -83,14 +83,32 @@ function settingsPayload( d: ConnectorBootData ) {
 		remote_commands_enabled: d.remoteCommandsEnabled,
 		force_ipv4_to_manager: d.forceIpv4ToManager,
 		allow_direct_login: d.allowDirectLogin,
+		backup_enabled: d.backupEnabled,
+		force_ipv4_to_storage: d.forceIpv4ToStorage,
 		php_errors_enabled: d.phpErrorsEnabled,
 		signature_required: d.signatureRequired,
 	};
 }
 
 /**
+ * Phrase d'aide de la case « Sauvegardes chiffrées » : constante d'arrêt, case cochée
+ * (avec l'empreinte à comparer au service de clés), case décochée.
+ *
+ * @param d État du panneau.
+ */
+function backupDescription( d: ConnectorBootData ): string {
+	if ( d.backup.disabledByConstant ) {
+		return 'Désactivées par la constante G2RD_CONNECTOR_DISABLE_BACKUP de wp-config.php : aucune sauvegarde ne part de ce site. Retirez cette constante pour pouvoir les activer.';
+	}
+	if ( d.backupEnabled ) {
+		return `G2RD WP Manager peut sauvegarder ce site : base et fichiers sont chiffrés avant de quitter le serveur. Empreinte de la clé de signature du site, à comparer à celle de la page d’approbation du service de clés G2RD : ${ d.backup.fingerprint ?? 'créée à l’enregistrement' }.`;
+	}
+	return 'Désactivées : aucune sauvegarde ne part de ce site, et les mises à jour se déroulent exactement comme avant.';
+}
+
+/**
  * Un réglage du panneau diffère-t-il de sa valeur enregistrée sur le serveur ?
- * Mêmes huit réglages que ceux qu'envoie « Enregistrer » (settingsPayload).
+ * Mêmes dix réglages que ceux qu'envoie « Enregistrer » (settingsPayload).
  *
  * @param current État du panneau.
  * @param stored  Derniers réglages connus du serveur.
@@ -750,6 +768,30 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 						checked={ state.allowDirectLogin }
 						onChange={ ( allowDirectLogin ) =>
 							update( { allowDirectLogin } )
+						}
+						disabled={ anyBusy }
+					/>
+					<SettingRow
+						cx={ cx }
+						id="g2rd-connector-backup"
+						icon="shield"
+						title="Sauvegardes chiffrées"
+						description={ backupDescription( state ) }
+						checked={ state.backupEnabled }
+						onChange={ ( backupEnabled ) =>
+							update( { backupEnabled } )
+						}
+						disabled={ anyBusy || state.backup.disabledByConstant }
+					/>
+					<SettingRow
+						cx={ cx }
+						id="g2rd-connector-ipv4-storage"
+						icon="globe"
+						title="IPv4 vers le stockage des sauvegardes"
+						description="À activer si l’hébergeur bloque l’IPv6 sortante du serveur : l’envoi des sauvegardes vers le stockage passe alors par l’IPv4. Ne concerne que cet envoi."
+						checked={ state.forceIpv4ToStorage }
+						onChange={ ( forceIpv4ToStorage ) =>
+							update( { forceIpv4ToStorage } )
 						}
 						disabled={ anyBusy }
 					/>
