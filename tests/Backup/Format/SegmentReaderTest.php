@@ -699,10 +699,10 @@ final class SegmentReaderTest extends TestCase {
 				}
 				return;
 			}
-			if ( ! is_object( $valeur ) || $vus->contains( $valeur ) ) {
+			if ( ! is_object( $valeur ) || $vus->offsetExists( $valeur ) ) {
 				return;
 			}
-			$vus->attach( $valeur );
+			$vus->offsetSet( $valeur );
 			if ( $valeur instanceof \Closure ) {
 				$fonction = new \ReflectionFunction( $valeur );
 				$visiter( $fonction->getStaticVariables() );
