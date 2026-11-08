@@ -239,6 +239,21 @@ final class FakeDumpWpdb {
 		if ( str_starts_with( $sql, 'SELECT *' ) ) {
 			throw new \LogicException( 'SELECT * : une colonne INVISIBLE (dont my_row_id) n\'y est pas rendue, les colonnes se nomment : ' . $sql );
 		}
+		if ( 1 === preg_match( '/\ASELECT \((COALESCE\(LENGTH\(.+?\),0\)(?:\+COALESCE\(LENGTH\(.+?\),0\))*)\) AS g2rd_bytes FROM /s', $sql, $m ) ) {
+			// Longueur en octets des lignes d'un lot (DatabaseDumper::bounded_limit()), mêmes WHERE, ORDER BY et LIMIT que la lecture.
+			foreach ( $this->tables as $candidate => $table ) {
+				$ident = self::ident_or_null( (string) $candidate, $this->charset );
+				if ( null === $ident || ! str_starts_with( substr( $sql, strlen( $m[0] ) ), $ident . ' ' ) ) {
+					continue;
+				}
+				$sizes = [];
+				foreach ( $this->select( (string) $candidate, substr( $sql, strlen( $m[0] ) + strlen( $ident ) ), [] ) as $row ) {
+					$sizes[] = [ 'g2rd_bytes' => (string) array_sum( array_map( static fn ( ?string $v ): int => null === $v ? 0 : strlen( $v ), $row ) ) ];
+				}
+				return $sizes;
+			}
+			throw new \LogicException( 'Lecture des longueurs d\'une table inconnue : ' . $sql );
+		}
 		foreach ( $this->tables as $candidate => $table ) {
 			$ident = self::ident_or_null( (string) $candidate, $this->charset );
 			$list  = $this->column_pattern( self::read_columns( $table ) );

@@ -167,6 +167,59 @@ final class FileArchiverTest extends TestCase {
 		}
 	}
 
+	/**
+	 * Revue du 08/11/2026 : le cache des chemins résolus de PHP (realpath_cache_ttl) fait suivre à fopen() un
+	 * dossier devenu lien et rend à realpath() l'ancien chemin. Le remplacement est fait par un processus
+	 * EXTERNE (unlink(), rename() et symlink() de PHP vident le cache eux-mêmes). Banc Linux.
+	 */
+	public function test_un_dossier_remplace_par_un_lien_apres_une_lecture_du_meme_processus_n_est_jamais_suivi(): void {
+		if ( 'Windows' === PHP_OS_FAMILY || ! function_exists( 'exec' ) ) {
+			self::markTestSkipped( 'Remplacement par un processus externe (mv, ln) : essai refait sur le banc Linux.' );
+		}
+		$dehors = str_replace( '\\', '/', sys_get_temp_dir() ) . '/g2rd-hors-' . bin2hex( random_bytes( 4 ) );
+		mkdir( $dehors );
+		file_put_contents( $dehors . '/b.txt', 'hors' );
+		mkdir( $this->racine . '/d/X' );
+		$premiere = $this->entree( 'd/X/a.txt', 'dans' );
+		$seconde  = $this->entree( 'd/X/b.txt', 'hors' );
+		try {
+			$archiveur = new FileArchiver( $this->racine );
+			[ $e ]     = self::ecrivain();
+			$r         = $archiveur->archive( $premiere, 0, $e, static fn (): bool => false );
+			self::assertFalse( $r['unreadable'], 'premier fichier lu : le cache des chemins est rempli' );
+			$ecrits = $e->written();
+
+			exec( 'mv ' . escapeshellarg( $this->racine . '/d/X' ) . ' ' . escapeshellarg( $this->racine . '/d/X.old' ) . ' && ln -s ' . escapeshellarg( $dehors ) . ' ' . escapeshellarg( $this->racine . '/d/X' ), $sortie, $code );
+			if ( 0 !== $code ) {
+				self::markTestSkipped( 'mv ou ln indisponible sur ce poste.' );
+			}
+			$seconde['mtime'] = (int) ( stat( $dehors . '/b.txt' )['mtime'] ?? 0 );
+			$r                = $archiveur->archive( $seconde, 0, $e, static fn (): bool => false );
+
+			self::assertTrue( $r['unreadable'], 'dossier devenu lien : illisible malgré le cache' );
+			self::assertNull( $r['sha256'] );
+			self::assertSame( $ecrits, $e->written(), 'pas un octet du fichier visé' );
+		} finally {
+			if ( is_link( $this->racine . '/d/X' ) ) {
+				unlink( $this->racine . '/d/X' );
+			}
+			if ( is_dir( $this->racine . '/d/X.old' ) ) {
+				foreach ( (array) glob( $this->racine . '/d/X.old/*' ) as $f ) {
+					unlink( (string) $f );
+				}
+				rmdir( $this->racine . '/d/X.old' );
+			}
+			if ( is_dir( $this->racine . '/d/X' ) ) {
+				foreach ( (array) glob( $this->racine . '/d/X/*' ) as $f ) {
+					unlink( (string) $f );
+				}
+				rmdir( $this->racine . '/d/X' );
+			}
+			unlink( $dehors . '/b.txt' );
+			rmdir( $dehors );
+		}
+	}
+
 	public function test_fichier_qui_retrecit_ou_grandit_pendant_la_lecture_est_dit_illisible(): void {
 		$entree = $this->entree( 'd/change.bin', random_bytes( FileArchiver::CHUNK_BYTES * 2 ) );
 		$this->reecrire( 'd/change.bin', random_bytes( 1000 ), self::MTIME );

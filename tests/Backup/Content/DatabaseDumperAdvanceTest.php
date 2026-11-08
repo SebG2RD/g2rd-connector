@@ -409,6 +409,38 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 		}
 	}
 
+	/**
+	 * Revue du 08/11/2026 : 300 lignes d'un octet puis 400 de 256 Kio. Le LIMIT doublait après les petites
+	 * lignes (jusqu'à 200) et le lot suivant lisait 38 Mio d'un coup. Les longueurs sont lues d'abord.
+	 */
+	public function test_aucun_lot_d_une_table_large_ne_depasse_batch_bytes_apres_de_petites_lignes(): void {
+		$grosse = str_repeat( 'g', 262144 );
+		$lignes = [];
+		for ( $i = 1; $i <= 350; $i++ ) {
+			// Une seule chaîne partagée par les lignes volumineuses du faux.
+			$lignes[] = [
+				'id' => (string) $i,
+				'v'  => $i <= 300 ? 'p' : $grosse,
+			];
+		}
+		$this->wpdb->tables['wp_mixte'] = [
+			'columns'        => [
+				'id' => 'bigint(20)',
+				'v'  => 'longtext',
+			],
+			'pk'             => [ 'id' ],
+			'rows'           => $lignes,
+			'avg_row_length' => 54,
+		];
+		unset( $lignes );
+
+		$limites = $this->limites_lues( 'wp_mixte', $sql );
+
+		self::assertLessThan( 200, max( $limites ), 'le lot de 200 lignes (jusqu\'à 50 Mio de lignes de 256 Kio) est réduit à ce que BATCH_BYTES permet' );
+		self::assertGreaterThan( 1, max( $limites ), 'les petites lignes passent par lots, pas une à une' );
+		self::assertSame( 50, substr_count( (string) $sql, $grosse ), 'chaque ligne copiée une fois' );
+	}
+
 	public function test_lots_reduits_de_moitie_quand_la_moyenne_trompe(): void {
 		$lignes = [];
 		$valeur = str_repeat( 'x', 102400 );

@@ -62,9 +62,13 @@ premier lot d'une table qui a une colonne MEDIUMTEXT, LONGTEXT, MEDIUMBLOB, LONG
 (`DatabaseDumper::LARGE_TYPE`), puis se règle sur la taille lue, comme avant. Les petites tables à texte long
 (options, articles) coûtent 8 requêtes de plus au lancement.
 
-Limite restante, non corrigée ici : le lot suivant se règle sur la taille du lot lu. Une table dont les 200
-lignes d'un lot sont petites, puis dont les 200 suivantes pèsent 2 Mio chacune, lirait 400 Mio d'un coup.
-Seule une lecture des longueurs avant les valeurs l'écarterait (voir le compte rendu de la tâche 26).
+Revue du 08/11 (corrigé) : le lot suivant ne se règle plus sur la taille du lot lu pour ces tables. Une table
+de 300 lignes d'un octet puis de lignes de 256 Kio doublait son LIMIT jusqu'à 200 et lisait 38 Mio d'un coup (près
+de 80 Mio avec la conversion de `$wpdb`, une erreur fatale avec des lignes de 2 Mio). Avant chaque lot d'une table à
+colonne large, `DatabaseDumper::bounded_limit()` lit les longueurs des lignes (mêmes WHERE, ORDER BY et LIMIT, sans
+les valeurs) et réduit le LIMIT pour que le lot reste sous 8 Mio, une ligne seule exceptée. Coût : une requête de
+longueurs de plus par lot de ces tables. Test : `test_aucun_lot_d_une_table_large_ne_depasse_batch_bytes_apres_de_petites_lignes`.
+Mesure du mode « mixte » sous `memory_limit=128M` sur MariaDB réelle : non refaite dans cette passe.
 
 ## Fichiers
 

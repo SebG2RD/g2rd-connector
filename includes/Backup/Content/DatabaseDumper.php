@@ -41,10 +41,13 @@
  * lecture changerait de sorte), sont refusées.
  *
  * Mémoire : un lot vise BATCH_BYTES (8 Mio) de valeurs ; $wpdb garde son résultat et sa conversion
- * en ARRAY_A (≈ 2 fois), l'instruction INSERT est émise par morceaux de FLUSH_BYTES (512 Kio) : le
- * pic d'un lot reste sous ≈ 20 Mio au-dessus d'une ligne isolée, quel que soit le site. Limite
- * écrite : une ligne seule plus grosse que la mémoire disponible reste impossible à copier (lot
- * d'une ligne).
+ * en ARRAY_A (≈ 2 fois), l'instruction INSERT est émise par morceaux de FLUSH_BYTES (512 Kio). Une
+ * table à colonne MEDIUMTEXT, LONGTEXT, MEDIUMBLOB, LONGBLOB ou JSON (LARGE_TYPE) lit avant chaque lot
+ * les longueurs de ses lignes (bounded_limit()) et réduit le LIMIT pour que le lot reste sous
+ * BATCH_BYTES, une ligne seule exceptée ; les autres tables se règlent sur la taille moyenne annoncée
+ * puis sur la taille lue du lot précédent (next_limit()), leurs colonnes pesant 64 Kio au plus : le pic
+ * d'un lot reste sous ≈ 20 Mio au-dessus d'une ligne isolée. Limite écrite : une ligne seule plus
+ * grosse que la mémoire disponible reste impossible à copier (lot d'une ligne).
  *
  * @package G2RD\Connector
  */
@@ -161,7 +164,7 @@ final class DatabaseDumper {
 	/**
 	 * Colonne dont la valeur peut peser des Mio (MEDIUMTEXT, LONGTEXT, MEDIUMBLOB, LONGBLOB, JSON ; TEXT et BLOB
 	 * s'arrêtent à 64 Kio) : le premier lot d'une table qui en a une est d'une ligne (initial_limit()), puis
-	 * s'adapte à la taille lue. La taille moyenne d'information_schema ne suffit pas à le dimensionner : MySQL 8
+	 * est ensuite borné en octets avant chaque lot (bounded_limit()). La taille moyenne d'information_schema ne suffit pas à le dimensionner : MySQL 8
 	 * la garde 24 h (`information_schema_stats_expiry`), InnoDB l'estime par échantillon, et une table remplie
 	 * depuis son annonce l'a toujours petite. Relevé du 08/11/2026 (MariaDB 10.11.19, `memory_limit=128M`, 300
 	 * lignes de 2 Mio, taille moyenne annoncée 54 octets) : premier lot de 200 lignes, 400 Mio, erreur fatale.
@@ -204,6 +207,9 @@ final class DatabaseDumper {
 	 * @var list<string>|null
 	 */
 	private ?array $last_key = null;
+
+	/** LIMIT réellement lu par le dernier batch() (réduit par bounded_limit() pour une table à colonne large). */
+	private int $used_limit = 1;
 
 	/** Jeu contrôlé pour cette instance (une instance par requête ou par tranche), ou null. */
 	private ?string $guarded = null;
@@ -549,8 +555,8 @@ final class DatabaseDumper {
 						'rows'        => $rows,
 					];
 				}
-				$used  = $cursor['limit'];
 				$batch = $this->batch( $table, $meta, $cursor );
+				$used  = $this->used_limit;
 				$bytes = self::batch_bytes( $batch );
 				$kept  = $this->without_excluded( $table, $batch );
 				$this->emit_inserts( $table, $meta, $kept, $emit, $charset );
@@ -935,6 +941,38 @@ final class DatabaseDumper {
 	}
 
 	/**
+	 * Lot borné en octets pour une table à colonne LARGE_TYPE : les longueurs des lignes du lot (mêmes
+	 * WHERE, ORDER BY et LIMIT, sans les valeurs) sont lues d'abord, et le LIMIT réduit aux lignes dont la
+	 * somme reste sous BATCH_BYTES (au moins une : une ligne seule plus grosse reste un lot d'une ligne).
+	 * Sans cela, le lot doublerait après de petites lignes (next_limit()) et lirait d'un coup des Mio de
+	 * valeurs (révisions de constructeur de pages après de petits articles). Le LIMIT n'est réduit que
+	 * si le lot est tronqué : un lot qui rend moins de lignes que le LIMIT garde son LIMIT (fin de table).
+	 *
+	 * @param Meta   $meta
+	 * @param \Closure(int): string $tail Suite de la requête après la table (WHERE, ORDER BY, LIMIT, OFFSET) pour un LIMIT donné.
+	 * @throws BackupRefused DB_NAME_UNSUPPORTED (non réessayable), DB_READ_FAILED.
+	 */
+	private function bounded_limit( string $table, array $meta, string $name, \Closure $tail, int $limit, string $charset ): int {
+		$sizes = implode(
+			'+',
+			array_map( static fn ( string $c ): string => 'COALESCE(LENGTH(' . self::ident( $c, $charset ) . '),0)', $meta['columns'] )
+		);
+		$rows  = $this->rows( 'SELECT (' . $sizes . ') AS g2rd_bytes FROM ' . $name . $tail( $limit ), $table );
+		$sum   = 0;
+		$keep  = 0;
+		foreach ( $rows as $row ) {
+			$size = (int) ( $row['g2rd_bytes'] ?? 0 );
+			if ( $keep > 0 && $sum + $size > self::BATCH_BYTES ) {
+				return $keep;
+			}
+			$sum += $size;
+			++$keep;
+		}
+
+		return $limit;
+	}
+
+	/**
 	 * Colonnes lues et colonnes de l'INSERT (et lesquelles sont binaires, lesquelles sont des FLOAT lus
 	 * par leur texte exact, FLOAT_TYPE), clé primaire dans son ordre, lecture de la table (seek),
 	 * taille moyenne des lignes. Chaque nom de colonne passe par
@@ -1069,15 +1107,14 @@ final class DatabaseDumper {
 			throw new BackupRefused( BackupRefused::DB_CURSOR_INVALID ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
 		}
 		$name    = self::ident( $table, $charset );
-		$from    = 'SELECT ' . self::select_list( $meta['columns'], $meta['float'], $charset ) . ' FROM ' . $name;
 		$columns = implode( ',', array_map( static fn ( string $c ): string => self::ident( $c, $charset ), $pk ) );
 		if ( ! $seek ) {
 			// ORDER BY une clé (unique) qui contient un type de UNSEEKABLE_TYPE : ordre déterministe d'un lot à l'autre ; colonnes
 			// qualifiées par la table, jamais l'alias d'un FLOAT lu par son texte exact.
 			$order = implode( ',', array_map( static fn ( string $c ): string => $name . '.' . self::ident( $c, $charset ), $pk ) );
-			$sql   = $from . ( [] === $pk ? '' : ' ORDER BY ' . $order ) . ' LIMIT ' . (int) $limit . ' OFFSET ' . (int) $cursor['offset'];
+			$tail  = static fn ( int $n ): string => ( [] === $pk ? '' : ' ORDER BY ' . $order ) . ' LIMIT ' . $n . ' OFFSET ' . (int) $cursor['offset'];
 		} elseif ( null === $after ) {
-			$sql = $from . ' ORDER BY ' . $columns . ' LIMIT ' . (int) $limit;
+			$tail = static fn ( int $n ): string => ' ORDER BY ' . $columns . ' LIMIT ' . $n;
 		} else {
 			$values = implode(
 				',',
@@ -1087,8 +1124,13 @@ final class DatabaseDumper {
 					$after
 				)
 			);
-			$sql    = $from . ' WHERE (' . $columns . ') > (' . $values . ') ORDER BY ' . $columns . ' LIMIT ' . (int) $limit;
+			$tail   = static fn ( int $n ): string => ' WHERE (' . $columns . ') > (' . $values . ') ORDER BY ' . $columns . ' LIMIT ' . $n;
 		}
+		if ( $meta['large'] && $limit > 1 ) {
+			$limit = $this->bounded_limit( $table, $meta, $name, $tail, $limit, $charset );
+		}
+		$this->used_limit = $limit;
+		$sql              = 'SELECT ' . self::select_list( $meta['columns'], $meta['float'], $charset ) . ' FROM ' . $name . $tail( $limit );
 		$rows = $this->rows( $sql, $table );
 		// Clé de chaque ligne contrôlée (présente, non nulle), même lue par offset ; celle de la dernière, relevée ici en
 		// hexadécimal, sert à la reprise par la clé : l'appelant peut libérer le lot avant d'avancer.

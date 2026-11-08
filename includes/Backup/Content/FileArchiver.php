@@ -57,15 +57,26 @@ final class FileArchiver {
 			return self::outcome( true, 0, null, false );
 		}
 
+		// Cache des chemins résolus de PHP (realpath_cache_ttl, 120 s, gardé d'une requête à l'autre par lsphp ou
+		// php-fpm) : fopen() et realpath() le lisent tous deux, et un dossier lu une fois y reste résolu même si un
+		// autre processus le remplace ensuite par un lien. Vidé en entier (la forme par chemin ne retire pas les
+		// entrées des dossiers parents) avant le contrôle puis avant l'ouverture.
+		clearstatcache( true );
+		if ( ! $this->in_place( $entry['path'] ) ) {
+			return self::outcome( true, 0, null, true );
+		}
+		clearstatcache( true );
 		$handle = @fopen( $this->root . '/' . $entry['path'], 'rb' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- lecture en flux d'un fichier du site pour la sauvegarde (WP_Filesystem ne lit pas par morceaux) ; illisible = compté, sans avertissement.
 		if ( false === $handle ) {
 			return self::outcome( true, 0, null, true );
 		}
 		try {
 			// Aucun lien suivi : le parcours rend un lien comme tel, mais un fichier peut être remplacé par un lien (ou un
-			// de ses dossiers par un lien) entre le parcours et la lecture, tranches plus tard. Le fichier ouvert doit se
-			// résoudre à sa place exacte sous la racine ; sinon il est dit illisible, sans un octet lu.
-			if ( ! $this->in_place( $entry['path'] ) ) {
+			// de ses dossiers par un lien) entre le parcours et la lecture, tranches plus tard. Cache vidé, le fichier
+			// ouvert doit se résoudre à sa place exacte sous la racine et être le fichier même que ce chemin désigne
+			// maintenant (dev et ino) ; sinon il est dit illisible, sans un octet lu.
+			clearstatcache( true );
+			if ( ! $this->opened_in_place( $handle, $entry['path'] ) ) {
 				return self::outcome( true, 0, null, true );
 			}
 			if ( $offset > 0 && ( 0 !== fseek( $handle, $offset ) || $offset >= $entry['size'] ) ) {
@@ -115,13 +126,44 @@ final class FileArchiver {
 
 	/**
 	 * Le chemin se résout (realpath(), liens suivis) à lui-même sous la racine résolue : aucun de ses
-	 * composants n'est un lien. Une fenêtre minuscule reste entre ce contrôle et la lecture déjà ouverte
-	 * (PHP n'offre pas O_NOFOLLOW) ; la taille et la date relues à la fin (changed()) en détectent l'effet.
+	 * composants n'est un lien. L'appelant vide le cache des chemins résolus avant (clearstatcache( true )),
+	 * sans quoi realpath() rendrait l'ancien chemin d'un dossier remplacé par un lien. Il reste une fenêtre
+	 * minuscule entre ce contrôle et la lecture (PHP n'offre pas O_NOFOLLOW), refermée en partie par
+	 * same_file() ; changed() ne détecte pas un remplacement voulu (taille et date de la cible copiables).
 	 */
 	private function in_place( string $path ): bool {
 		$real = realpath( $this->root . '/' . $path );
 
 		return false !== $real && str_replace( '\\', '/', $real ) === $this->real_root . '/' . $path;
+	}
+
+	/**
+	 * Contrôle après l'ouverture : le chemin se résout à sa place (in_place()) et le descripteur est le
+	 * fichier qu'il désigne maintenant (same_file()).
+	 *
+	 * @param resource $handle
+	 */
+	private function opened_in_place( $handle, string $path ): bool {
+		return $this->in_place( $path ) && $this->same_file( $handle, $this->root . '/' . $path );
+	}
+
+	/**
+	 * Le descripteur ouvert est le fichier que le chemin désigne maintenant (dev et ino égaux). Illisible
+	 * (faux) si l'une des lectures échoue. Sans numéro d'inode (Windows : 0 des deux côtés), le contrôle de
+	 * in_place() reste seul.
+	 *
+	 * @param resource $handle
+	 */
+	private function same_file( $handle, string $path ): bool {
+		$open = fstat( $handle );
+		$disk = @stat( $path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- fichier disparu = illisible, sans avertissement.
+		if ( ! is_array( $open ) || ! is_array( $disk ) ) {
+			return false;
+		}
+		if ( 0 === (int) $open['ino'] && 0 === (int) $disk['ino'] ) {
+			return true;
+		}
+		return (int) $open['ino'] === (int) $disk['ino'] && (int) $open['dev'] === (int) $disk['dev'];
 	}
 
 	/**
