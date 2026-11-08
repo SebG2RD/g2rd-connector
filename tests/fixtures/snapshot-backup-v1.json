@@ -1,0 +1,17 @@
+{
+  "description": "Bloc « backup » du snapshot, version 1 (plan de la phase 4, tâche 31). Exemple d'un site aux sauvegardes allumées ; les clés et leurs types sont le contrat.",
+  "version": 1,
+  "example": {
+    "version": 1,
+    "enabled": true,
+    "available": true,
+    "disabled_by_constant": false,
+    "engine": "compat",
+    "signing_public_key": "f3c8f50904541f877bc2970bbe01e5e1cc090b4667407b0cb1a9f204efd95303",
+    "signing_key_id": "2ceee2170bd536c2",
+    "fingerprint": "2ceee2170bd536c267c6020f34af3560",
+    "site_key": { "version": 1, "service_key_id": "5a8760c1cf4271a6", "received_at": "2026-10-30T01:00:00+00:00" },
+    "state": { "phase": "idle", "backup_id": null, "type": null, "scope": null, "segments_written": 0, "pending": 0, "slice_started_at": null },
+    "last": { "backup_id": "8985695e536befd8b249c869f62ee42b", "outcome": "done", "code": null, "stage": null, "at": "2026-10-30T01:20:00+00:00", "totals": { "db_tables": 12, "db_rows": 4810, "files": 24116, "payload_bytes": 1071644672, "unreadable": 0 } }
+  }
+}

@@ -112,6 +112,28 @@ final class SnapshotInventoryTest extends SnapshotTestCase {
 				'dir_writable' => 'bool',
 			],
 			'pending_outcomes'  => 'list',
+			// Phase 4 des sauvegardes (tâche 31) : bloc `backup` d'un site aux sauvegardes éteintes.
+			'backup'            => [
+				'version'              => 'int',
+				'enabled'              => 'bool',
+				'available'            => 'bool',
+				'disabled_by_constant' => 'bool',
+				'engine'               => 'string',
+				'signing_public_key'   => 'null',
+				'signing_key_id'       => 'null',
+				'fingerprint'          => 'null',
+				'site_key'             => 'null',
+				'state'                => [
+					'phase'            => 'string',
+					'backup_id'        => 'null',
+					'type'             => 'null',
+					'scope'            => 'null',
+					'segments_written' => 'int',
+					'pending'          => 'int',
+					'slice_started_at' => 'null',
+				],
+				'last'                 => 'null',
+			],
 			'environment'       => [
 				'version'                => 'int',
 				'php_sapi'               => 'string',

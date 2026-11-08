@@ -44,6 +44,9 @@ final class AucunBranchementTest extends TestCase {
 		'signature_policy'        => 'report',
 		'php_errors_enabled'      => false,
 		'php_errors_log_tail'     => false,
+		// Phase 4 (tâche 31) : les deux cases des sauvegardes, décochées par défaut.
+		'backup_enabled'          => false,
+		'force_ipv4_to_storage'   => false,
 	];
 
 	/** CommandExecutor::ALLOWED d'origin/main, dans son ordre, et les quatre commandes de sauvegarde de la phase 4 (tâche 30). */

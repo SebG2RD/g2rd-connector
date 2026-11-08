@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Tests\Rest;
 
+use G2RD\Connector\Backup\State\BackupState;
+
 /**
- * Faux $wpdb, réduit à ce que lit l'inventaire : la version du serveur et les
- * compteurs de santé de la base (db_health). Chaque requête est notée ; une requête
+ * Faux $wpdb, réduit à ce que lit l'inventaire : la version du serveur, les
+ * compteurs de santé de la base (db_health) et l'état des sauvegardes (lu comme
+ * absent : site jamais sauvegardé). Chaque requête est notée ; une requête
  * peut être mise en échec (last_error renseigné, comme wpdb après une erreur SQL).
  */
 final class SnapshotWpdb {
@@ -85,9 +88,18 @@ final class SnapshotWpdb {
 		return $this->table_status;
 	}
 
-	/** Requêtes de santé de la base (tout sauf la version du serveur). */
+	/**
+	 * Requêtes de santé de la base : tout sauf la version du serveur et la lecture de l'état des
+	 * sauvegardes (bloc `backup`, phase 4, tâche 31 : une lecture d'option par inventaire, qui n'est
+	 * pas un calcul de santé).
+	 */
 	public function health_queries(): int {
-		return count( array_filter( $this->queries, static fn ( string $q ): bool => ! str_contains( $q, 'VERSION()' ) ) );
+		return count(
+			array_filter(
+				$this->queries,
+				static fn ( string $q ): bool => ! str_contains( $q, 'VERSION()' ) && ! str_contains( $q, "option_name = '" . BackupState::OPTION . "'" )
+			)
+		);
 	}
 
 	private function failed( string $query ): bool {

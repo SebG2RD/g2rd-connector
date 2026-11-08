@@ -38,7 +38,7 @@ final class SnapshotEnvironmentTest extends SnapshotTestCase {
 
 		$snapshot = $this->snapshot();
 
-		self::assertSame( [ 'pending_outcomes', 'environment' ], array_slice( array_keys( $snapshot ), -4, 2 ), 'après pending_outcomes, avant les blocs de la 1.16' );
+		self::assertSame( [ 'pending_outcomes', 'backup', 'environment' ], array_slice( array_keys( $snapshot ), -5, 3 ), 'après pending_outcomes et le bloc backup (phase 4, juste avant environment), avant les blocs de la 1.16' );
 		$environment = $snapshot['environment'];
 		self::assertSame(
 			[ 'version', 'php_sapi', 'extensions', 'sodium_library_version', 'exec_available', 'memory_limit_bytes', 'max_execution_seconds', 'disk', 'sizes' ],
