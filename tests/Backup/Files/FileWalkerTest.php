@@ -212,6 +212,24 @@ final class FileWalkerTest extends TestCase {
 		self::assertSame( 0, FileWalker::compare( 'x/y', 'x/y' ) );
 	}
 
+	public function test_un_nom_non_utf8_sert_de_curseur_sans_doublon(): void {
+		if ( 'Windows' === PHP_OS_FAMILY ) {
+			self::markTestSkipped( 'Windows refuse un nom de fichier qui n\'est pas de l\'UTF-8 : essai mené sur Linux (CI, banc).' );
+		}
+		// Dans « a » : à la racine, ce nom (octet 0xE9, au-delà de tout l'ASCII) serait la dernière
+		// entrée et rien ne le suivrait ; ici le parcours continue après lui (a.txt, …, zz.txt).
+		$nom = "a/\xe9t\xe9.txt";
+		file_put_contents( $this->racine . '/' . $nom, 'x' );
+		file_put_contents( $this->racine . '/zz.txt', 'y' );
+		$walker = new FileWalker( $this->racine, [] );
+		self::assertContains( $nom, array_column( iterator_to_array( $walker->walk(), false ), 'path' ), 'nom rendu octet pour octet par le parcours' );
+
+		$suite = array_column( iterator_to_array( $walker->walk( (string) hex2bin( bin2hex( $nom ) ) ), false ), 'path' );
+
+		self::assertNotContains( $nom, $suite, 'repris après lui, jamais lui de nouveau' );
+		self::assertContains( 'zz.txt', $suite );
+	}
+
 	/**
 	 * @return list<string>
 	 */

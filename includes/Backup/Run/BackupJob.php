@@ -32,12 +32,15 @@ namespace G2RD\Connector\Backup\Run;
 
 use G2RD\Connector\Backup\BackupSwitch;
 use G2RD\Connector\Backup\Commands\BackupRefused;
+use G2RD\Connector\Backup\Content\BaselineReader;
 use G2RD\Connector\Backup\Content\DatabaseDumper;
+use G2RD\Connector\Backup\Content\FileArchiver;
 use G2RD\Connector\Backup\Content\IncrementalBaseline;
 use G2RD\Connector\Backup\Content\ManifestJournal;
 use G2RD\Connector\Backup\Crypto\Aead;
 use G2RD\Connector\Backup\Crypto\SelfTest;
 use G2RD\Connector\Backup\Crypto\Sodium;
+use G2RD\Connector\Backup\Files\FileWalker;
 use G2RD\Connector\Backup\Format\BackupIndex;
 use G2RD\Connector\Backup\Format\Hpke;
 use G2RD\Connector\Backup\Format\SegmentHeader;
@@ -87,6 +90,9 @@ final class BackupJob {
 
 	/** Lignes de la table des options du site principal jamais copiées dans le dump. */
 	private const EXCLUDED_OPTIONS = [ BackupState::OPTION, UpdateWitness::OPTION, SiteKeyStore::OPTION, SigningKey::OPTION ];
+
+	/** Dossiers d'autres sauvegardes et de caches, relatifs à la racine (filtre g2rd_connector_backup_excludes). */
+	private const DEFAULT_EXCLUDES = [ 'wp-content/cache', 'wp-content/upgrade', 'wp-content/updraft', 'wp-content/ai1wm-backups', 'wp-content/backups-dup-pro', 'wp-content/backups-dup-lite', 'wp-content/wpvividbackups', 'wp-content/g2rd-snapshots' ];
 
 	private Sodium $sodium;
 
@@ -261,8 +267,8 @@ final class BackupJob {
 	}
 
 	/**
-	 * Tranche (deuxième version : production des segments de la base ; remplacée en entier à la
-	 * tâche 29-C).
+	 * Tranche (deuxième version : production des segments de la base puis des fichiers ; remplacée
+	 * en entier à la tâche 29-C).
 	 *
 	 * @param array<mixed> $payload
 	 * @return array<string, mixed> Rapport.
@@ -570,8 +576,8 @@ final class BackupJob {
 	}
 
 	/**
-	 * Produit des segments tant que la tranche dure (première version : base seule ; remplacée en
-	 * entier aux tâches 29-B et 29-C).
+	 * Produit des segments tant que la tranche dure (deuxième version : base puis fichiers ;
+	 * remplacée en entier à la tâche 29-C).
 	 *
 	 * @param array<string, mixed> $state
 	 * @return array<string, mixed>
@@ -579,17 +585,19 @@ final class BackupJob {
 	 */
 	private function produce( array $state, string $job, int $deadline, int $now ): array {
 		unset( $now );
-		if ( BackupState::DB !== $state['phase'] ) {
+		if ( ! in_array( $state['phase'], [ BackupState::DB, BackupState::FILES ], true ) ) {
 			return $state;
 		}
 		$producer = $this->producer( $state, $job );
-		while ( BackupState::DB === $state['phase'] && ! $state['manifest_due'] && count( (array) $state['pending'] ) < self::MAX_PENDING && ( $this->ms )() < $deadline ) {
+		while ( in_array( $state['phase'], [ BackupState::DB, BackupState::FILES ], true ) && ! $state['manifest_due'] && count( (array) $state['pending'] ) < self::MAX_PENDING && ( $this->ms )() < $deadline ) {
 			$n = (int) $state['segments'];
 			if ( $n >= self::MAX_CONTENT_SEGMENTS ) {
 				throw new BackupRefused( BackupRefused::TOO_MANY_SEGMENTS ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
 			}
 			$this->assert_disk( $job );
-			$state = $this->db_segment( $producer, $state, $job, $n, $deadline );
+			$state = BackupState::DB === $state['phase']
+				? $this->db_segment( $producer, $state, $job, $n, $deadline )
+				: $this->files_segment( $producer, $state, $job, $n, $deadline );
 		}
 
 		return $state;
@@ -674,6 +682,276 @@ final class BackupJob {
 		}
 
 		return $this->record_segment( $state, $entry, $job );
+	}
+
+	/**
+	 * Un segment des fichiers. Curseur gardé en hexadécimal (`files.cursor_hex`) : un nom qui n'est
+	 * pas de l'UTF-8 valide revient octet pour octet à la tranche suivante. Fichier réparti :
+	 * `files.current` garde sa taille, sa date, son mode et le segment où il commence ; disparu ou
+	 * changé entre deux tranches, il est inscrit illisible (statut vrai), jamais tu.
+	 *
+	 * Dossiers dont le contenu est refusé (contrat de FileWalker) : un dossier rendu `listed` faux
+	 * n'est pas archivé, il est inscrit illisible et absent du futur état local ; une entrée de l'état
+	 * local sous un dossier refusé n'est jamais dite supprimée (absent_line()) ; un dossier refusé
+	 * que le parcours ne rend pas (reprise dans un dossier devenu illisible, droits retirés pendant le
+	 * parcours, racine refusée), dont la ligne éventuelle est déjà écrite, est compté illisible une
+	 * fois, par FileWalker::unlisted().
+	 *
+	 * @param array<string, mixed> $state
+	 * @return array<string, mixed>
+	 * @throws BackupRefused Voir le contrat.
+	 */
+	private function files_segment( SegmentProducer $producer, array $state, string $job, int $n, int $deadline ): array {
+		$walker   = new FileWalker( $this->root, $this->excludes() );
+		$archiver = new FileArchiver( $this->root );
+		$journal  = new ManifestJournal( $job . '/manifest.jsonl' );
+		$files    = (array) $state['files'];
+		$totals   = (array) $state['totals'];
+		$baseline = 'full' === $state['type'] ? $job . '/baseline-new.jsonl' : null;
+		$reader   = 'incremental' === $state['type'] ? new BaselineReader( WorkDir::baseline_dir() . '/' . $state['parent'] . '.jsonl', (int) $files['baseline_offset'] ) : null;
+		$target   = self::segment_target();
+		$verify   = (bool) apply_filters( 'g2rd_connector_backup_verify_unchanged_hash', false );
+		$cursor   = self::cursor_of( $files );
+		/** @var array<string, true> $refused Dossiers rendus `listed` faux par ce parcours, déjà inscrits illisibles. */
+		$refused = [];
+
+		$entry = $producer->produce(
+			$n,
+			SegmentHeader::KIND_FILES,
+			function ( PayloadWriter $writer ) use ( $walker, $archiver, $journal, &$files, &$totals, &$cursor, &$refused, $baseline, $reader, $target, $deadline, $n, $verify ): void {
+				$stop = fn (): bool => $writer->written() >= $target || ( $this->ms )() >= $deadline;
+				if ( (int) $files['offset'] > 0 && null !== $cursor && is_array( $files['current'] ?? null ) ) {
+					$known   = (array) $files['current'];
+					$current = $walker->entry( $cursor );
+					if ( null === $current || 'file' !== $current['type'] || $current['size'] !== (int) $known['size'] || $current['mtime'] !== (int) $known['mtime'] ) {
+						$this->file_line( $journal, null, self::known_entry( $cursor, $known ), null, 'unreadable', null, $totals );
+					} else {
+						$done = $archiver->archive( $current, (int) $files['offset'], $writer, $stop );
+						if ( ! $done['done'] ) {
+							$files['offset'] = $done['offset'];
+							return;
+						}
+						$this->file_line( $journal, $baseline, $current, null, $done['unreadable'] ? 'unreadable' : 'stored', (int) $known['segment'], $totals );
+					}
+					$files['offset']  = 0;
+					$files['current'] = null;
+					if ( $stop() ) {
+						return;
+					}
+				}
+				foreach ( $walker->walk( $cursor ) as $item ) {
+					$base = null;
+					while ( null !== $reader ) {
+						$peeked = $reader->peek();
+						if ( null === $peeked ) {
+							break;
+						}
+						$order = FileWalker::compare( $peeked['path'], $item['path'] );
+						if ( $order > 0 ) {
+							break;
+						}
+						$reader->next();
+						if ( 0 === $order ) {
+							$base = $peeked;
+							break;
+						}
+						$this->absent_line( $writer, $journal, $walker, $peeked, $totals );
+					}
+					$cursor                   = $item['path'];
+					$files['cursor_hex']      = bin2hex( $item['path'] );
+					$files['baseline_offset'] = null === $reader ? null : $reader->offset();
+					if ( false === $item['listed'] ) {
+						// Contenu refusé : rien d'archivé, inscrit illisible. Jamais d'arrêt sur lui : le
+						// curseur ne reste pas sur un dossier refusé, que le parcours suivant retrouverait
+						// refusé (FileWalker::unlisted()) et compterait une seconde fois.
+						$refused[ $item['path'] ] = true;
+						$this->file_line( $journal, null, $item, null, 'unreadable', null, $totals );
+						continue;
+					}
+					if ( null !== $base && 'dir' !== $item['type'] && IncrementalBaseline::same( $item, $base ) && ! self::hash_changed( $this->root, $item, $base, $verify ) ) {
+						$this->file_line( $journal, null, $item, $base['sha256'], 'unchanged', null, $totals );
+						if ( $stop() ) {
+							return;
+						}
+						continue;
+					}
+					$done = $archiver->archive( $item, 0, $writer, $stop );
+					if ( ! $done['done'] ) {
+						$files['offset']  = $done['offset'];
+						$files['current'] = [
+							'size'    => $item['size'],
+							'mtime'   => $item['mtime'],
+							'mode'    => $item['mode'],
+							'segment' => $n,
+						];
+						return;
+					}
+					$this->file_line( $journal, $baseline, $item, $done['sha256'], $done['unreadable'] ? 'unreadable' : 'stored', $n, $totals );
+					if ( $stop() ) {
+						return;
+					}
+				}
+				while ( null !== $reader ) {
+					$peeked = $reader->peek();
+					if ( null === $peeked ) {
+						break;
+					}
+					$this->absent_line( $writer, $journal, $walker, $peeked, $totals );
+					$reader->next();
+				}
+				$files['done'] = true;
+			}
+		);
+		if ( null !== $reader ) {
+			$reader->close();
+		}
+		// Dossiers refusés que ce parcours n'a pas rendus : chacun est découvert par un seul parcours
+		// (le curseur passe ensuite au-delà de lui), donc compté une seule fois.
+		$totals['unreadable'] = (int) $totals['unreadable'] + count( array_diff_key( array_flip( $walker->unlisted() ), $refused ) );
+		$state['files']       = $files;
+		$state['totals']      = $totals;
+		if ( true === $files['done'] ) {
+			$state['manifest_due'] = true;
+		}
+
+		return $this->record_segment( $state, $entry, $job );
+	}
+
+	/**
+	 * Curseur du parcours relu de l'état : octets du chemin, décodés de l'hexadécimal.
+	 *
+	 * @param array<string, mixed> $files
+	 */
+	private static function cursor_of( array $files ): ?string {
+		$hex = $files['cursor_hex'] ?? null;
+		if ( ! is_string( $hex ) || '' === $hex || 0 !== strlen( $hex ) % 2 || ! ctype_xdigit( $hex ) ) {
+			return null;
+		}
+		$path = hex2bin( $hex );
+
+		return false === $path ? null : $path;
+	}
+
+	/**
+	 * Entrée d'un fichier réparti telle que lue à son début (pour l'inscrire illisible).
+	 *
+	 * @param array<mixed> $known
+	 * @return array{path: string, type: string, size: int, mtime: int, mode: int, target: string|null}
+	 */
+	private static function known_entry( string $path, array $known ): array {
+		return [
+			'path'   => $path,
+			'type'   => 'file',
+			'size'   => (int) ( $known['size'] ?? 0 ),
+			'mtime'  => (int) ( $known['mtime'] ?? 0 ),
+			'mode'   => (int) ( $known['mode'] ?? 0 ),
+			'target' => null,
+		];
+	}
+
+	/**
+	 * @param array{path: string, type: string, size: int, mtime: int, mode: int, target: string|null} $entry
+	 * @param array<string, mixed>                                                                     $totals
+	 * @throws BackupRefused WORK_DIR_UNAVAILABLE.
+	 */
+	private function file_line( ManifestJournal $journal, ?string $baseline, array $entry, ?string $sha256, string $status, ?int $segment, array &$totals ): void {
+		$journal->append(
+			[ 't' => 'file' ] + ManifestJournal::path_field( $entry['path'] ) + [
+				'kind'    => $entry['type'],
+				'size'    => $entry['size'],
+				'mtime'   => $entry['mtime'],
+				'mode'    => $entry['mode'],
+				'sha256'  => $sha256,
+				'state'   => $status,
+				'segment' => 'stored' === $status ? $segment : null,
+			]
+		);
+		$totals['files'] = (int) $totals['files'] + 1;
+		if ( 'unreadable' === $status ) {
+			$totals['unreadable'] = (int) $totals['unreadable'] + 1;
+			return;
+		}
+		if ( null !== $baseline ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- futur état local des incrémentales, dans le dossier de travail (journal tronqué à sa longueur validée à chaque tranche).
+			if ( false === file_put_contents( $baseline, IncrementalBaseline::line( $entry, $sha256 ), FILE_APPEND ) ) {
+				throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+			}
+		}
+	}
+
+	/**
+	 * Entrée de l'état local absente du parcours (les deux boucles de fusion de files_segment()).
+	 * Sous un dossier refusé (FileWalker::within_unlisted(), interrogé quand l'entrée suivante du
+	 * parcours arrive ou après sa fin : le dossier a déjà été essayé, à la reprise comme au premier
+	 * passage), son absence ne prouve rien : inscrite illisible d'après l'état local (nature,
+	 * taille, date ; mode inconnu de l'état local, 0), rien n'est écrit dans le segment. Sinon
+	 * supprimée : enregistrement `deleted` et ligne `deleted`.
+	 *
+	 * @param array{path: string, type: string, size: int, mtime: int, sha256: string|null} $base
+	 * @param array<string, mixed>                                                          $totals
+	 * @throws BackupRefused WORK_DIR_UNAVAILABLE.
+	 */
+	private function absent_line( PayloadWriter $writer, ManifestJournal $journal, FileWalker $walker, array $base, array &$totals ): void {
+		if ( $walker->within_unlisted( $base['path'] ) ) {
+			$entry = [
+				'path'   => $base['path'],
+				'type'   => $base['type'],
+				'size'   => $base['size'],
+				'mtime'  => $base['mtime'],
+				'mode'   => 0,
+				'target' => null,
+			];
+			$this->file_line( $journal, null, $entry, null, 'unreadable', null, $totals );
+			return;
+		}
+		$writer->deleted( $base['path'] );
+		$this->deleted_line( $journal, $base['path'], $totals );
+	}
+
+	/**
+	 * @param array<string, mixed> $totals
+	 * @throws BackupRefused WORK_DIR_UNAVAILABLE.
+	 */
+	private function deleted_line( ManifestJournal $journal, string $path, array &$totals ): void {
+		$journal->append(
+			[ 't' => 'file' ] + ManifestJournal::path_field( $path ) + [
+				'kind'    => 'file',
+				'size'    => 0,
+				'mtime'   => 0,
+				'mode'    => 0,
+				'sha256'  => null,
+				'state'   => 'deleted',
+				'segment' => null,
+			]
+		);
+		$totals['files'] = (int) $totals['files'] + 1;
+	}
+
+	/**
+	 * @param array{path: string, type: string, size: int, mtime: int, mode: int, target: string|null} $entry
+	 * @param array{path: string, type: string, size: int, mtime: int, sha256: string|null}            $base
+	 */
+	private static function hash_changed( string $root, array $entry, array $base, bool $verify ): bool {
+		if ( ! $verify || 'file' !== $entry['type'] || ! is_string( $base['sha256'] ) ) {
+			return false;
+		}
+		$hash = hash_file( 'sha256', $root . '/' . $entry['path'] );
+
+		return false === $hash || ! hash_equals( $base['sha256'], $hash );
+	}
+
+	/**
+	 * @return list<string>
+	 */
+	private function excludes(): array {
+		$excludes = self::DEFAULT_EXCLUDES;
+		$work     = WorkDir::relative_to( $this->root );
+		if ( null !== $work ) {
+			$excludes[] = $work;
+		}
+		$filtered = apply_filters( 'g2rd_connector_backup_excludes', $excludes );
+
+		return array_values( array_filter( is_array( $filtered ) ? $filtered : $excludes, 'is_string' ) );
 	}
 
 	/**

@@ -6,8 +6,13 @@ namespace G2RD\Connector\Tests\Backup\Run;
 
 use Brain\Monkey\Functions;
 use G2RD\Connector\Backup\Commands\BackupRefused;
+use G2RD\Connector\Backup\Content\IncrementalBaseline;
 use G2RD\Connector\Backup\Crypto\Sodium;
+use G2RD\Connector\Backup\Files\FileWalker;
+use G2RD\Connector\Backup\Format\Hpke;
+use G2RD\Connector\Backup\Format\SegmentReader;
 use G2RD\Connector\Backup\Keys\SiteKeyStore;
+use G2RD\Connector\Backup\Payload\PayloadReader;
 use G2RD\Connector\Backup\Run\BackupJob;
 use G2RD\Connector\Backup\Run\WorkDir;
 use G2RD\Connector\Backup\State\BackupState;
@@ -40,6 +45,9 @@ final class BackupJobTest extends BackupTestCase {
 	/** Autotest faussé (tâche 29-C : échec juste avant la signature). */
 	private bool $autotest_faux = false;
 
+	/** @var list<string> Dossiers dont les droits ont été retirés : rendus avant le nettoyage. */
+	private array $droits_retires = [];
+
 	protected function setUp(): void {
 		parent::setUp();
 		$base          = str_replace( '\\', '/', sys_get_temp_dir() ) . '/g2rd-job-' . bin2hex( random_bytes( 4 ) );
@@ -50,8 +58,9 @@ final class BackupJobTest extends BackupTestCase {
 		file_put_contents( $this->racine . '/wp-content/a.txt', 'bonjour' );
 		file_put_contents( $this->racine . '/wp-content/uploads/b.jpg', random_bytes( 3000 ) );
 		$this->secrete       = random_bytes( 32 );
-		$this->envois        = [];
-		$this->autotest_faux = false;
+		$this->envois         = [];
+		$this->autotest_faux  = false;
+		$this->droits_retires = [];
 		$this->settings( [ 'backup_enabled' => true ] );
 		$this->options[ SiteKeyStore::OPTION ] = [
 			'tenant_ref'     => str_repeat( 'a', 32 ),
@@ -89,6 +98,9 @@ final class BackupJobTest extends BackupTestCase {
 	}
 
 	protected function tearDown(): void {
+		foreach ( $this->droits_retires as $dossier ) {
+			chmod( $dossier, 0755 );
+		}
 		$base = dirname( $this->racine );
 		foreach ( new \RecursiveIteratorIterator( new \RecursiveDirectoryIterator( $base, \FilesystemIterator::SKIP_DOTS ), \RecursiveIteratorIterator::CHILD_FIRST ) as $e ) {
 			$e->isDir() ? rmdir( $e->getPathname() ) : unlink( $e->getPathname() );
@@ -453,5 +465,296 @@ final class BackupJobTest extends BackupTestCase {
 		self::assertSame( [ 'wp_0', 'wp_a', 'wp_b', 'wp_options' ], array_column( $this->lignes_table( self::B1 ), 'name' ), 'une ligne par table, jamais deux' );
 		self::assertSame( [ 0, 0, 1, 1 ], array_column( $this->lignes_table( self::B1 ), 'segment' ), 'wp_a commence au segment 0 refait' );
 		self::assertSame( 4, BackupState::load()['state']['totals']['db_tables'] );
+	}
+
+	/**
+	 * @return list<array<string, mixed>>
+	 */
+	private function enregistrements( string $segment ): array {
+		$clair = '';
+		$flux  = fopen( 'php://memory', 'w+b' );
+		fwrite( $flux, $segment );
+		rewind( $flux );
+		( new SegmentReader( new Hpke( new Sodium() ) ) )->decrypt(
+			$flux,
+			$this->secrete,
+			static function ( string $bloc ) use ( &$clair ): void {
+				$clair .= $bloc;
+			}
+		);
+		fclose( $flux );
+		return PayloadReader::parse( $clair );
+	}
+
+	/**
+	 * Lignes `file` du journal du manifeste de la sauvegarde $id, chemin → ligne.
+	 *
+	 * @return array<string, array<string, mixed>>
+	 */
+	private function lignes_fichier( string $id ): array {
+		$lignes = [];
+		foreach ( (array) file( $this->dossier( $id ) . '/manifest.jsonl', FILE_IGNORE_NEW_LINES ) as $texte ) {
+			$l = (array) json_decode( (string) $texte, true );
+			if ( 'file' === ( $l['t'] ?? null ) ) {
+				$chemin = $l['path'] ?? base64_decode( (string) $l['path_b64'] );
+				self::assertArrayNotHasKey( $chemin, $lignes, 'ligne de manifeste en double : ' . $chemin );
+				$lignes[ $chemin ] = $l;
+			}
+		}
+		return $lignes;
+	}
+
+	/** État local d'une complète B1 écrit d'après l'arbre actuel (comme l'aurait promu la tâche 29-C). */
+	private function etat_local_de_l_arbre(): void {
+		WorkDir::ensure();
+		$source = WorkDir::baseline_dir() . '/source.jsonl';
+		$lignes = '';
+		foreach ( ( new FileWalker( $this->racine, [] ) )->walk( null ) as $entree ) {
+			$lignes .= IncrementalBaseline::line( $entree, 'file' === $entree['type'] ? hash_file( 'sha256', $this->racine . '/' . $entree['path'] ) : null );
+		}
+		file_put_contents( $source, $lignes );
+		self::assertTrue( ( new IncrementalBaseline( WorkDir::baseline_dir() ) )->promote( $source, self::B1, self::NOW ) );
+	}
+
+	public function test_fichiers_copies_curseur_en_hexadecimal_et_etat_local_prepare(): void {
+		file_put_contents( $this->racine . '/wp-content/été.txt', 'accents' );
+		$job = $this->job();
+		$job->start( self::depart( self::B1 ) );
+
+		$segments = $this->copier( $job, self::B1 );
+
+		$fichiers = [];
+		foreach ( $segments as $segment ) {
+			foreach ( $this->enregistrements( $segment ) as $e ) {
+				if ( 'file' === $e['type'] ) {
+					$fichiers[ $e['path'] ] = ( $fichiers[ $e['path'] ] ?? '' ) . $e['data'];
+				}
+			}
+		}
+		self::assertSame( 'bonjour', $fichiers['wp-content/a.txt'] );
+		self::assertSame( 'accents', $fichiers['wp-content/été.txt'] );
+		$etat = BackupState::load()['state'];
+		self::assertMatchesRegularExpression( '/\A[0-9a-f]+\z/', (string) $etat['files']['cursor_hex'], 'jamais le chemin brut dans l\'état JSON' );
+		self::assertTrue( $etat['files']['done'] );
+		self::assertSame( count( $this->lignes_fichier( self::B1 ) ), count( (array) file( $this->dossier( self::B1 ) . '/baseline-new.jsonl' ) ), 'une ligne d\'état local par entrée copiée' );
+	}
+
+	public function test_fin_de_tranche_perdue_la_tranche_refaite_ne_laisse_aucun_doublon(): void {
+		$job = $this->job();
+		$job->start( self::depart( self::B1 ) );
+		// Première écriture (début de tranche) passe ; la seconde (fin de tranche) échoue :
+		// « MySQL server has gone away » après la production.
+		$this->wpdb->before_write = function (): void {
+			$this->wpdb->before_write = function (): void {
+				$this->wpdb->write_fails = true;
+			};
+		};
+
+		try {
+			$job->step( [ 'backup_id' => self::B1 ] );
+			self::fail( 'Refus attendu.' );
+		} catch ( BackupRefused $refus ) {
+			self::assertSame( BackupRefused::STORE_UNAVAILABLE, $refus->reason_code() );
+		}
+		$this->wpdb->write_fails = false;
+		$this->copier( $job, self::B1 );
+
+		$lignes = $this->lignes_fichier( self::B1 );
+		self::assertArrayHasKey( 'wp-content/a.txt', $lignes );
+		$etat_local = array_map( static fn ( string $l ): ?array => IncrementalBaseline::decode_line( $l ), (array) file( $this->dossier( self::B1 ) . '/baseline-new.jsonl' ) );
+		$chemins    = array_column( $etat_local, 'path' );
+		self::assertSame( array_values( array_unique( $chemins ) ), $chemins, 'aucun doublon dans l\'état local (sinon un « deleted » faux à l\'incrémentale suivante)' );
+		self::assertSame( count( $lignes ), BackupState::load()['state']['totals']['files'] );
+	}
+
+	public function test_fichier_reparti_disparu_entre_deux_tranches_dit_illisible(): void {
+		file_put_contents( $this->racine . '/wp-content/gros.bin', random_bytes( 40 * 1048576 ) );
+		$job = $this->job();
+		$job->start( self::depart( self::B1 ) );
+		$premiere = $job->step( [ 'backup_id' => self::B1 ] );
+		self::assertCount( 2, $premiere['pending'], 'deux segments de 16 Mio, gros.bin pas fini' );
+		self::assertSame( 0, BackupState::load()['state']['files']['current']['segment'] );
+		unlink( $this->racine . '/wp-content/gros.bin' );
+
+		$job->step( [ 'backup_id' => self::B1, 'completed' => array_column( $premiere['pending'], 'segment' ) ] );
+		$this->copier( $job, self::B1 );
+
+		$ligne = $this->lignes_fichier( self::B1 )['wp-content/gros.bin'];
+		self::assertSame( [ 'unreadable', null, 41943040 ], [ $ligne['state'], $ligne['segment'], $ligne['size'] ], 'jamais tu : compté illisible avec sa taille lue au début' );
+		self::assertSame( 1, BackupState::load()['state']['totals']['unreadable'] );
+	}
+
+	public function test_nom_non_utf8_reparti_puis_repris_relu_exactement(): void {
+		if ( 'Windows' === PHP_OS_FAMILY ) {
+			self::markTestSkipped( 'Windows refuse un nom de fichier qui n\'est pas de l\'UTF-8 : essai mené sur Linux (CI, banc).' );
+		}
+		$nom = "wp-content/\xe9t\xe9.bin";
+		file_put_contents( $this->racine . '/' . $nom, random_bytes( 40 * 1048576 ) );
+		$job = $this->job();
+		$job->start( self::depart( self::B1 ) );
+
+		$segments = $this->copier( $job, self::B1 );
+
+		$morceaux = '';
+		foreach ( $segments as $segment ) {
+			foreach ( $this->enregistrements( $segment ) as $e ) {
+				if ( 'file' === $e['type'] && $nom === $e['path'] ) {
+					$morceaux .= $e['data'];
+				}
+			}
+		}
+		self::assertSame( (string) file_get_contents( $this->racine . '/' . $nom ), $morceaux, 'relu exactement, aucun morceau en double' );
+		self::assertSame( 'stored', $this->lignes_fichier( self::B1 )[ $nom ]['state'] );
+	}
+
+	public function test_incrementale_ne_porte_que_les_changements(): void {
+		$this->etat_local_de_l_arbre();
+		file_put_contents( $this->racine . '/wp-content/a.txt', 'bonsoir !' );
+		unlink( $this->racine . '/index.php' );
+		file_put_contents( $this->racine . '/wp-content/nouveau.css', 'body{}' );
+		$job = $this->job();
+		$job->start( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
+
+		$segments = $this->copier( $job, self::B2 );
+
+		$types = [];
+		foreach ( $segments as $segment ) {
+			foreach ( $this->enregistrements( $segment ) as $e ) {
+				$types[ $e['path'] ] = $e['type'];
+			}
+		}
+		self::assertSame( 'file', $types['wp-content/a.txt'] ?? null );
+		self::assertSame( 'file', $types['wp-content/nouveau.css'] ?? null );
+		self::assertSame( 'deleted', $types['index.php'] ?? null );
+		self::assertArrayNotHasKey( 'wp-content/uploads/b.jpg', $types, 'inchangé : pas recopié' );
+		$lignes = $this->lignes_fichier( self::B2 );
+		self::assertSame( 'unchanged', $lignes['wp-content/uploads/b.jpg']['state'] );
+		self::assertSame( 'deleted', $lignes['index.php']['state'] );
+		self::assertSame( [ 'index.php' ], array_keys( array_filter( $lignes, static fn ( array $l ): bool => 'deleted' === $l['state'] ) ), 'un seul « deleted » : le fichier supprimé' );
+	}
+
+	/** Dossier `wp-content/prive` (deux fichiers et un sous-dossier) des essais de droits retirés. */
+	private function dossier_prive(): void {
+		mkdir( $this->racine . '/wp-content/prive/sous', 0777, true );
+		file_put_contents( $this->racine . '/wp-content/prive/un.txt', 'premier' );
+		file_put_contents( $this->racine . '/wp-content/prive/deux.txt', 'second' );
+		file_put_contents( $this->racine . '/wp-content/prive/sous/trois.txt', 'troisième' );
+	}
+
+	/** Saute l'essai là où les droits POSIX d'un dossier n'ont pas d'effet (avant tout travail). */
+	private static function sauter_sans_droits_posix(): void {
+		if ( 'Windows' === PHP_OS_FAMILY ) {
+			self::markTestSkipped( 'Droits POSIX sans effet sous Windows (chmod n\'y retire ni la liste ni la traversée d\'un dossier) : essai mené en CI Linux et sur le banc (tâche 37, E1).' );
+		}
+		if ( function_exists( 'posix_geteuid' ) && 0 === posix_geteuid() ) {
+			self::markTestSkipped( 'Essai lancé en root, qui passe outre les droits des dossiers : à mener sous un utilisateur ordinaire (CI Linux, banc, tâche 37, E1).' );
+		}
+	}
+
+	/** Passe un dossier du site d'essai en 0000 ; saute l'essai si ce retrait reste sans effet. */
+	private function retirer_droits( string $relatif ): void {
+		self::sauter_sans_droits_posix();
+		$dossier                = $this->racine . '/' . $relatif;
+		$this->droits_retires[] = $dossier;
+		chmod( $dossier, 0000 );
+		clearstatcache();
+		if ( false !== @scandir( $dossier ) ) {
+			self::markTestSkipped( 'Les droits retirés n\'ont pas d\'effet pour cet utilisateur (root sans l\'extension posix ?) : essai à mener sous un utilisateur ordinaire (CI Linux, banc, tâche 37, E1).' );
+		}
+	}
+
+	/**
+	 * Chemins de tous les enregistrements des segments (morceaux, dossiers, liens, supprimés).
+	 *
+	 * @param array<int, string> $segments
+	 * @return list<string>
+	 */
+	private function chemins_ecrits( array $segments ): array {
+		$chemins = [];
+		foreach ( $segments as $segment ) {
+			foreach ( $this->enregistrements( $segment ) as $e ) {
+				if ( '' !== $e['path'] ) {
+					$chemins[] = $e['type'] . ' ' . $e['path'];
+				}
+			}
+		}
+		return $chemins;
+	}
+
+	/**
+	 * @param array<string, array<string, mixed>> $lignes
+	 * @return list<string>
+	 */
+	private static function supprimes( array $lignes ): array {
+		return array_keys( array_filter( $lignes, static fn ( array $l ): bool => 'deleted' === $l['state'] ) );
+	}
+
+	public function test_complete_un_dossier_illisible_est_inscrit_illisible_sans_rien_archiver(): void {
+		self::sauter_sans_droits_posix();
+		$this->dossier_prive();
+		$this->retirer_droits( 'wp-content/prive' );
+		$job = $this->job();
+		$job->start( self::depart( self::B1 ) );
+
+		$segments = $this->copier( $job, self::B1 );
+
+		$lignes = $this->lignes_fichier( self::B1 );
+		self::assertArrayHasKey( 'wp-content/prive', $lignes, 'jamais tu' );
+		self::assertSame( [ 'dir', 'unreadable', null ], [ $lignes['wp-content/prive']['kind'], $lignes['wp-content/prive']['state'], $lignes['wp-content/prive']['segment'] ] );
+		self::assertSame( [], preg_grep( '#^\S+ wp-content/prive(/|$)#', $this->chemins_ecrits( $segments ) ), 'rien du dossier refusé dans les segments, pas même son enregistrement de dossier' );
+		self::assertSame( 1, BackupState::load()['state']['totals']['unreadable'] );
+		self::assertStringNotContainsString( 'prive', (string) file_get_contents( $this->dossier( self::B1 ) . '/baseline-new.jsonl' ), 'absent du futur état local : la prochaine incrémentale le recopiera' );
+	}
+
+	public function test_incrementale_un_dossier_devenu_illisible_n_est_jamais_dit_supprime(): void {
+		self::sauter_sans_droits_posix();
+		$this->dossier_prive();
+		file_put_contents( $this->racine . '/wp-content/uploads/c.txt', 'vrai' );
+		$this->etat_local_de_l_arbre();
+		unlink( $this->racine . '/wp-content/uploads/c.txt' );
+		$this->retirer_droits( 'wp-content/prive' );
+		$job = $this->job();
+		$job->start( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
+
+		$segments = $this->copier( $job, self::B2 );
+
+		$lignes = $this->lignes_fichier( self::B2 );
+		self::assertSame( [ 'wp-content/uploads/c.txt' ], self::supprimes( $lignes ), 'seule la vraie disparition, dans un dossier lisible, est dite supprimée' );
+		self::assertSame( [], preg_grep( '#^\S+ wp-content/prive(/|$)#', $this->chemins_ecrits( $segments ) ), 'rien d\'écrit pour le dossier refusé, ni « deleted » ni contenu' );
+		self::assertContains( 'deleted wp-content/uploads/c.txt', $this->chemins_ecrits( $segments ) );
+		$prive = array_filter( $lignes, static fn ( string $chemin ): bool => str_starts_with( $chemin, 'wp-content/prive' ), ARRAY_FILTER_USE_KEY );
+		self::assertSame( [ 'wp-content/prive', 'wp-content/prive/deux.txt', 'wp-content/prive/sous', 'wp-content/prive/sous/trois.txt', 'wp-content/prive/un.txt' ], array_keys( $prive ) );
+		self::assertSame( [ 'unreadable' ], array_values( array_unique( array_column( $prive, 'state' ) ) ), 'le dossier et les entrées de l\'état local sous lui : illisibles' );
+		self::assertSame( [ 'file', 7, null, null ], [ $prive['wp-content/prive/un.txt']['kind'], $prive['wp-content/prive/un.txt']['size'], $prive['wp-content/prive/un.txt']['sha256'], $prive['wp-content/prive/un.txt']['segment'] ], 'entrée rebâtie depuis l\'état local' );
+		self::assertSame( 'dir', $prive['wp-content/prive/sous']['kind'] );
+		self::assertSame( 5, BackupState::load()['state']['totals']['unreadable'], 'les quatre entrées de l\'état local sous le dossier, plus le dossier' );
+	}
+
+	public function test_incrementale_reprise_dans_un_dossier_devenu_illisible_jamais_dite_supprimee(): void {
+		self::sauter_sans_droits_posix();
+		$this->dossier_prive();
+		$this->etat_local_de_l_arbre();
+		// Nouveau depuis la complète : copié, réparti sur trois segments de 16 Mio ; la première
+		// tranche (deux segments au plus en attente) s'arrête dedans.
+		file_put_contents( $this->racine . '/wp-content/prive/deux.bin', random_bytes( 40 * 1048576 ) );
+		$job = $this->job();
+		$job->start( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
+		$premiere = $job->step( [ 'backup_id' => self::B2 ] );
+		self::assertCount( 2, $premiere['pending'] );
+		self::assertSame( 'wp-content/prive/deux.bin', hex2bin( (string) BackupState::load()['state']['files']['cursor_hex'] ), 'tranche arrêtée dans le dossier' );
+		$this->retirer_droits( 'wp-content/prive' );
+
+		$job->step( [ 'backup_id' => self::B2, 'completed' => array_column( $premiere['pending'], 'segment' ) ] );
+		$this->copier( $job, self::B2 );
+
+		$lignes = $this->lignes_fichier( self::B2 );
+		self::assertSame( [], self::supprimes( $lignes ), 'rien n\'est dit supprimé sous le dossier devenu illisible' );
+		self::assertSame( 'stored', $lignes['wp-content/prive']['state'], 'lisible à la première tranche : sa ligne est déjà écrite, jamais une seconde' );
+		self::assertSame( [ 'unreadable', 41943040 ], [ $lignes['wp-content/prive/deux.bin']['state'], $lignes['wp-content/prive/deux.bin']['size'] ], 'fichier réparti devenu illisible' );
+		foreach ( [ 'wp-content/prive/deux.txt', 'wp-content/prive/sous', 'wp-content/prive/sous/trois.txt', 'wp-content/prive/un.txt' ] as $chemin ) {
+			self::assertSame( 'unreadable', $lignes[ $chemin ]['state'] ?? null, $chemin . ' : suite du dossier, inscrite d\'après l\'état local' );
+		}
+		self::assertSame( 'unchanged', $lignes['wp-content/uploads/b.jpg']['state'], 'le parcours continue après le dossier' );
+		self::assertSame( 6, BackupState::load()['state']['totals']['unreadable'], 'deux.bin, les quatre entrées de l\'état local après lui, et le dossier (compté par FileWalker::unlisted())' );
 	}
 }
