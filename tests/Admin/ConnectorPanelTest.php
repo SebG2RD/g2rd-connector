@@ -556,7 +556,7 @@ final class ConnectorPanelTest extends TestCase {
 		self::assertArrayHasKey( 1, $phrase, 'Phrase de la constante introuvable dans backupDescription().' );
 		self::assertStringContainsString( ' Cause probable : ', $phrase[1], 'la phrase dit la cause probable' );
 		self::assertStringContainsString( ' Action : ', $phrase[1], 'la phrase dit quoi faire' );
-		self::assertStringContainsString( 'les sauvegardes reprendront si la case était cochée.', $phrase[1], 'la phrase dit ce que devient la valeur enregistrée' );
+		self::assertStringContainsString( 'les sauvegardes reprendront si elles étaient activées.', $phrase[1], 'la phrase dit ce que devient la valeur enregistrée' );
 		self::assertStringNotContainsString( 'peut sauvegarder', $phrase[1], 'constante posée : rien ne dit que le manager peut sauvegarder' );
 		// Courte : 35 mots au plus, rien de technique au-delà du nom de la constante et de wp-config.php.
 		self::assertLessThanOrEqual( 35, preg_match_all( '/[\p{L}\p{N}_]+(?:[’\'.\-][\p{L}\p{N}_]+)*/u', $phrase[1] ), 'phrase de la constante trop longue' );
@@ -578,7 +578,21 @@ final class ConnectorPanelTest extends TestCase {
 		$panneau = self::panneau();
 
 		self::assertMatchesRegularExpression( '/if \( d\.backupEnabled \) \{\s*return `[^`]*Pour les arrêter, coupez l’interrupteur puis enregistrez\.`;/', $panneau );
-		self::assertMatchesRegularExpression( '/title="IPv4 vers le stockage des sauvegardes"\s*description="[^"]*Pour l’arrêter, coupez l’interrupteur puis enregistrez\."/', $panneau );
+		self::assertMatchesRegularExpression( '/title="IPv4 vers le stockage des sauvegardes"\s*description=\{ ipv4StorageDescription\( state \) \}/', $panneau );
+		self::assertMatchesRegularExpression( '/function ipv4StorageDescription\( d: ConnectorBootData \): string \{.*?return `\$\{ base \} Pour l’arrêter, coupez l’interrupteur puis enregistrez\.`;/s', $panneau );
+	}
+
+	/**
+	 * Verrou du réseau (interrupteur grisé) : l'aide IPv4 ne dit plus de couper l'interrupteur,
+	 * action impossible ; la phrase du verrou (quoi, cause, action) en tient lieu.
+	 */
+	public function test_verrou_du_reseau_l_aide_ipv4_ne_dit_pas_de_couper_l_interrupteur(): void {
+		$panneau = self::panneau();
+
+		preg_match( '/function ipv4StorageDescription\( d: ConnectorBootData \): string \{(.*?)\n\}/s', $panneau, $fonction );
+		self::assertArrayHasKey( 1, $fonction, 'ipv4StorageDescription() introuvable.' );
+		self::assertMatchesRegularExpression( '/if \( d\.backup\.lock !== null \) \{\s*return d\.backup\.lockMessage \? `\$\{ base \} \$\{ d\.backup\.lockMessage \}` : base;\s*\}/', $fonction[1], 'verrou : phrase du verrou à la place de la manière de l\'arrêter' );
+		self::assertSame( 1, substr_count( $fonction[1], 'coupez l’interrupteur' ), 'la manière de l\'arrêter n\'est dite qu\'hors verrou' );
 	}
 
 	public function test_la_feuille_garde_le_correctif_des_cases_cochees(): void {

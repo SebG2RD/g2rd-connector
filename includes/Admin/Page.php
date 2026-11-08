@@ -410,7 +410,7 @@ final class Page {
 								<?php echo esc_html__( 'Autoriser les sauvegardes chiffrées de ce site', 'g2rd-connector' ); ?>
 							</label>
 							<?php if ( $backup['disabledByConstant'] ) : ?>
-							<p class="description" id="g2rd_backup_enabled_constante"><?php echo esc_html__( 'Aucune sauvegarde ne part de ce site ; case bloquée. Cause probable : la constante G2RD_CONNECTOR_DISABLE_BACKUP, posée par la personne qui gère l’hébergement. Action : la retirer de wp-config.php ; les sauvegardes reprendront si la case était cochée.', 'g2rd-connector' ); ?></p>
+							<p class="description" id="g2rd_backup_enabled_constante"><?php echo esc_html__( 'Aucune sauvegarde ne part de ce site ; réglage bloqué. Cause probable : la constante G2RD_CONNECTOR_DISABLE_BACKUP, posée par la personne qui gère l’hébergement. Action : la retirer de wp-config.php ; les sauvegardes reprendront si elles étaient activées.', 'g2rd-connector' ); ?></p>
 							<?php elseif ( null !== $backup['lockMessage'] ) : ?>
 							<p class="description" id="g2rd_backup_enabled_verrou"><?php echo esc_html( $backup['lockMessage'] ); ?></p>
 							<?php else : ?>
@@ -431,7 +431,7 @@ final class Page {
 									<?php checked( BackupSwitch::LOCK_SECONDARY !== $backup['lock'] && (bool) ( $settings['force_ipv4_to_storage'] ?? false ) ); ?> <?php disabled( null !== $backup['lock'] ); ?>>
 								<?php echo esc_html__( 'Envoyer les sauvegardes par l’IPv4', 'g2rd-connector' ); ?>
 							</label>
-							<p class="description" id="g2rd_force_ipv4_to_storage_aide"><?php echo esc_html__( 'À activer si l’hébergeur bloque l’IPv6 sortante du serveur : l’envoi des sauvegardes vers le stockage passe alors par l’IPv4. Ne concerne que cet envoi. Pour l’arrêter, décochez la case puis enregistrez.', 'g2rd-connector' ); ?></p>
+							<p class="description" id="g2rd_force_ipv4_to_storage_aide"><?php echo esc_html__( 'À activer si l’hébergeur bloque l’IPv6 sortante du serveur : l’envoi des sauvegardes vers le stockage passe alors par l’IPv4. Ne concerne que cet envoi.', 'g2rd-connector' ); ?> <?php echo null === $backup['lock'] ? esc_html__( 'Pour l’arrêter, décochez la case puis enregistrez.', 'g2rd-connector' ) : esc_html( (string) $backup['lockMessage'] ); ?></p>
 						</td>
 					</tr>
 					<tr>

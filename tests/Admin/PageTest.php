@@ -168,6 +168,11 @@ final class PageTest extends TestCase {
 		self::assertStringContainsString( '<p class="description" id="g2rd_backup_enabled_verrou">Sur un réseau multisite, ', $html );
 		self::assertStringNotContainsString( 'id="g2rd_backup_enabled_aide"', $html );
 		self::assertStringNotContainsString( 'Empreinte de la clé de signature du site', $html );
+		// Case IPv4 grisée par le même verrou : son aide ne dit pas de la décocher, elle dit pourquoi.
+		preg_match( '/<p class="description" id="g2rd_force_ipv4_to_storage_aide">(.*?)<\/p>/s', $html, $aide );
+		self::assertArrayHasKey( 1, $aide, 'aide de la case IPv4 introuvable' );
+		self::assertStringNotContainsString( 'décochez la case', $aide[1] );
+		self::assertStringContainsString( 'les sauvegardes se règlent sur le site principal', $aide[1] );
 	}
 
 	#[RunInSeparateProcess]
@@ -235,7 +240,7 @@ final class PageTest extends TestCase {
 		self::assertMatchesRegularExpression( '/name=.g2rd_backup_enabled. value=.1.\s+disabled=.disabled.>/', $html, 'case décochée et désactivée' );
 		self::assertStringContainsString( 'aria-describedby="g2rd_backup_enabled_constante" name="g2rd_backup_enabled"', $html, 'explication reliée à la case' );
 		self::assertMatchesRegularExpression( '/<p class="description" id="g2rd_backup_enabled_constante">Aucune sauvegarde ne part de ce site[^<]* Cause probable : [^<]*G2RD_CONNECTOR_DISABLE_BACKUP[^<]* Action : [^<]*wp-config\.php[^<]*<\/p>/', $html, 'quoi, cause probable, action' );
-		self::assertStringContainsString( 'les sauvegardes reprendront si la case était cochée.', $html, 'valeur enregistrée dite' );
+		self::assertStringContainsString( 'les sauvegardes reprendront si elles étaient activées.', $html, 'valeur enregistrée dite' );
 		self::assertStringNotContainsString( 'peut sauvegarder ce site', $html, 'constante posée : rien ne dit que le manager peut sauvegarder' );
 		self::assertStringNotContainsString( 'id="g2rd_backup_enabled_aide"', $html, 'la phrase de la constante tient lieu d’aide' );
 		self::assertStringNotContainsString( $empreinte, $html, 'aucune empreinte, comme le panneau' );

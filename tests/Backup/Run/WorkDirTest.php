@@ -200,6 +200,79 @@ final class WorkDirTest extends TestCase {
 		}
 	}
 
+	/**
+	 * Départ d'une sauvegarde (clear_job, appelé par start) : un `job-<id>` qui est un lien vers un
+	 * dossier hors du dossier privé n'est pas suivi ; le lien et les fichiers visés restent.
+	 */
+	public function test_nettoyage_d_un_depart_ne_suit_jamais_un_dossier_qui_est_un_lien(): void {
+		$id = str_repeat( '4', 32 );
+		self::assertTrue( WorkDir::ensure() );
+		$dehors = $this->dossier . '/dehors-nettoyage';
+		mkdir( $dehors );
+		file_put_contents( $dehors . '/manifest.jsonl', "{\"t\":\"head\"}\n" );
+		file_put_contents( $dehors . '/seg-0.seg', 'segment' );
+		$lien = WorkDir::private_dir() . '/job-' . $id;
+		if ( ! self::lien_vers_un_dossier( $dehors, $lien ) ) {
+			self::markTestSkipped( 'Le système refuse de créer un lien symbolique ou une jonction.' );
+		}
+		try {
+			WorkDir::clear_job( $id );
+			clearstatcache();
+			self::assertTrue( is_link( $lien ) || file_exists( $lien ), 'le lien reste' );
+			self::assertSame( [ 'manifest.jsonl', 'seg-0.seg' ], array_values( array_diff( (array) scandir( $dehors ), [ '.', '..' ] ) ), 'dossier visé intact' );
+		} finally {
+			self::retirer_lien( $lien );
+		}
+	}
+
+	/**
+	 * Départ d'une sauvegarde : dans un vrai `job-<id>`, un `manifest.jsonl` qui est un lien vers un
+	 * fichier extérieur reste, sa cible aussi ; le vrai fichier du module à côté est retiré.
+	 */
+	public function test_nettoyage_d_un_depart_garde_un_fichier_qui_est_un_lien(): void {
+		$id = str_repeat( '5', 32 );
+		self::assertTrue( WorkDir::ensure() );
+		$cible = $this->dossier . '/dehors-nettoyage.jsonl';
+		file_put_contents( $cible, "à garder\n" );
+		$job = WorkDir::private_dir() . '/job-' . $id;
+		mkdir( $job );
+		file_put_contents( $job . '/seg-0.part', 'partie' );
+		$lien = $job . '/manifest.jsonl';
+		if ( ! function_exists( 'symlink' ) || ! @symlink( $cible, $lien ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- refus attendu sous Windows sans droit.
+			self::markTestSkipped( 'Liens symboliques indisponibles sur ce poste (Windows sans droit de création) : essai mené en CI Linux.' );
+		}
+		try {
+			WorkDir::clear_job( $id );
+			clearstatcache();
+			self::assertTrue( is_link( $lien ), 'le lien reste' );
+			self::assertSame( "à garder\n", file_get_contents( $cible ), 'fichier visé intact' );
+			self::assertSame( [ 'manifest.jsonl' ], array_values( array_diff( (array) scandir( $job ), [ '.', '..' ] ) ), 'seul le vrai fichier du module est retiré' );
+		} finally {
+			self::retirer_lien( $lien );
+		}
+	}
+
+	/**
+	 * Un lien symbolique au chemin `job-<id>` n'est jamais pris pour le dossier de la sauvegarde :
+	 * job() rend null (refus « dossier de travail indisponible ») au lieu d'écrire à travers le lien.
+	 */
+	public function test_le_dossier_d_une_sauvegarde_n_est_jamais_un_lien(): void {
+		$id = str_repeat( '6', 32 );
+		self::assertTrue( WorkDir::ensure() );
+		$dehors = $this->dossier . '/dehors-job';
+		mkdir( $dehors );
+		$lien = WorkDir::private_dir() . '/job-' . $id;
+		if ( ! function_exists( 'symlink' ) || ! @symlink( $dehors, $lien ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- refus attendu sous Windows sans droit.
+			self::markTestSkipped( 'Liens symboliques indisponibles sur ce poste (Windows sans droit de création) : essai mené en CI Linux.' );
+		}
+		try {
+			self::assertNull( WorkDir::job( $id ) );
+			self::assertSame( [], array_values( array_diff( (array) scandir( $dehors ), [ '.', '..' ] ) ), 'rien écrit à travers le lien' );
+		} finally {
+			self::retirer_lien( $lien );
+		}
+	}
+
 	// ── Outils ────────────────────────────────────────────────────────────────
 
 	/**

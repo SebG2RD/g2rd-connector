@@ -144,6 +144,11 @@ final class WorkDir {
 			return null;
 		}
 		$dir = self::private_dir() . '/job-' . $backup_id;
+		// Un lien au chemin du dossier (même vers un dossier) n'est jamais pris pour le dossier : les
+		// fichiers de la sauvegarde seraient écrits ailleurs que dans le dossier privé.
+		if ( is_link( $dir ) ) {
+			return null;
+		}
 		return is_dir( $dir ) || wp_mkdir_p( $dir ) ? $dir : null;
 	}
 
@@ -257,14 +262,26 @@ final class WorkDir {
 		self::remove_if_only_guards( $private_path );
 	}
 
+	/**
+	 * Retire les fichiers du module d'un dossier `job-<id>`, puis le dossier s'il est vide. Jamais à
+	 * travers un lien : un dossier qui est un lien, ou dont le chemin réel n'est pas directement sous
+	 * son dossier parent (jonction Windows), n'est pas touché, et un fichier qui est un lien reste.
+	 */
 	private static function clear_job_dir( string $dir ): void {
-		if ( ! is_dir( $dir ) ) {
+		clearstatcache();
+		if ( is_link( $dir ) || ! is_dir( $dir ) ) {
+			return;
+		}
+		$real_parent = realpath( dirname( $dir ) );
+		$real_dir    = realpath( $dir );
+		if ( false === $real_parent || false === $real_dir || dirname( $real_dir ) !== $real_parent ) {
 			return;
 		}
 		foreach ( (array) scandir( $dir ) as $name ) {
 			$name = (string) $name;
-			if ( in_array( $name, self::JOB_FILES, true ) || 1 === preg_match( '/\Aseg-[0-9]{1,4}\.(part|seg)\z/', $name ) ) {
-				wp_delete_file( $dir . '/' . $name );
+			$file = $dir . '/' . $name;
+			if ( ( in_array( $name, self::JOB_FILES, true ) || 1 === preg_match( '/\Aseg-[0-9]{1,4}\.(part|seg)\z/', $name ) ) && ! is_link( $file ) && is_file( $file ) ) {
+				wp_delete_file( $file );
 			}
 		}
 		if ( [] === array_diff( (array) scandir( $dir ), [ '.', '..' ] ) ) {

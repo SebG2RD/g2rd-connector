@@ -91,6 +91,21 @@ function settingsPayload( d: ConnectorBootData ) {
 }
 
 /**
+ * Phrase d'aide de la case « IPv4 vers le stockage des sauvegardes », même règle que la page de
+ * secours : ce que fait le réglage, puis comment l'arrêter ; verrou du réseau (interrupteur grisé),
+ * la phrase du verrou à la place de la manière de l'arrêter, impossible alors.
+ *
+ * @param d État du panneau.
+ */
+function ipv4StorageDescription( d: ConnectorBootData ): string {
+	const base = 'À activer si l’hébergeur bloque l’IPv6 sortante du serveur : l’envoi des sauvegardes vers le stockage passe alors par l’IPv4. Ne concerne que cet envoi.';
+	if ( d.backup.lock !== null ) {
+		return d.backup.lockMessage ? `${ base } ${ d.backup.lockMessage }` : base;
+	}
+	return `${ base } Pour l’arrêter, coupez l’interrupteur puis enregistrez.`;
+}
+
+/**
  * Phrase d'aide de la case « Sauvegardes chiffrées », une seule à la fois, même règle que la
  * page de secours : constante d'arrêt (case grisée et décochée, même phrase), verrou du
  * réseau, case cochée (avec l'empreinte à comparer au service de clés et la manière de les
@@ -100,7 +115,7 @@ function settingsPayload( d: ConnectorBootData ) {
  */
 function backupDescription( d: ConnectorBootData ): string {
 	if ( d.backup.disabledByConstant ) {
-		return 'Aucune sauvegarde ne part de ce site ; case bloquée. Cause probable : la constante G2RD_CONNECTOR_DISABLE_BACKUP, posée par la personne qui gère l’hébergement. Action : la retirer de wp-config.php ; les sauvegardes reprendront si la case était cochée.';
+		return 'Aucune sauvegarde ne part de ce site ; réglage bloqué. Cause probable : la constante G2RD_CONNECTOR_DISABLE_BACKUP, posée par la personne qui gère l’hébergement. Action : la retirer de wp-config.php ; les sauvegardes reprendront si elles étaient activées.';
 	}
 	if ( d.backup.lockMessage ) {
 		return d.backup.lockMessage;
@@ -800,7 +815,7 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 						id="g2rd-connector-ipv4-storage"
 						icon="globe"
 						title="IPv4 vers le stockage des sauvegardes"
-						description="À activer si l’hébergeur bloque l’IPv6 sortante du serveur : l’envoi des sauvegardes vers le stockage passe alors par l’IPv4. Ne concerne que cet envoi. Pour l’arrêter, coupez l’interrupteur puis enregistrez."
+						description={ ipv4StorageDescription( state ) }
 						checked={ state.forceIpv4ToStorage }
 						onChange={ ( forceIpv4ToStorage ) =>
 							update( { forceIpv4ToStorage } )
