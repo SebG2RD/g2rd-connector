@@ -210,11 +210,19 @@ final class BackupJob {
 			self::refuse_unlisted_root( $walker );
 		}
 		WorkDir::clear_job( $backup_id );
-		$job = WorkDir::job( $backup_id );
+		// Rien à ce chemin juste avant job() : le dossier rendu est créé par ce départ, et retiré s'il
+		// est refusé ensuite (disque insuffisant, journal impossible à écrire). Un dossier déjà là
+		// n'est jamais touché.
+		$created = ! WorkDir::job_exists( $backup_id );
+		$job     = WorkDir::job( $backup_id );
 		if ( null === $job ) {
 			throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
 		}
-		$this->assert_disk( $job );
+		try {
+			$this->assert_disk( $job );
+		} catch ( BackupRefused $refusal ) {
+			self::refuse_after_create( $refusal, $backup_id, $created );
+		}
 
 		$downgraded = null;
 		if ( 'incremental' === $type ) {
@@ -270,7 +278,11 @@ final class BackupJob {
 			],
 			'last'         => $state['last'] ?? null,
 		];
-		( new ManifestJournal( $job . '/manifest.jsonl' ) )->append( $this->manifest_head( $new ) );
+		try {
+			( new ManifestJournal( $job . '/manifest.jsonl' ) )->append( $this->manifest_head( $new ) );
+		} catch ( BackupRefused $refusal ) {
+			self::refuse_after_create( $refusal, $backup_id, $created );
+		}
 		$new['journals'] = WorkDir::journal_sizes( $job );
 		if ( null === BackupState::save( $loaded['raw'], $new ) ) {
 			WorkDir::clear_job( $backup_id );
@@ -1288,6 +1300,20 @@ final class BackupJob {
 			'wp_config_outside_root'  => ! is_file( $this->root . '/wp-config.php' ) && is_file( dirname( $this->root ) . '/wp-config.php' ),
 			'wp_content_outside_root' => ! str_starts_with( $content . '/', $this->root . '/' ),
 		];
+	}
+
+	/**
+	 * Départ refusé après job() : le dossier que ce départ a créé est retiré (rien d'autre, cf.
+	 * WorkDir::discard_new_job()), puis le refus d'origine est rendu tel quel, même si ce retrait
+	 * échoue.
+	 *
+	 * @throws BackupRefused Toujours : le refus d'origine.
+	 */
+	private static function refuse_after_create( BackupRefused $refusal, string $backup_id, bool $created ): never {
+		if ( $created ) {
+			WorkDir::discard_new_job( $backup_id );
+		}
+		throw $refusal;
 	}
 
 	/**

@@ -154,6 +154,58 @@ final class WorkDir {
 	}
 
 	/**
+	 * Quelque chose est-il déjà au chemin du dossier de $backup_id (dossier, fichier ou lien, même
+	 * cassé) ? Lu juste avant job() : rien, le dossier qu'il rend est créé par cet appel.
+	 *
+	 * @throws \InvalidArgumentException Identifiant qui n'est pas 32 hex minuscules.
+	 */
+	public static function job_exists( string $backup_id ): bool {
+		self::assert_id( $backup_id );
+		$dir = self::private_dir() . '/job-' . $backup_id;
+		return is_link( $dir ) || file_exists( $dir );
+	}
+
+	/**
+	 * Retire le dossier de $backup_id qu'un départ vient de créer, quand ce départ est refusé
+	 * ensuite : les seuls fichiers du module qui y sont (jamais un lien, jamais un fichier
+	 * étranger), puis le dossier s'il est vide. Rien hors du dossier privé : un dossier qui est un
+	 * lien, ou dont le chemin réel n'est pas directement sous le dossier privé, n'est pas touché.
+	 * Ne lève jamais et n'avertit jamais ; faux si le dossier reste (l'appelant rend son refus
+	 * d'origine tel quel).
+	 */
+	public static function discard_new_job( string $backup_id ): bool {
+		try {
+			self::assert_id( $backup_id );
+			$private = self::private_dir();
+			$dir     = $private . '/job-' . $backup_id;
+			clearstatcache();
+			if ( is_link( $dir ) || ! is_dir( $dir ) ) {
+				return false;
+			}
+			$real_private = realpath( $private );
+			$real_dir     = realpath( $dir );
+			if ( false === $real_private || false === $real_dir || dirname( $real_dir ) !== $real_private ) {
+				return false;
+			}
+			foreach ( (array) @scandir( $dir ) as $name ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- retrait au mieux : un dossier illisible reste, sans avertissement.
+				$name = (string) $name;
+				$file = $dir . '/' . $name;
+				if ( ( in_array( $name, self::JOB_FILES, true ) || 1 === preg_match( '/\Aseg-[0-9]{1,4}\.(part|seg)\z/', $name ) ) && ! is_link( $file ) && is_file( $file ) ) {
+					wp_delete_file( $file );
+				}
+			}
+			$left = @scandir( $dir ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- retrait au mieux : un dossier illisible reste, sans avertissement.
+			if ( false === $left || [] !== array_diff( $left, [ '.', '..' ] ) ) {
+				return false;
+			}
+			// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- dossier créé par ce départ, vide ; échec rendu par la valeur de retour.
+			return @rmdir( $dir );
+		} catch ( \Throwable ) {
+			return false;
+		}
+	}
+
+	/**
 	 * Désinstallation : vide chaque dossier privé (l'actuel et ceux d'anciens sels) de ses fichiers
 	 * du module, puis retire les protections et le dossier s'il ne reste rien d'autre. Un fichier
 	 * étranger n'est jamais touché.

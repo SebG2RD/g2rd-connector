@@ -7,6 +7,7 @@ namespace G2RD\Connector\Tests\Backup\Run;
 use Brain\Monkey\Functions;
 use G2RD\Connector\Backup\Commands\BackupRefused;
 use G2RD\Connector\Backup\Content\IncrementalBaseline;
+use G2RD\Connector\Backup\Content\ManifestJournal;
 use G2RD\Connector\Backup\Crypto\Sodium;
 use G2RD\Connector\Backup\Files\FileWalker;
 use G2RD\Connector\Backup\Format\BackupIndex;
@@ -20,6 +21,7 @@ use G2RD\Connector\Backup\Run\BackupJob;
 use G2RD\Connector\Backup\Run\WorkDir;
 use G2RD\Connector\Backup\State\BackupState;
 use G2RD\Connector\Backup\Upload\PartUploadResult;
+use G2RD\Connector\Support\DiskSpace;
 use G2RD\Connector\Tests\Backup\BackupTestCase;
 use G2RD\Connector\Tests\Backup\Content\FakeDumpWpdb;
 
@@ -1070,6 +1072,168 @@ final class BackupJobTest extends BackupTestCase {
 		self::assertSame( BackupState::FILES, $rapport['phase'] );
 		self::assertSame( [ 'aborted', self::B1 ], [ BackupState::load()['state']['last']['outcome'], BackupState::load()['state']['last']['backup_id'] ] );
 		self::assertFileExists( $this->dossier( self::B1 ) . '/manifest.jsonl', 'repartie du début' );
+	}
+
+	/**
+	 * Décision n° 4 du point de contrôle n° 2 de la phase 4 (comportement gardé) : close en échec
+	 * après une tranche (journal du manifeste perdu), la sauvegarde repart du début sous le même
+	 * numéro ; jamais refusée backup_already_finished.
+	 */
+	public function test_backup_start_d_une_sauvegarde_en_echec_repart_du_debut(): void {
+		$job = $this->job();
+		$job->start( self::depart( self::B1 ) );
+		$job->step( [ 'backup_id' => self::B1 ] );
+		self::assertGreaterThan( 0, BackupState::load()['state']['segments'], 'la sauvegarde a avancé avant son échec' );
+		file_put_contents( $this->dossier( self::B1 ) . '/manifest.jsonl', '' );
+		try {
+			$job->step( [ 'backup_id' => self::B1 ] );
+			self::fail( 'Refus attendu : journal du manifeste perdu.' );
+		} catch ( BackupRefused $refus ) {
+			self::assertSame( BackupRefused::WORK_DIR_UNAVAILABLE, $refus->reason_code() );
+		}
+		self::assert_close_en_echec( 'backup_work_dir_unavailable' );
+
+		$rapport = $job->start( self::depart( self::B1 ) );
+
+		$this->assert_repartie_du_debut( $rapport, 'failed' );
+	}
+
+	/** Même décision : arrêtée par la plateforme après une tranche, elle repart du début aussi. */
+	public function test_backup_start_d_une_sauvegarde_arretee_apres_une_tranche_repart_du_debut(): void {
+		$job = $this->job();
+		$job->start( self::depart( self::B1 ) );
+		$job->step( [ 'backup_id' => self::B1 ] );
+		self::assertGreaterThan( 0, BackupState::load()['state']['segments'], 'la sauvegarde a avancé avant son arrêt' );
+		self::assertTrue( $job->abort( [ 'backup_id' => self::B1 ] )['aborted'] );
+		$etat = BackupState::load()['state'];
+		self::assertSame( [ BackupState::IDLE, 'aborted', 'aborted_by_platform' ], [ $etat['phase'], $etat['last']['outcome'], $etat['last']['code'] ] );
+
+		$rapport = $job->start( self::depart( self::B1 ) );
+
+		$this->assert_repartie_du_debut( $rapport, 'aborted' );
+	}
+
+	/**
+	 * Même numéro reparti du début : état neuf (aucun segment ni envoi en attente, curseur au début,
+	 * totaux à zéro), manifeste réduit à sa ligne head, aucun segment de la tentative d'avant ;
+	 * l'issue de celle-ci reste la dernière connue.
+	 *
+	 * @param array<string, mixed> $rapport
+	 */
+	private function assert_repartie_du_debut( array $rapport, string $issue ): void {
+		self::assertSame( BackupState::FILES, $rapport['phase'] );
+		$etat = BackupState::load()['state'];
+		self::assertSame( [ BackupState::FILES, self::B1, 0, [] ], [ $etat['phase'], $etat['backup_id'], $etat['segments'], $etat['pending'] ] );
+		self::assertSame(
+			[
+				'cursor_hex'      => null,
+				'offset'          => 0,
+				'current'         => null,
+				'baseline_offset' => null,
+				'done'            => false,
+			],
+			$etat['files']
+		);
+		self::assertSame(
+			[
+				'db_tables'     => 0,
+				'db_rows'       => 0,
+				'files'         => 0,
+				'payload_bytes' => 0,
+				'unreadable'    => 0,
+			],
+			$etat['totals']
+		);
+		self::assertSame( self::B1, $this->tete( self::B1 )['backup_id'], 'manifeste réduit à sa ligne head' );
+		self::assertSame( [ 'manifest.jsonl' ], array_values( array_diff( (array) scandir( $this->dossier( self::B1 ) ), [ '.', '..' ] ) ), 'aucun segment ni journal de la tentative d’avant' );
+		self::assertSame( [ $issue, self::B1 ], [ $etat['last']['outcome'], $etat['last']['backup_id'] ], 'issue de la tentative d’avant gardée' );
+	}
+
+	/**
+	 * Départ refusé ; rend le refus.
+	 */
+	private function refus_au_depart( string $id ): BackupRefused {
+		try {
+			$this->job()->start( self::depart( $id ) );
+		} catch ( BackupRefused $refus ) {
+			return $refus;
+		}
+		self::fail( 'Refus attendu au départ.' );
+	}
+
+	/** Disque insuffisant au départ : le dossier que ce départ vient de créer est retiré. */
+	public function test_disque_insuffisant_au_depart_retire_le_dossier_cree_par_ce_depart(): void {
+		\Patchwork\redefine( [ DiskSpace::class, 'free_bytes' ], static fn (): int => 1 );
+
+		self::assertSame( BackupRefused::DISK_LOW, $this->refus_au_depart( self::B1 )->reason_code() );
+		self::assertDirectoryDoesNotExist( $this->dossier( self::B1 ), 'dossier créé par ce départ retiré' );
+		self::assertDirectoryExists( WorkDir::private_dir(), 'dossier de travail du module gardé' );
+		self::assertSame( BackupState::IDLE, BackupState::load()['state']['phase'] );
+	}
+
+	/** Journal du manifeste impossible à écrire au départ : le dossier créé (journal entamé compris) est retiré. */
+	public function test_journal_impossible_a_ecrire_au_depart_retire_le_dossier_cree_par_ce_depart(): void {
+		$manifeste = $this->dossier( self::B1 ) . '/manifest.jsonl';
+		\Patchwork\redefine(
+			[ ManifestJournal::class, 'append' ],
+			// Fermeture liée par Patchwork au journal appelé : jamais statique.
+			function () use ( $manifeste ): void {
+				file_put_contents( $manifeste, '{"t":"he' );
+				throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE );
+			}
+		);
+
+		$refus = $this->refus_au_depart( self::B1 );
+
+		self::assertSame( BackupRefused::WORK_DIR_UNAVAILABLE, $refus->reason_code() );
+		self::assertStringStartsWith( 'La sauvegarde n’a pas été lancée : ', $refus->getMessage(), 'refus d’origine rendu tel quel' );
+		self::assertDirectoryDoesNotExist( $this->dossier( self::B1 ), 'dossier créé par ce départ retiré' );
+		self::assertSame( BackupState::IDLE, BackupState::load()['state']['phase'] );
+	}
+
+	/**
+	 * Refus au départ : jamais un dossier déjà là n'est touché, ni celui d'une autre sauvegarde
+	 * (ses fichiers du module compris), ni celui du même numéro que le nettoyage n'a pas pu vider
+	 * (fichier étranger).
+	 */
+	public function test_refus_au_depart_ne_touche_jamais_un_dossier_deja_la(): void {
+		self::assertTrue( WorkDir::ensure() );
+		$autre = $this->dossier( self::B2 );
+		mkdir( $autre );
+		file_put_contents( $autre . '/manifest.jsonl', "{\"t\":\"head\"}\n" );
+		file_put_contents( $autre . '/seg-0.seg', 'segment' );
+		mkdir( $this->dossier( self::B1 ) );
+		file_put_contents( $this->dossier( self::B1 ) . '/etranger.txt', 'pas au module' );
+		\Patchwork\redefine( [ DiskSpace::class, 'free_bytes' ], static fn (): int => 1 );
+
+		self::assertSame( BackupRefused::DISK_LOW, $this->refus_au_depart( self::B1 )->reason_code() );
+		self::assertSame( [ 'manifest.jsonl', 'seg-0.seg' ], array_values( array_diff( (array) scandir( $autre ), [ '.', '..' ] ) ), 'dossier d’une autre sauvegarde intact' );
+		self::assertSame( 'segment', file_get_contents( $autre . '/seg-0.seg' ) );
+		self::assertSame( [ 'etranger.txt' ], array_values( array_diff( (array) scandir( $this->dossier( self::B1 ) ), [ '.', '..' ] ) ), 'dossier déjà là gardé, fichier étranger compris' );
+	}
+
+	/** Retrait impossible : le refus d'origine reste le résultat, sans autre erreur ni avertissement. */
+	public function test_retrait_impossible_au_depart_le_refus_d_origine_reste(): void {
+		$manifeste = $this->dossier( self::B1 ) . '/manifest.jsonl';
+		\Patchwork\redefine(
+			[ ManifestJournal::class, 'append' ],
+			// Fermeture liée par Patchwork au journal appelé : jamais statique.
+			function () use ( $manifeste ): void {
+				file_put_contents( $manifeste, '{"t":"he' );
+				throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE );
+			}
+		);
+		Functions\when( 'wp_delete_file' )->alias(
+			static function (): void {
+				throw new \RuntimeException( 'Retrait refusé (doublure du test).' );
+			}
+		);
+
+		$refus = $this->refus_au_depart( self::B1 );
+
+		self::assertSame( BackupRefused::WORK_DIR_UNAVAILABLE, $refus->reason_code() );
+		self::assertStringStartsWith( 'La sauvegarde n’a pas été lancée : ', $refus->getMessage(), 'refus d’origine rendu tel quel' );
+		self::assertFileExists( $manifeste, 'retrait impossible : le dossier reste, sans autre erreur' );
 	}
 
 	public function test_complete_a_la_fin_de_tranche_perdue_puis_incrementale_sans_suppression_fausse(): void {
