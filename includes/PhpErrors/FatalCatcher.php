@@ -119,7 +119,11 @@ final class FatalCatcher {
 		}
 	}
 
-	/** Dernier passage : écrit l'erreur dans le tampon, une seule fois. */
+	/**
+	 * Dernier passage : écrit l'erreur dans le tampon, une seule fois. La version du composant
+	 * n'est calculée que si le groupe est à écrire (au plus une fois par minute et par empreinte,
+	 * cf. Buffer::record()).
+	 */
 	public function flush(): void {
 		$last          = $this->pending;
 		$this->pending = null;
@@ -131,8 +135,9 @@ final class FatalCatcher {
 			if ( null === $occurrence ) {
 				return;
 			}
-			$occurrence['version'] = Normalizer::component_version( $occurrence['type'], $occurrence['slug'] );
-			Buffer::record( $occurrence, ( $this->clock )() );
+			$type = $occurrence['type'];
+			$slug = $occurrence['slug'];
+			Buffer::record( $occurrence, ( $this->clock )(), static fn (): ?string => Normalizer::component_version( $type, $slug ) );
 		} catch ( \Throwable ) {
 			// Base injoignable, fonction de WordPress absente : l'erreur reste dans le journal PHP du site.
 			return;

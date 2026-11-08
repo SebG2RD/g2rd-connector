@@ -97,6 +97,107 @@ final class BufferTest extends TestCase {
 		self::assertSame( 'Second', $group['message'], 'Le message le plus récent.' );
 	}
 
+	/**
+	 * Site en erreur fatale à chaque requête : dans la minute qui suit une écriture, la règle passe
+	 * avant tout coût. Ni la version (get_plugins() parcourt le dossier de l'extension) ni le
+	 * verrou (GET_LOCK, RELEASE_LOCK) ; seule la lecture du tampon reste.
+	 */
+	public function test_dans_la_minute_ni_version_ni_verrou(): void {
+		$wpdb            = new FakeLockWpdb( '1' );
+		$GLOBALS['wpdb'] = $wpdb;
+		$calls           = 0;
+		$version         = static function () use ( &$calls ): string {
+			++$calls;
+			return '2.4.1';
+		};
+
+		self::assertTrue( Buffer::record( self::without_version( 'a' ), self::T, $version ) );
+		self::assertSame( 1, $calls );
+		self::assertSame( [ 'GET_LOCK', 'RELEASE_LOCK' ], $wpdb->events );
+
+		foreach ( [ 1, 30, 59 ] as $delay ) {
+			self::assertFalse( Buffer::record( self::without_version( 'a' ), self::T + $delay, $version ) );
+		}
+		self::assertSame( 1, $calls, 'Aucune version calculée dans la minute.' );
+		self::assertSame( [ 'GET_LOCK', 'RELEASE_LOCK' ], $wpdb->events, 'Aucun verrou pris dans la minute.' );
+		self::assertCount( 1, $this->writes );
+
+		self::assertTrue( Buffer::record( self::without_version( 'a' ), self::T + 60, $version ) );
+		self::assertSame( 2, $calls, 'Une minute plus tard, le groupe est écrit : la version est calculée.' );
+		self::assertSame( [ 'GET_LOCK', 'RELEASE_LOCK', 'GET_LOCK', 'RELEASE_LOCK' ], $wpdb->events );
+	}
+
+	/**
+	 * La version calculée seulement à l'écriture donne, appel par appel, le même tampon que la
+	 * version passée toute calculée dans l'occurrence (ce que faisait FatalCatcher jusqu'ici) :
+	 * mêmes réponses, mêmes écritures, mêmes valeurs.
+	 */
+	public function test_la_version_calculee_a_l_ecriture_donne_le_meme_tampon(): void {
+		$suite = [
+			[ 'a', 'Premier', self::T ],
+			[ 'a', 'Deuxième', self::T + 30 ],
+			[ 'b', 'Autre', self::T + 45 ],
+			[ 'a', 'Troisième', self::T + 60 ],
+			[ 'a', 'Quatrième', self::T + 119 ],
+			[ 'b', 'Autre encore', self::T + 200 ],
+		];
+
+		$avant = [];
+		foreach ( $suite as [ $seed, $message, $now ] ) {
+			$avant[] = [ Buffer::record( self::entry( $seed, $message ), $now ), $this->options[ Buffer::OPTION ] ?? null ];
+		}
+		$ecritures_avant = $this->writes;
+		$this->options   = [];
+		$this->writes    = [];
+
+		$apres = [];
+		foreach ( $suite as [ $seed, $message, $now ] ) {
+			$entry = self::without_version( $seed, $message );
+			$apres[] = [ Buffer::record( $entry, $now, static fn (): string => '2.4.1' ), $this->options[ Buffer::OPTION ] ?? null ];
+		}
+
+		self::assertSame( $avant, $apres );
+		self::assertSame( $ecritures_avant, $this->writes );
+		self::assertCount( 4, $this->writes, 'a (T), b (T+45), a (T+60), b (T+200).' );
+		$groups = $this->options[ Buffer::OPTION ]['groups'];
+		self::assertSame( [ 2, 'Troisième', '2.4.1', self::T + 60 ], [ $groups[ hash( 'sha256', 'a' ) ]['count'], $groups[ hash( 'sha256', 'a' ) ]['message'], $groups[ hash( 'sha256', 'a' ) ]['version'], $groups[ hash( 'sha256', 'a' ) ]['written_at'] ] );
+		self::assertSame( [ 2, 'Autre encore', self::T + 200 ], [ $groups[ hash( 'sha256', 'b' ) ]['count'], $groups[ hash( 'sha256', 'b' ) ]['message'], $groups[ hash( 'sha256', 'b' ) ]['written_at'] ] );
+	}
+
+	/** Version inconnue (null) : le groupe est écrit sans version, comme avant. */
+	public function test_une_version_inconnue_est_ecrite_nulle(): void {
+		self::assertTrue( Buffer::record( self::entry( 'a' ), self::T, static fn (): ?string => null ) );
+
+		self::assertNull( Buffer::read( self::T )['groups'][ hash( 'sha256', 'a' ) ]['version'] );
+	}
+
+	/**
+	 * Deux requêtes en erreur au même instant passent toutes deux la règle ; la seconde à prendre
+	 * le verrou relit le tampon et y trouve l'écriture de la première : elle n'écrit rien.
+	 */
+	public function test_un_releve_ecrit_entre_la_regle_et_le_verrou_n_est_pas_recompte(): void {
+		Buffer::record( self::entry( 'a' ), self::T );
+		$autre_processus = $this->options[ Buffer::OPTION ];
+		unset( $this->options[ Buffer::OPTION ] );
+		$this->writes = [];
+		$reads        = 0;
+		Functions\when( 'get_option' )->alias(
+			function ( string $key, $fallback = false ) use ( &$reads, $autre_processus ) {
+				if ( Buffer::OPTION === $key && 2 === ++$reads ) {
+					// Écrit par l'autre requête après la règle (1re lecture), avant le verrou (2e).
+					$this->options[ Buffer::OPTION ] = $autre_processus;
+				}
+				return array_key_exists( $key, $this->options ) ? $this->options[ $key ] : $fallback;
+			}
+		);
+
+		self::assertFalse( Buffer::record( self::entry( 'a' ), self::T + 1 ) );
+
+		self::assertSame( 2, $reads, 'La règle, puis la relecture sous le verrou.' );
+		self::assertSame( [], $this->writes );
+		self::assertSame( $autre_processus, $this->options[ Buffer::OPTION ] );
+	}
+
 	public function test_cinquante_groupes_au_plus_le_plus_ancien_part(): void {
 		$entries = [];
 		for ( $i = 0; $i < 51; $i++ ) {
@@ -444,5 +545,17 @@ final class BufferTest extends TestCase {
 			'message' => $message,
 			'source'  => 'fatal_catcher',
 		];
+	}
+
+	/**
+	 * Occurrence sans sa version : FatalCatcher la passe à part (calculée à l'écriture seulement).
+	 *
+	 * @return array{fp: string, level: string, type: string, slug: string|null, file: string, line: int, message: string, source: string}
+	 */
+	private static function without_version( string $seed, string $message = 'Call to undefined function x()' ): array {
+		$entry = self::entry( $seed, $message );
+		unset( $entry['version'] );
+
+		return $entry;
 	}
 }

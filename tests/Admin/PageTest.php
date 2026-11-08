@@ -472,7 +472,7 @@ final class PageTest extends TestCase {
 		];
 		$html = $this->render();
 
-		foreach ( [ 'g2rd_heartbeat_enabled', 'g2rd_events_enabled', 'g2rd_remote_commands_enabled', 'g2rd_force_ipv4_to_manager', 'g2rd_php_errors_enabled' ] as $case ) {
+		foreach ( [ 'g2rd_heartbeat_enabled', 'g2rd_events_enabled', 'g2rd_remote_commands_enabled', 'g2rd_force_ipv4_to_manager' ] as $case ) {
 			self::assertMatchesRegularExpression( '/<th scope="row" id="' . $case . '_titre">/', $html, "Titre de « {$case} » sans identifiant." );
 			self::assertMatchesRegularExpression(
 				'/<input type="checkbox" aria-labelledby="' . $case . '_titre" aria-describedby="' . $case . '_aide"\s+name="' . $case . '"/',
@@ -483,6 +483,10 @@ final class PageTest extends TestCase {
 		}
 		self::assertStringContainsString( 'aria-describedby="g2rd_allow_direct_login_aide" name="g2rd_allow_direct_login"', $html );
 		self::assertStringContainsString( '<p class="description" id="g2rd_allow_direct_login_aide">', $html );
+		// Relevé des erreurs PHP : libellé court, explication en paragraphe d'aide gris, comme la connexion directe.
+		self::assertStringContainsString( 'aria-describedby="g2rd_php_errors_enabled_aide"', $html );
+		self::assertStringContainsString( '<p class="description" id="g2rd_php_errors_enabled_aide">', $html );
+		self::assertStringContainsString( 'Pour l’arrêter, décochez la case puis enregistrez', $html );
 
 		self::assertStringContainsString( '<div class="notice notice-info inline">', $html );
 		self::assertStringNotContainsString( 'notice-success', $html );

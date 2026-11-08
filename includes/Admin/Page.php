@@ -422,14 +422,15 @@ final class Page {
 						</td>
 					</tr>
 					<tr>
-						<th scope="row" id="g2rd_php_errors_enabled_titre"><?php echo esc_html__( 'Relevé des erreurs PHP', 'g2rd-connector' ); ?></th>
+						<th scope="row"><?php echo esc_html__( 'Relevé des erreurs PHP', 'g2rd-connector' ); ?></th>
 						<td>
 							<label>
-								<input type="checkbox" aria-labelledby="g2rd_php_errors_enabled_titre" aria-describedby="g2rd_php_errors_enabled_aide"
+								<input type="checkbox" aria-describedby="g2rd_php_errors_enabled_aide"
 									name="g2rd_php_errors_enabled" value="1"
 									<?php checked( (bool) ( $settings['php_errors_enabled'] ?? false ) ); ?>>
-								<span id="g2rd_php_errors_enabled_aide"><?php echo esc_html__( 'Garde les erreurs fatales de PHP de ce site pendant 7 jours au plus et les transmet au manager avec l’inventaire. Le message est filtré sur le site avant tout envoi : chemins du serveur, adresses e-mail, adresses IP, mots de passe et jetons sont retirés. Désactivé par défaut ; le manager peut aussi l’activer ou le couper.', 'g2rd-connector' ); ?></span>
+								<?php echo esc_html__( 'Relever les erreurs PHP de ce site', 'g2rd-connector' ); ?>
 							</label>
+							<p class="description" id="g2rd_php_errors_enabled_aide"><?php echo esc_html__( 'Garde les erreurs fatales de PHP de ce site pendant 7 jours au plus et les transmet au manager avec l’inventaire. Le message est filtré sur le site avant tout envoi : chemins du serveur, adresses e-mail, adresses IP, mots de passe et jetons sont retirés. Désactivé par défaut. Pour l’arrêter, décochez la case puis enregistrez ; le manager peut aussi l’activer ou la couper.', 'g2rd-connector' ); ?></p>
 						</td>
 					</tr>
 				</table>

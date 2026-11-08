@@ -14,7 +14,7 @@ use PHPUnit\Framework\TestCase as PHPUnitTestCase;
  * Première barrière de filtrage du texte d'une erreur PHP (évolution stratégique, § 6 et § 8
  * « Filtrage ») : vecteurs partagés avec le manager, racines du site, borne de 500 caractères
  * jamais au milieu d'un masque, octets invalides, texte hostile, et barrière par valeur propre
- * au connecteur (DB_NAME, DB_USER, DB_HOST).
+ * au connecteur (DB_NAME, DB_USER, DB_HOST, DB_PASSWORD).
  */
 final class RedactorTest extends PHPUnitTestCase {
 
@@ -402,11 +402,33 @@ final class RedactorTest extends PHPUnitTestCase {
 		define( 'DB_NAME', 'u123456789_wp' );
 		define( 'DB_USER', 'u123456789_admin' );
 		define( 'DB_HOST', 'srv123.hstgr.io:3306' );
+		define( 'DB_PASSWORD', 'Xy7kLm2pQz' );
 
-		self::assertSame( [ 'srv123.hstgr.io:3306', 'u123456789_admin', 'srv123.hstgr.io', 'u123456789_wp' ], Redactor::known_values() );
+		self::assertSame( [ 'srv123.hstgr.io:3306', 'u123456789_admin', 'srv123.hstgr.io', 'u123456789_wp', 'Xy7kLm2pQz' ], Redactor::known_values() );
 		self::assertSame(
 			'Base [secret] du compte [secret] hors ligne sur [secret] (repli sur [secret])',
 			Redactor::redact( 'Base U123456789_WP du compte u123456789_admin hors ligne sur srv123.hstgr.io:3306 (repli sur srv123.hstgr.io)', [] )
+		);
+	}
+
+	/**
+	 * Mot de passe de la base court, écrit sans nom de champ ni « password= » devant : trop court
+	 * pour les motifs de jeton, sans clé reconnue, seuls les motifs le laissent passer ; la
+	 * barrière par valeur le masque.
+	 */
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_le_mot_de_passe_de_la_base_est_masque_par_valeur(): void {
+		define( 'DB_USER', 'u123456789_admin' );
+		define( 'DB_PASSWORD', 'Xy7kLm2pQz' );
+
+		$input = 'Connexion Redis refusée (auth Xy7kLm2pQz) pour u123456789_admin, nouvel essai avec Xy7kLm2pQz';
+
+		self::assertSame( [ 'u123456789_admin', 'Xy7kLm2pQz' ], Redactor::known_values() );
+		self::assertStringContainsString( 'Xy7kLm2pQz', Redactor::redact( $input, [], Redactor::MAX_CHARS, [] ) );
+		self::assertSame(
+			'Connexion Redis refusée (auth [secret]) pour [secret], nouvel essai avec [secret]',
+			Redactor::redact( $input, [] )
 		);
 	}
 
@@ -416,6 +438,7 @@ final class RedactorTest extends PHPUnitTestCase {
 		define( 'DB_NAME', 'wordpress' );
 		define( 'DB_USER', 'root' );
 		define( 'DB_HOST', 'localhost:3306' );
+		define( 'DB_PASSWORD', '' );
 
 		self::assertSame( [], Redactor::known_values() );
 

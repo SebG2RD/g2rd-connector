@@ -8,6 +8,7 @@ use Brain\Monkey\Functions;
 use G2RD\Connector\PhpErrors\Buffer;
 use G2RD\Connector\PhpErrors\FatalCatcher;
 use G2RD\Connector\Settings;
+use G2RD\Connector\Tests\Support\FakeLockWpdb;
 use G2RD\Connector\Tests\TestCase;
 
 /**
@@ -147,6 +148,40 @@ final class FatalCatcherTest extends TestCase {
 		self::assertSame( $avant, $this->options[ Buffer::OPTION ] );
 	}
 
+	/**
+	 * Erreur fatale à chaque requête : une écriture par minute et par empreinte. Dans la minute,
+	 * ni version du composant (get_plugins() parcourt le dossier de l'extension) ni verrou ; ce
+	 * qui est écrit, version comprise, ne change pas.
+	 */
+	public function test_dans_la_minute_ni_version_ni_verrou(): void {
+		$wpdb            = new FakeLockWpdb( '1' );
+		$GLOBALS['wpdb'] = $wpdb;
+		$folders         = [];
+		Functions\when( 'get_plugins' )->alias(
+			static function ( string $folder = '' ) use ( &$folders ): array {
+				$folders[] = $folder;
+				return [ 'exemple.php' => [ 'Version' => '2.4.1' ] ];
+			}
+		);
+
+		foreach ( [ 0, 1, 30, 59, 60 ] as $delay ) {
+			$catcher = $this->catcher( self::error( E_ERROR ), self::T + $delay );
+			$catcher->on_shutdown();
+			$catcher->defer();
+			$catcher->flush();
+		}
+
+		self::assertSame( [ '/exemple', '/exemple' ], $folders, 'Version calculée à T et à T+60 seulement.' );
+		self::assertSame( [ 'GET_LOCK', 'RELEASE_LOCK', 'GET_LOCK', 'RELEASE_LOCK' ], $wpdb->events, 'Verrou pris à T et à T+60 seulement.' );
+		$groups = Buffer::read( self::T + 60 )['groups'];
+		self::assertCount( 1, $groups );
+		$group = array_values( $groups )[0];
+		self::assertSame( '2.4.1', $group['version'] );
+		self::assertSame( 2, $group['count'] );
+		self::assertSame( self::T, $group['first_seen'] );
+		self::assertSame( self::T + 60, $group['written_at'] );
+	}
+
 	public function test_le_releve_ne_leve_jamais(): void {
 		$lit_mal = new FatalCatcher(
 			static function (): array {
@@ -189,13 +224,13 @@ final class FatalCatcherTest extends TestCase {
 	/**
 	 * @param array<string, mixed>|null $last
 	 */
-	private function catcher( ?array $last ): FatalCatcher {
+	private function catcher( ?array $last, int $now = self::T ): FatalCatcher {
 		return new FatalCatcher(
 			static fn (): ?array => $last,
 			function ( callable $callback ): void {
 				$this->registered[] = $callback;
 			},
-			static fn (): int => self::T
+			static fn (): int => $now
 		);
 	}
 

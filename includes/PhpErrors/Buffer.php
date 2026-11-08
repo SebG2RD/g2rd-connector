@@ -44,14 +44,27 @@ final class Buffer {
 	/**
 	 * Enregistre une erreur fatale, au plus une fois par minute et par empreinte.
 	 *
-	 * @param Entry $entry Occurrence (et sa version).
+	 * La règle passe d'abord, sur le tampon relu en base : un site en erreur à chaque requête ne
+	 * paie, dans la minute, que cette lecture ; ni la version (get_plugins() parcourt le dossier
+	 * de l'extension), ni GET_LOCK et RELEASE_LOCK. Quand le groupe est à écrire, la version est
+	 * calculée hors du verrou, puis la règle est revue sous le verrou, sur le tampon relu : un
+	 * autre processus a pu écrire la même erreur entre-temps. Ce qui est écrit ne change pas.
+	 *
+	 * @param Entry                            $entry   Occurrence (et sa version, si elle est connue).
+	 * @param (\Closure(): (string|null))|null $version Version du composant, appelée seulement si le
+	 *                                                  groupe est à écrire ; elle remplace celle de $entry.
 	 * @return bool Vrai si le tampon a été écrit.
 	 */
-	public static function record( array $entry, int $now ): bool {
+	public static function record( array $entry, int $now, ?\Closure $version = null ): bool {
+		if ( self::written_recently( self::load( true ), $entry['fp'], $now ) ) {
+			return false;
+		}
+		if ( null !== $version ) {
+			$entry['version'] = $version();
+		}
 		$write = static function () use ( $entry, $now ): bool {
-			$store    = self::load( true );
-			$existing = $store['groups'][ $entry['fp'] ] ?? null;
-			if ( null !== $existing && $now - $existing['written_at'] < self::WRITE_INTERVAL_SECONDS ) {
+			$store = self::load( true );
+			if ( self::written_recently( $store, $entry['fp'], $now ) ) {
 				return false;
 			}
 
@@ -59,6 +72,17 @@ final class Buffer {
 		};
 
 		return MysqlLock::run( self::LOCK_PURPOSE, 0, $write, static fn (): bool => false, $write );
+	}
+
+	/**
+	 * Groupe de cette empreinte écrit il y a moins d'une minute.
+	 *
+	 * @param Store $store
+	 */
+	private static function written_recently( array $store, string $fp, int $now ): bool {
+		$existing = $store['groups'][ $fp ] ?? null;
+
+		return null !== $existing && $now - $existing['written_at'] < self::WRITE_INTERVAL_SECONDS;
 	}
 
 	/**
