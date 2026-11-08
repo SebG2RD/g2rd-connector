@@ -225,10 +225,21 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 	}
 
 	public function test_colonnes_binaires_lues_au_debut_du_type(): void {
+		$ligne                          = [
+			'id' => '1',
+			'e'  => 'bit',
+			'st' => 'blob,bit',
+			'b'  => "\x01",
+			'vb' => "\x00a",
+			't'  => "\xff",
+			'lb' => 'z',
+			'bn' => "\x10\x20",
+		];
 		$this->wpdb->tables['wp_types'] = [
 			'columns' => [
 				'id' => 'bigint(20)',
 				'e'  => "enum('bit','blob')",
+				'st' => "set('blob','bit')",
 				'b'  => 'bit(1)',
 				'vb' => 'varbinary(8)',
 				't'  => 'tinyblob',
@@ -236,22 +247,37 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 				'bn' => 'binary(2)',
 			],
 			'pk'      => [ 'id' ],
-			'rows'    => [
-				[
-					'id' => '1',
-					'e'  => 'bit',
-					'b'  => "\x01",
-					'vb' => "\x00a",
-					't'  => "\xff",
-					'lb' => 'z',
-					'bn' => "\x10\x20",
-				],
-			],
+			'rows'    => [ $ligne ],
 		];
 
 		[ $sql ] = $this->dump( [ 'wp_types' ], static fn (): bool => false );
 
-		self::assertStringContainsString( "('1','bit',0x01,0x0061,0xff,0x7a,0x1020);", $sql, 'blob, binary, varbinary, bit : en hexadécimal ; une énumération qui cite « bit » ou « blob », non' );
+		self::assertStringContainsString( "('1','bit','blob,bit',0x01,0x0061,0xff,0x7a,0x1020);", $sql, 'blob, binary, varbinary, bit : en hexadécimal ; une énumération ou un ensemble qui cite « bit » ou « blob », non' );
+
+		// Un ENUM et un SET hors de la clé ne changent pas la lecture : seule une colonne de la clé l'envoie vers l'offset.
+		$this->wpdb->tables['wp_types']['rows'][]        = [
+			'id' => '3',
+			'e'  => 'blob',
+			'st' => '',
+		] + $ligne;
+		$this->wpdb->tables['wp_types']['rows'][]        = [
+			'id' => '2',
+			'st' => 'bit',
+		] + $ligne;
+		$this->wpdb->tables['wp_types']['avg_row_length'] = intdiv( DatabaseDumper::BATCH_BYTES, 2 );
+		$this->wpdb->queries                              = [];
+		[ $repris, , $appels, $curseurs ]                 = $this->dump( [ 'wp_types' ], static fn (): bool => true );
+
+		self::assertSame( 3, $appels, 'en-tête, puis lots de 2 et 4 lignes' );
+		self::assertSame( [ null, [ bin2hex( '2' ) ] ], array_column( $curseurs, 'after_hex' ), 'reprise par la clé' );
+		self::assertSame( [ 0, 0 ], array_column( $curseurs, 'offset' ), 'jamais par offset' );
+		$lectures = array_values( array_filter( $this->wpdb->queries, static fn ( string $q ): bool => str_starts_with( $q, FakeDumpWpdb::ROWS_START ) ) );
+		self::assertCount( 2, $lectures );
+		self::assertStringEndsWith( ' FROM `wp_types` ORDER BY `id` LIMIT 2', $lectures[0], 'premier lot par la clé, sans OFFSET' );
+		self::assertStringEndsWith( ' FROM `wp_types` WHERE (`id`) > (_utf8mb4 0x' . bin2hex( '2' ) . ') ORDER BY `id` LIMIT 4', $lectures[1], 'reprise WHERE (`id`) > (…), sans OFFSET' );
+		foreach ( [ "('1','bit','blob,bit',", "('2','bit','bit',", "('3','blob',''," ] as $debut ) {
+			self::assertSame( 1, substr_count( $repris, $debut ), $debut . ' copiée une fois' );
+		}
 	}
 
 	public function test_reprise_par_lots_donne_exactement_le_meme_dump(): void {
@@ -894,14 +920,50 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 	public function test_cle_enum_ou_set_lue_par_offset_chaque_ligne_une_fois(): void {
 		// ORDER BY trie un ENUM par son rang dans la définition (z, a, m) et un SET par sa valeur numérique (z = 1,
 		// a = 2, z,a = 3), WHERE (clé) > (…) les compare comme du texte : une reprise par la clé perdrait ou doublerait des lignes.
+		// Un FLOAT se lit arrondi (0.6999999 et 0.7 : « 0.7 »), que WHERE relit en un double qui n'est pas la valeur rangée :
+		// après « 0.1 », la ligne du curseur revient ; après « 0.7 », la ligne 0.7 (0.699999988) n'est pas rendue.
 		$cas = [
-			'clé ENUM simple'             => [
+			'clé FLOAT (valeur lue arrondie)' => [
+				[ 'k' => 'float' ],
+				[ 'k' ],
+				[ [ 'k' => '0.8' ], [ 'k' => '0.7' ], [ 'k' => '0.6999999' ], [ 'k' => '0.1' ] ],
+				[ 'ligne-0.1', 'ligne-0.6999999', 'ligne-0.7', 'ligne-0.8' ],
+			],
+			'clé composée (x, DOUBLE)'        => [
+				[
+					'x' => 'int(11)',
+					'k' => 'double unsigned',
+				],
+				[ 'x', 'k' ],
+				[
+					[
+						'x' => '2',
+						'k' => '0.5',
+					],
+					[
+						'x' => '1',
+						'k' => '0.25',
+					],
+					[
+						'x' => '1',
+						'k' => '1e-7',
+					],
+				],
+				[ 'ligne-1-1e-7', 'ligne-1-0.25', 'ligne-2-0.5' ],
+			],
+			'clé REAL (type en capitales)'    => [
+				[ 'k' => 'REAL' ],
+				[ 'k' ],
+				[ [ 'k' => '10' ], [ 'k' => '-1' ], [ 'k' => '2.5' ] ],
+				[ 'ligne--1', 'ligne-2.5', 'ligne-10' ],
+			],
+			'clé ENUM simple'                 => [
 				[ 'k' => "enum('z','a','m')" ],
 				[ 'k' ],
 				[ [ 'k' => 'a' ], [ 'k' => 'm' ], [ 'k' => 'z' ] ],
 				[ 'ligne-z', 'ligne-a', 'ligne-m' ],
 			],
-			'clé composée (x, ENUM)'      => [
+			'clé composée (x, ENUM)'          => [
 				[
 					'x' => 'int(11)',
 					'k' => "enum('z','a','m')",
@@ -935,7 +997,7 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 				],
 				[ 'ligne-1-z', 'ligne-1-a', 'ligne-1-m', 'ligne-2-z', 'ligne-2-a', 'ligne-2-m' ],
 			],
-			'clé SET (type en capitales)' => [
+			'clé SET (type en capitales)'     => [
 				[ 'k' => "SET('z','a')" ],
 				[ 'k' ],
 				[ [ 'k' => 'z,a' ], [ 'k' => 'a' ], [ 'k' => 'z' ] ],
@@ -1010,5 +1072,76 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 			self::assertSame( $avant, $sql, $nom . ' : rien émis par la tranche refusée' );
 			self::assertSame( [], array_filter( $this->wpdb->queries, static fn ( string $q ): bool => str_starts_with( $q, FakeDumpWpdb::ROWS_START ) ), $nom . ' : refus avant la lecture du lot' );
 		}
+	}
+
+	public function test_colonnes_generees_absentes_de_l_insert_reprise_par_la_cle(): void {
+		// Relevé du 08/11/2026 : re, ROW END explicite d'une table à versions système de MariaDB 10.11.19, est STORED GENERATED
+		// et MariaDB l'ajoute à la clé (PRIMARY (id, re)) ; g et s sont générées hors de la clé. ts (DEFAULT CURRENT_TIMESTAMP)
+		// a DEFAULT_GENERATED dans Extra sous MySQL 8.4.0 : colonne ordinaire, copiée. Une valeur donnée à une colonne générée
+		// fait échouer la restauration en mode strict (erreur 1906 sous MariaDB, 3105 sous MySQL 8).
+		$lignes = [];
+		for ( $i = 5; $i >= 1; $i-- ) {
+			$lignes[] = [
+				'id' => (string) $i,
+				'g'  => (string) ( 2 * $i ),
+				'v'  => 'ligne-' . $i,
+				'ts' => '2001-01-0' . $i . ' 00:00:00',
+				's'  => 's-' . $i,
+				're' => '2038-01-19 03:14:07.999999',
+			];
+		}
+		$this->wpdb->tables['wp_gen'] = [
+			'columns'        => [
+				'id' => 'int(11)',
+				'g'  => 'int(11)',
+				'v'  => 'varchar(20)',
+				'ts' => 'timestamp',
+				's'  => 'varchar(30)',
+				're' => 'timestamp(6)',
+			],
+			'pk'             => [ 'id', 're' ],
+			'rows'           => $lignes,
+			'avg_row_length' => intdiv( DatabaseDumper::BATCH_BYTES, 2 ),
+			'extra'          => [
+				'g'  => 'VIRTUAL GENERATED INVISIBLE',
+				'ts' => 'DEFAULT_GENERATED',
+				's'  => 'STORED GENERATED',
+				're' => 'STORED GENERATED',
+			],
+		];
+		$liste = [ 'wp_gen' ];
+
+		[ $entier ]                       = $this->dump( $liste, static fn (): bool => false );
+		$this->wpdb->queries              = [];
+		[ $repris, , $appels, $curseurs ] = $this->dump( $liste, static fn (): bool => true );
+
+		self::assertSame( $entier, $repris, 'reprise par lots identique au dump d\'une traite' );
+		self::assertSame( 3, $appels, 'en-tête, puis lots de 2 et 4 lignes' );
+		self::assertStringContainsString( "INSERT INTO `wp_gen` (`id`,`v`,`ts`) VALUES\n('1','ligne-1','2001-01-01 00:00:00'),\n('2','ligne-2','2001-01-02 00:00:00');\n", $repris, 'colonnes générées absentes de l\'INSERT, celle de la clé comprise ; DEFAULT_GENERATED copiée' );
+		self::assertSame( 2, substr_count( $repris, 'INSERT INTO ' ) );
+		self::assertSame( 2, substr_count( $repris, "INSERT INTO `wp_gen` (`id`,`v`,`ts`) VALUES\n" ), 'aucun INSERT ne nomme une colonne générée' );
+		for ( $i = 1; $i <= 5; $i++ ) {
+			self::assertSame( 1, substr_count( $repris, "('" . $i . "','ligne-" . $i . "','2001-01-0" . $i . " 00:00:00')" ), 'ligne ' . $i . ' une fois' );
+		}
+		self::assertSame( [ null, [ bin2hex( '2' ), bin2hex( '2038-01-19 03:14:07.999999' ) ] ], array_column( $curseurs, 'after_hex' ), 'la reprise avance sur la clé, sa colonne générée comprise' );
+		$lectures = array_values( array_filter( $this->wpdb->queries, static fn ( string $q ): bool => str_starts_with( $q, FakeDumpWpdb::ROWS_START ) ) );
+		self::assertCount( 2, $lectures );
+		foreach ( $lectures as $lecture ) {
+			self::assertStringStartsWith( 'SELECT `id`,`v`,`ts`,`re` FROM `wp_gen` ', $lecture, 'colonne générée de la clé lue (key_hex()), les autres non' );
+		}
+		self::assertStringContainsString( ' WHERE (`id`,`re`) > (_utf8mb4 0x' . bin2hex( '2' ) . ',_utf8mb4 0x' . bin2hex( '2038-01-19 03:14:07.999999' ) . ') ', $lectures[1] );
+
+		// Table dont toutes les colonnes sont générées (admise par les deux serveurs) : ses colonnes sont lues pour compter les
+		// lignes (SELECT sans colonne : erreur 1064), l'INSERT n'en nomme aucune ; INSERT INTO t () VALUES (),() passe en
+		// mode strict (relevé du 08/11/2026, MariaDB 10.11.19 et MySQL 8.4.0).
+		$this->wpdb->tables['wp_toutgen'] = [
+			'columns' => [ 'g' => 'int(11)' ],
+			'pk'      => [],
+			'rows'    => array_fill( 0, 3, [ 'g' => '1' ] ),
+			'extra'   => [ 'g' => 'VIRTUAL GENERATED' ],
+		];
+		[ $sql, $faites ] = $this->dump( [ 'wp_toutgen' ], static fn (): bool => false );
+		self::assertStringContainsString( "INSERT INTO `wp_toutgen` () VALUES\n(),\n(),\n();\n", $sql );
+		self::assertSame( 3, $faites[0]['rows'] );
 	}
 }

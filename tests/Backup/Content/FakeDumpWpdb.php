@@ -10,7 +10,11 @@
  * requête que la vraie base lirait autrement, ni une écriture qui dépend du sql_mode du site.
  * Comme la vraie base (essai du 08/11/2026 sur MariaDB 10.11.19), ORDER BY trie une colonne ENUM
  * par le rang de sa valeur dans la définition et un SET par sa valeur numérique, alors que
- * WHERE (clé) > (valeurs) les compare comme du texte.
+ * WHERE (clé) > (valeurs) les compare comme du texte ; une colonne FLOAT se lit arrondie à
+ * 6 chiffres significatifs (0.6999999 et 0.7 se lisent toutes deux « 0.7 », MariaDB 10.11.19 et
+ * MySQL 8.4.0), et WHERE relit ce texte en un double qui n'est pas la valeur rangée. Les colonnes
+ * générées (Extra VIRTUAL GENERATED ou STORED GENERATED) ne se lisent que si elles sont dans la
+ * clé : toute autre lecture qui les nomme lève.
  *
  * @package G2RD\Connector
  */
@@ -48,9 +52,11 @@ final class FakeDumpWpdb {
 	 * Noms et valeurs : octets tels que lus dans $charset. invisible : colonnes INVISIBLE (Extra de
 	 * SHOW FULL COLUMNS, rendues seulement nommées) ; omitted : colonnes absentes des lignes rendues
 	 * même nommées (anomalie simulée) ; where_ignored : la reprise WHERE (clé) > (…) relit depuis le
-	 * début (comme `my_row_id` > '' qui compare à 0).
+	 * début (comme `my_row_id` > '' qui compare à 0) ; extra : champ Extra de SHOW FULL COLUMNS
+	 * d'une colonne (VIRTUAL GENERATED, STORED GENERATED, DEFAULT_GENERATED…), qui remplace
+	 * INVISIBLE. Une valeur de colonne FLOAT est le texte écrit à l'INSERT (rangé en simple précision).
 	 *
-	 * @var array<string, array{columns: array<string, string>, pk: list<string>, rows: list<array<string, string|null>>, view?: bool, avg_row_length?: int, invisible?: list<string>, omitted?: list<string>, where_ignored?: bool}>
+	 * @var array<string, array{columns: array<string, string>, pk: list<string>, rows: list<array<string, string|null>>, view?: bool, avg_row_length?: int, invisible?: list<string>, omitted?: list<string>, where_ignored?: bool, extra?: array<string, string>}>
 	 */
 	public array $tables = [];
 
@@ -172,7 +178,7 @@ final class FakeDumpWpdb {
 				$rows[] = [
 					'Field' => (string) $field,
 					'Type'  => $type,
-					'Extra' => in_array( (string) $field, $this->tables[ $name ]['invisible'] ?? [], true ) ? 'INVISIBLE' : '',
+					'Extra' => $this->tables[ $name ]['extra'][ (string) $field ] ?? ( in_array( (string) $field, $this->tables[ $name ]['invisible'] ?? [], true ) ? 'INVISIBLE' : '' ),
 				];
 			}
 			return $rows;
@@ -193,13 +199,43 @@ final class FakeDumpWpdb {
 		}
 		foreach ( $this->tables as $candidate => $table ) {
 			$ident = self::ident_or_null( (string) $candidate, $this->charset );
-			$list  = $this->column_list( $table['columns'] );
+			$list  = $this->column_list( self::read_columns( $table ) );
 			$start = 'SELECT ' . $list . ' FROM ' . $ident . ' ';
 			if ( null !== $ident && null !== $list && str_starts_with( $sql, $start ) ) {
 				return $this->select( (string) $candidate, substr( $sql, strlen( $start ) - 1 ) );
 			}
 		}
-		throw new \LogicException( 'Lecture non prévue par le faux $wpdb du dump (colonnes autres que celles de la table, dans leur ordre ?) : ' . $sql );
+		throw new \LogicException( 'Lecture non prévue par le faux $wpdb du dump (colonnes autres que celles que lit le dump, dans l\'ordre de la table ?) : ' . $sql );
+	}
+
+	/**
+	 * Colonnes que le dump doit lire, dans l'ordre de la table : toutes, sauf les colonnes générées
+	 * qui ne sont pas dans la clé ; toutes si la table n'a que des colonnes générées (lues pour
+	 * compter les lignes : un SELECT sans colonne est une erreur de syntaxe).
+	 *
+	 * @param array{columns: array<string, string>, pk: list<string>, extra?: array<string, string>} $table
+	 * @return array<string, string>
+	 */
+	private static function read_columns( array $table ): array {
+		$read = [];
+		foreach ( $table['columns'] as $column => $type ) {
+			$column = (string) $column;
+			if ( ! self::generated( $table, $column ) || in_array( $column, $table['pk'], true ) ) {
+				$read[ $column ] = $type;
+			}
+		}
+		return [] === $read ? $table['columns'] : $read;
+	}
+
+	/**
+	 * Colonne générée : Extra VIRTUAL GENERATED ou STORED GENERATED (relevé du 08/11/2026 sur MariaDB
+	 * 10.11.19, versions système explicites comprises, et MySQL 8.4.0, INVISIBLE en plus) ;
+	 * DEFAULT_GENERATED (MySQL 8 : valeur par défaut calculée, DEFAULT CURRENT_TIMESTAMP) n'en est pas une.
+	 *
+	 * @param array{extra?: array<string, string>} $table
+	 */
+	private static function generated( array $table, string $column ): bool {
+		return 1 === preg_match( '/\A(?:VIRTUAL|STORED) GENERATED(?: INVISIBLE)?\z/', $table['extra'][ $column ] ?? '' );
 	}
 
 	/**
@@ -221,8 +257,9 @@ final class FakeDumpWpdb {
 	}
 
 	/**
-	 * Lignes telles que la base les rend pour la liste des colonnes de la table : chaque colonne, dans
-	 * l'ordre, sauf celles d'omitted (anomalie simulée).
+	 * Lignes telles que la base les rend pour la liste des colonnes lues (read_columns()) : chaque
+	 * colonne, dans l'ordre, sauf celles d'omitted (anomalie simulée) ; une colonne FLOAT, telle que
+	 * la base l'écrit en texte (shown()).
 	 *
 	 * @param list<array<string, string|null>> $rows
 	 * @return list<array<string, string|null>>
@@ -232,7 +269,7 @@ final class FakeDumpWpdb {
 		$read    = [];
 		foreach ( $rows as $row ) {
 			$line = [];
-			foreach ( array_keys( $this->tables[ $name ]['columns'] ) as $column ) {
+			foreach ( self::read_columns( $this->tables[ $name ] ) as $column => $type ) {
 				$column = (string) $column;
 				if ( in_array( $column, $omitted, true ) ) {
 					continue;
@@ -240,11 +277,37 @@ final class FakeDumpWpdb {
 				if ( ! array_key_exists( $column, $row ) ) {
 					throw new \LogicException( 'Ligne du faux sans la colonne ' . $column . ' de ' . $name );
 				}
-				$line[ $column ] = $row[ $column ];
+				$line[ $column ] = self::shown( $type, $row[ $column ] );
 			}
 			$read[] = $line;
 		}
 		return $read;
+	}
+
+	/**
+	 * Valeur telle que la base l'écrit en texte : une colonne FLOAT arrondie à 6 chiffres
+	 * significatifs (relevé du 08/11/2026, MariaDB 10.11.19 et MySQL 8.4.0 : 0.6999999 et 0.7 se
+	 * lisent « 0.7 ») ; toute autre colonne telle quelle.
+	 */
+	private static function shown( string $type, ?string $value ): ?string {
+		if ( null === $value || ! self::is_float( $type ) ) {
+			return $value;
+		}
+		return sprintf( '%.6g', self::single( $value ) );
+	}
+
+	/** Colonne FLOAT (simple précision), lue au début du Type. */
+	private static function is_float( string $type ): bool {
+		return 1 === preg_match( '/\Afloat\b/i', $type );
+	}
+
+	/** Valeur rangée par une colonne FLOAT : le nombre écrit, arrondi au float de simple précision le plus proche. */
+	private static function single( string $value ): float {
+		$single = unpack( 'g', pack( 'g', (float) $value ) );
+		if ( ! is_array( $single ) ) {
+			throw new \LogicException( 'Float illisible : ' . $value );
+		}
+		return (float) $single[1];
 	}
 
 	/**
@@ -411,21 +474,26 @@ final class FakeDumpWpdb {
 
 	/**
 	 * Deux clés comparées colonne après colonne (ordre lexicographique, comme une comparaison de
-	 * tuples). Une colonne ENUM ou SET se compare par son rang pour ORDER BY ($by_rank vrai), comme du
-	 * texte pour WHERE (clé) > (valeurs) ; toute autre colonne, de la même façon des deux côtés.
+	 * tuples) : $a est une ligne rangée ; $b aussi pour ORDER BY ($order_by vrai), les valeurs de
+	 * WHERE (clé) > (valeurs) sinon. Une colonne ENUM ou SET se compare par son rang pour ORDER BY,
+	 * comme du texte pour WHERE ; une colonne FLOAT, par la valeur rangée (simple précision) d'une
+	 * ligne, et par le texte relu en double d'une valeur de WHERE (« 0.1 » vaut moins que le 0.1
+	 * rangé) ; toute autre colonne, de la même façon des deux côtés.
 	 *
 	 * @param array<string, mixed>  $a
 	 * @param array<string, mixed>  $b
 	 * @param list<string>          $pk
 	 * @param array<string, string> $types Type de chaque colonne (SHOW FULL COLUMNS).
 	 */
-	private static function compare_keys( array $a, array $b, array $pk, array $types, bool $by_rank ): int {
+	private static function compare_keys( array $a, array $b, array $pk, array $types, bool $order_by ): int {
 		foreach ( $pk as $column ) {
 			$x       = (string) $a[ $column ];
 			$y       = (string) $b[ $column ];
 			$members = self::members( $types[ $column ] ?? '' );
 			if ( null !== $members ) {
-				$order = $by_rank ? ( self::rank( $members, $x ) <=> self::rank( $members, $y ) ) : strcmp( $x, $y );
+				$order = $order_by ? ( self::rank( $members, $x ) <=> self::rank( $members, $y ) ) : strcmp( $x, $y );
+			} elseif ( self::is_float( $types[ $column ] ?? '' ) ) {
+				$order = self::single( $x ) <=> ( $order_by ? self::single( $y ) : (float) $y );
 			} else {
 				$order = is_numeric( $x ) && is_numeric( $y ) ? ( (float) $x <=> (float) $y ) : strcmp( $x, $y );
 			}
