@@ -58,9 +58,23 @@ final class BackupRefusedTest extends TestCase {
 				'backup_db_name_unsupported',
 				'backup_db_tables_not_found',
 				'backup_db_cursor_invalid',
+				'site_key_other_site',
 			],
 			BackupRefused::CODES
 		);
+	}
+
+	public function test_une_cle_non_enregistree_a_sa_propre_phrase(): void {
+		$cle   = ( new BackupRefused( BackupRefused::STORE_UNAVAILABLE, null, BackupRefused::DETAIL_KEY ) )->outcome();
+		$etat  = ( new BackupRefused( BackupRefused::STORE_UNAVAILABLE ) )->outcome();
+		$autre = ( new BackupRefused( BackupRefused::KEY_OTHER_SITE ) )->outcome();
+
+		self::assertSame( 'backup_store_unavailable', $cle['error_code'], 'même code : la plateforme réessaie de même' );
+		self::assertSame( 30, $cle['retry_after'] );
+		self::assertStringContainsString( 'n’a pas pu être enregistrée', $cle['error'] );
+		self::assertStringNotContainsString( 'clé', $etat['error'], 'phrase de l’état de sauvegarde inchangée' );
+		self::assertArrayNotHasKey( 'retry_after', $autre );
+		self::assertStringContainsString( 'autre site ou une autre agence', $autre['error'] );
 	}
 
 	public function test_le_resultat_porte_code_et_delai_bornes(): void {

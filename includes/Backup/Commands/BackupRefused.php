@@ -69,6 +69,18 @@ final class BackupRefused extends \RuntimeException {
 	/** Curseur du dump ou liste des tables relus de l'état et illisibles : jamais de repli silencieux. */
 	public const DB_CURSOR_INVALID = 'backup_db_cursor_invalid';
 
+	/**
+	 * Clé de site certifiée pour d'autres références (agence ou site) que la clé détenue, non
+	 * réessayable : la décision n° 15 refuse qu'une plateforme remette à un site la clé d'un autre.
+	 */
+	public const KEY_OTHER_SITE = 'site_key_other_site';
+
+	/**
+	 * Détail de STORE_UNAVAILABLE quand c'est une clé (clé de site reçue, clé de signature du site)
+	 * qui n'a pas pu être enregistrée, et non l'état de la sauvegarde : seule la phrase change.
+	 */
+	public const DETAIL_KEY = 'key';
+
 	/** Tous les codes, dans l'ordre du contrat. */
 	public const CODES = [
 		self::SLICE_RUNNING,
@@ -96,6 +108,7 @@ final class BackupRefused extends \RuntimeException {
 		self::DB_NAME_UNSUPPORTED,
 		self::DB_TABLES_NOT_FOUND,
 		self::DB_CURSOR_INVALID,
+		self::KEY_OTHER_SITE,
 	];
 
 	/** Délai par défaut des refus réessayables (secondes). */
@@ -123,7 +136,8 @@ final class BackupRefused extends \RuntimeException {
 	/**
 	 * @param string      $reason_code Un des codes de CODES.
 	 * @param int|null    $retry_after Délai conseillé ; ignoré pour un refus non réessayable.
-	 * @param string      $detail      Raison d'une interruption, nom de table, taille : jamais une clé.
+	 * @param string      $detail      Raison d'une interruption, nom de table, taille, ou DETAIL_KEY
+	 *                                 (marqueur fixe) : jamais la valeur d'une clé.
 	 * @param string|null $stage       Étape d'un autotest en échec (STAGES) ; ignorée pour un autre code.
 	 * @throws \InvalidArgumentException Code inconnu : erreur de programmation.
 	 */
@@ -202,7 +216,9 @@ final class BackupRefused extends \RuntimeException {
 			self::SLICE_RUNNING => __( 'L’opération n’a pas été lancée : une tranche de sauvegarde se termine sur ce site. Rien n’a été modifié. Cause probable : la sauvegarde copiait le site à cet instant. Action : aucune, la plateforme réessaie seule dans quelques secondes.', 'g2rd-connector' ),
 			self::UPDATE_IN_PROGRESS => __( 'La sauvegarde n’a pas avancé : une mise à jour est en cours sur ce site. Rien n’a été copié par cette demande. Cause probable : campagne de mises à jour, ou mise à jour lancée depuis l’administration du site. Action : aucune, la plateforme relance la sauvegarde après la mise à jour.', 'g2rd-connector' ),
 			self::LOCK_UNAVAILABLE => __( 'La sauvegarde n’a pas avancé : elle ne peut pas se protéger d’une mise à jour simultanée sur ce site. Rien n’a été copié par cette demande. Cause probable : la base de données de l’hébergement refuse les verrous, ou elle est momentanément indisponible. Action : aucune si cela ne dure pas ; sinon, signaler l’hébergement au support G2RD.', 'g2rd-connector' ),
-			self::STORE_UNAVAILABLE => __( 'La sauvegarde n’a pas avancé : son état n’a pas pu être lu ou écrit dans la base de données du site. Rien n’a été copié par cette demande. Cause probable : base de données momentanément indisponible ou surchargée. Action : aucune, la plateforme réessaie ; si cela dure, faire vérifier la base de données du site.', 'g2rd-connector' ),
+			self::STORE_UNAVAILABLE => self::DETAIL_KEY === $detail
+				? __( 'L’opération n’a pas abouti : la clé des sauvegardes de ce site (clé de chiffrement reçue de la plateforme, ou clé de signature du site) n’a pas pu être enregistrée dans la base de données du site, ou ne s’y relit pas telle qu’elle a été écrite. Aucune sauvegarde n’a été lancée par cette demande. Cause probable : base de données momentanément indisponible ou surchargée. Action : aucune, la plateforme réessaie ; si cela dure, faire vérifier la base de données du site.', 'g2rd-connector' )
+				: __( 'La sauvegarde n’a pas avancé : son état n’a pas pu être lu ou écrit dans la base de données du site. Rien n’a été copié par cette demande. Cause probable : base de données momentanément indisponible ou surchargée. Action : aucune, la plateforme réessaie ; si cela dure, faire vérifier la base de données du site.', 'g2rd-connector' ),
 			self::DB_READ_FAILED => sprintf(
 				/* translators: %s: nom de la table de la base de données. */
 				__( 'La sauvegarde n’a pas pu lire la table « %s » de la base de données du site. Ce qui était déjà copié est gardé ; la tranche sera refaite. Cause probable : base momentanément indisponible, ou table endommagée. Action : aucune si cela ne se répète pas ; sinon, faire réparer la base par l’hébergeur.', 'g2rd-connector' ),
@@ -213,6 +229,7 @@ final class BackupRefused extends \RuntimeException {
 			self::KEY_VERSION_MISMATCH => __( 'La sauvegarde n’a pas été lancée : la clé de chiffrement demandée n’est pas celle que le site détient. Rien n’a été modifié. Cause probable : clé renouvelée sur la plateforme sans que le site ait reçu la nouvelle. Action : renvoyer la clé au site depuis la plateforme, puis relancer.', 'g2rd-connector' ),
 			self::CERTIFICATE_INVALID => __( 'La clé de chiffrement reçue a été refusée : sa signature par le service de clés G2RD est absente, fausse, ou faite par une clé que ce connecteur ne connaît pas. Aucune clé n’a été enregistrée. Cause probable : connecteur trop ancien pour le service de clés, ou clé qui ne vient pas du service de clés G2RD. Action : mettre le connecteur à jour, puis renvoyer la clé ; si le refus se répète, le signaler au support G2RD.', 'g2rd-connector' ),
 			self::KEY_DOWNGRADE => __( 'La clé de chiffrement reçue a été refusée : elle est plus ancienne que celle que le site détient déjà, ou elle remplace une clé de même version. Aucune clé n’a été enregistrée. Cause probable : réponse rejouée, ou erreur de la plateforme. Action : renvoyer la clé la plus récente depuis la plateforme ; si le refus se répète, le signaler au support G2RD.', 'g2rd-connector' ),
+			self::KEY_OTHER_SITE => __( 'La clé de chiffrement reçue a été refusée : elle a été émise pour un autre site ou une autre agence que la clé que ce site détient déjà. Aucune clé n’a été enregistrée ; le site garde sa clé actuelle. Cause probable : erreur de la plateforme sur le site visé, ou plateforme compromise. Action : ne pas réessayer ; vérifier dans la plateforme que la commande vise bien ce site, et prévenir le support G2RD.', 'g2rd-connector' ),
 			self::BAD_SITE_KEY => __( 'La clé de chiffrement reçue a été refusée : elle ne permet pas de chiffrer. Aucune clé n’a été enregistrée. Cause probable : erreur du service de clés. Action : demander une nouvelle clé (rotation) depuis la plateforme ; si le refus se répète, le signaler au support G2RD.', 'g2rd-connector' ),
 			self::INVALID_PAYLOAD => __( 'La commande de sauvegarde n’a pas été exécutée : ses paramètres sont absents ou d’un format inattendu. Rien n’a été modifié. Cause probable : plateforme et connecteur de versions différentes. Action : mettre le connecteur à jour, puis relancer ; si le refus se répète, contacter le support G2RD.', 'g2rd-connector' ),
 			self::ALREADY_RUNNING => __( 'La sauvegarde n’a pas été lancée : une autre sauvegarde est en cours sur ce site. Rien n’a été modifié. Cause probable : sauvegarde précédente pas encore terminée. Action : attendre sa fin, ou l’arrêter depuis la plateforme, puis relancer.', 'g2rd-connector' ),

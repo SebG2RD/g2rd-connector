@@ -6,7 +6,11 @@
  * gardée en clair) ; clé publique remontée par le snapshot et présentée par la plateforme au service
  * de clés, que le propriétaire approuve en comparant l'empreinte (Fingerprint) avec celle de la page
  * de réglages du connecteur. Option du site principal `g2rd_backup_signing_key`, non autochargée,
- * exclue du dump : une restauration régénère la clé et la fait réapprouver.
+ * exclue du dump : une restauration régénère la clé et la fait réapprouver. De même quand
+ * l'enregistrement ne se rouvre plus (sels de wp-config.php régénérés, option abîmée) : ensure() le
+ * remplace par une nouvelle paire, dont l'empreinte change et doit être réapprouvée ; sans cela, la
+ * clé resterait inutilisable tant que l'option n'est pas supprimée, et chaque sauvegarde serait
+ * refusée sous une cause fausse.
  *
  * @package G2RD\Connector
  */
@@ -32,14 +36,31 @@ final class SigningKey {
 	}
 
 	/**
-	 * Clé publique (32 octets), créée si elle manque.
+	 * Clé publique (32 octets) d'une paire que le site a enregistrée et sait rouvrir : jamais une clé
+	 * seulement générée, que le site ne détiendrait pas. Créée si l'option manque ; recréée si elle
+	 * est présente mais ne se rouvre plus (graine que les sels actuels n'ouvrent pas, option abîmée).
 	 *
-	 * @throws BackupRefused CRYPTO_UNAVAILABLE : moteur Ed25519 absent, ou chiffrement au repos impossible.
+	 * Écritures : add_option() pour une option absente, update_option() pour remplacer un
+	 * enregistrement illisible, puis relecture par pair(). Une clé enregistrée n'est remplacée que si
+	 * elle ne se rouvre pas : le relevé (snapshot) n'appelle ensure() que si public_key() est nul, et
+	 * le remplacement d'une graine illisible n'a donc lieu que par backup_start, verrou des
+	 * sauvegardes tenu. Option absente ou abîmée, un relevé et un backup_start au même instant
+	 * peuvent écrire tous les deux (add_option() de WordPress écrit par « ON DUPLICATE KEY UPDATE ») :
+	 * la dernière écriture est gardée, chacun rend ce qu'il relit, et le relevé suivant remonte la clé
+	 * gardée.
+	 *
+	 * @throws BackupRefused CRYPTO_UNAVAILABLE : moteur Ed25519 absent, ou chiffrement au repos
+	 *                       impossible (rien n'est écrit, la clé enregistrée reste en place) ;
+	 *                       STORE_UNAVAILABLE (DETAIL_KEY) : écriture refusée par la base, ou clé
+	 *                       relue absente ou qui ne se rouvre pas.
 	 */
 	public function ensure( int $now ): string {
-		$public = self::public_key();
-		if ( null !== $public ) {
-			return $public;
+		$present = null !== MainSite::run( static fn (): mixed => get_option( self::OPTION, null ) );
+		if ( $present ) {
+			$held = $this->pair();
+			if ( null !== $held ) {
+				return $held['public'];
+			}
 		}
 		$seed = random_bytes( 32 );
 		try {
@@ -56,10 +77,18 @@ final class SigningKey {
 			'public_key' => bin2hex( $pair['public'] ),
 			'created_at' => $now,
 		];
-		// add_option() ne remplace jamais : deux processus qui créent en même temps gardent la première.
-		MainSite::run( static fn (): bool => add_option( self::OPTION, $record, '', false ) );
+		if ( $present ) {
+			MainSite::run( static fn (): bool => update_option( self::OPTION, $record, false ) );
+		} else {
+			MainSite::run( static fn (): bool => add_option( self::OPTION, $record, '', false ) );
+		}
 
-		return self::public_key() ?? $pair['public'];
+		$stored = $this->pair();
+		if ( null === $stored ) {
+			throw new BackupRefused( BackupRefused::STORE_UNAVAILABLE, null, BackupRefused::DETAIL_KEY ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+		}
+
+		return $stored['public'];
 	}
 
 	/** Clé publique (32 octets), ou null si aucune clé n'a été créée. */
@@ -69,7 +98,8 @@ final class SigningKey {
 	}
 
 	/**
-	 * Paire de signature, ou null si la clé manque ou ne se rouvre pas (sels de wp-config.php changés).
+	 * Paire de signature, ou null si la clé manque ou ne se rouvre pas (sels de wp-config.php changés,
+	 * option abîmée, moteur Ed25519 absent) : ensure() recrée alors la paire, sauf sans moteur.
 	 *
 	 * @return array{public: string, secret: string}|null
 	 */
