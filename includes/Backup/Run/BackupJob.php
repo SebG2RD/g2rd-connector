@@ -274,11 +274,8 @@ final class BackupJob {
 	}
 
 	/**
-	 * Tranche (deuxième version : production des segments de la base puis des fichiers ; remplacée
-	 * en entier à la tâche 29-C).
-	 *
 	 * @param array<mixed> $payload
-	 * @return array<string, mixed> Rapport.
+	 * @return array<string, mixed> Rapport, ou le résultat de fin (`finished`).
 	 * @throws BackupRefused Voir le contrat.
 	 */
 	public function step( array $payload ): array {
@@ -288,16 +285,42 @@ final class BackupJob {
 		$raw     = $opened['raw'];
 		$state   = $opened['state'];
 		$job     = $opened['job'];
+		$copying = BackupState::is_capturing( $state );
 
 		$completed        = array_values( array_filter( (array) ( $payload['completed'] ?? [] ), 'is_int' ) );
 		$state['pending'] = $this->release( (array) $state['pending'], $completed, $job );
 		[ $state['pending'], $failures ] = $this->upload_parts( (array) $state['pending'], (array) ( $payload['uploads'] ?? [] ), $opened['deadline'], $job );
 		$state = $this->produce_or_keep( $raw, $state, $job, $opened['deadline'], $now );
 
+		// Copie finie dans cette tranche : une mise à jour faite hors de la plateforme a pu commencer
+		// pendant la tranche (entrée « sans verrou » posée, écriture d'abort perdue) ; revérifier le
+		// témoin avant d'écrire le passage à l'envoi (décision n° 16 : jamais une sauvegarde mélangée).
+		if ( $copying && ! BackupState::is_capturing( $state ) && UpdateWitness::clear_for_slice( $now ) ) {
+			$this->close( $raw, $state, 'aborted', 'interrupted_by_update', $now );
+			throw new BackupRefused( BackupRefused::INTERRUPTED, null, 'interrupted_by_update' ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite et raison connue).
+		}
+		if ( BackupState::UPLOAD === $state['phase'] && [] === $state['pending'] ) {
+			try {
+				$state = $this->finalize( $state, $job );
+			} catch ( BackupRefused $refusal ) {
+				$refusal = $refusal->with_stage( 'index' );
+				$this->close( $raw, $state, 'failed', $refusal->reason_code(), $now, $refusal->stage() );
+				throw $refusal;
+			}
+		}
+
+		$index = null;
+		if ( BackupState::FINALIZE === $state['phase'] ) {
+			if ( true === ( $payload['finished'] ?? false ) ) {
+				return $this->finish( $raw, $state, $job, $now );
+			}
+			$index = self::index_chunk( $job, is_int( $payload['index_offset'] ?? null ) ? $payload['index_offset'] : 0 );
+		}
+
 		$state['slice'] = null;
 		$this->save_end( $raw, $state, $now );
 
-		return $this->report( $state, $failures, null, ( $this->ms )() - $started );
+		return $this->report( $state, $failures, $index, ( $this->ms )() - $started );
 	}
 
 	/**
@@ -583,8 +606,7 @@ final class BackupJob {
 	}
 
 	/**
-	 * Produit des segments tant que la tranche dure (deuxième version : base puis fichiers ;
-	 * remplacée en entier à la tâche 29-C).
+	 * Produit des segments tant que la tranche dure : base, fichiers, puis le segment du manifeste.
 	 *
 	 * @param array<string, mixed> $state
 	 * @return array<string, mixed>
@@ -596,15 +618,19 @@ final class BackupJob {
 			return $state;
 		}
 		$producer = $this->producer( $state, $job );
-		while ( in_array( $state['phase'], [ BackupState::DB, BackupState::FILES ], true ) && ! $state['manifest_due'] && count( (array) $state['pending'] ) < self::MAX_PENDING && ( $this->ms )() < $deadline ) {
+		while ( in_array( $state['phase'], [ BackupState::DB, BackupState::FILES ], true ) && count( (array) $state['pending'] ) < self::MAX_PENDING && ( $this->ms )() < $deadline ) {
 			$n = (int) $state['segments'];
-			if ( $n >= self::MAX_CONTENT_SEGMENTS ) {
+			if ( $n >= self::MAX_CONTENT_SEGMENTS && ! $state['manifest_due'] ) {
 				throw new BackupRefused( BackupRefused::TOO_MANY_SEGMENTS ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
 			}
 			$this->assert_disk( $job );
-			$state = BackupState::DB === $state['phase']
-				? $this->db_segment( $producer, $state, $job, $n, $deadline )
-				: $this->files_segment( $producer, $state, $job, $n, $deadline );
+			if ( true === $state['manifest_due'] ) {
+				$state = $this->manifest_segment( $producer, $state, $job, $n );
+			} elseif ( BackupState::DB === $state['phase'] ) {
+				$state = $this->db_segment( $producer, $state, $job, $n, $deadline );
+			} else {
+				$state = $this->files_segment( $producer, $state, $job, $n, $deadline );
+			}
 		}
 
 		return $state;
@@ -977,6 +1003,128 @@ final class BackupJob {
 		$filtered = apply_filters( 'g2rd_connector_backup_excludes', $excludes );
 
 		return array_values( array_filter( is_array( $filtered ) ? $filtered : $excludes, 'is_string' ) );
+	}
+
+	/**
+	 * Segment du manifeste : ligne de fin ajoutée au journal (retirée par la troncature si la
+	 * tranche n'est pas enregistrée), journal rendu par morceaux, copie finie.
+	 *
+	 * @param array<string, mixed> $state
+	 * @return array<string, mixed>
+	 */
+	private function manifest_segment( SegmentProducer $producer, array $state, string $job, int $n ): array {
+		$journal = new ManifestJournal( $job . '/manifest.jsonl' );
+		$journal->append(
+			[
+				't'          => 'end',
+				'tables'     => $state['totals']['db_tables'],
+				'files'      => $state['totals']['files'],
+				'unreadable' => $state['totals']['unreadable'],
+			]
+		);
+		$entry = $producer->produce(
+			$n,
+			SegmentHeader::KIND_MANIFEST,
+			static function ( PayloadWriter $writer ) use ( $journal ): void {
+				$journal->stream(
+					static function ( int $offset, string $chunk ) use ( $writer ): void {
+						$writer->manifest( $offset, $chunk );
+					}
+				);
+			}
+		);
+		$state['manifest_due'] = false;
+		$state['phase']        = BackupState::UPLOAD;
+
+		return $this->record_segment( $state, $entry, $job );
+	}
+
+	/**
+	 * Index signé, vérifié par le site, gardé dans le dossier de la sauvegarde.
+	 *
+	 * @param array<string, mixed> $state
+	 * @return array<string, mixed>
+	 * @throws BackupRefused SELF_TEST_FAILED, CRYPTO_UNAVAILABLE, WORK_DIR_UNAVAILABLE.
+	 */
+	private function finalize( array $state, string $job ): array {
+		$key  = SiteKeyStore::current();
+		$pair = ( new SigningKey( $this->sodium ) )->pair();
+		if ( null === $key || null === $pair ) {
+			throw new BackupRefused( BackupRefused::CRYPTO_UNAVAILABLE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+		}
+		$segments = [];
+		$manifest = 0;
+		foreach ( (array) file( $job . '/segments.jsonl', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES ) as $line ) {
+			$segment = json_decode( (string) $line, true );
+			if ( is_array( $segment ) ) {
+				$segments[ (int) $segment['index'] ] = $segment;
+				if ( 'manifest' === $segment['kind'] ) {
+					$manifest = (int) $segment['index'];
+				}
+			}
+		}
+		ksort( $segments );
+		$fields = [
+			'format'           => 'g2bk-index',
+			'version'          => 1,
+			'suite'            => 1,
+			'backup_id'        => $state['backup_id'],
+			'site_ref'         => $key['site_ref'],
+			'site_key_version' => (int) $state['key_version'],
+			'signing_key_id'   => BackupIndex::signing_key_id( $pair['public'] ),
+			'created_at'       => gmdate( 'Y-m-d\TH:i:s\Z', (int) $state['created_at'] ),
+			'type'             => $state['type'],
+			'parent_backup_id' => $state['parent'],
+			'payload_format'   => 1,
+			'segments'         => array_values( $segments ),
+			'manifest_segment' => $manifest,
+		];
+		$signed = ( new Finalizer( $this->sodium, $this->self_test ) )->finalize( $fields, $pair['secret'], $pair['public'] );
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- index signé de la sauvegarde, dans son dossier de travail, en attente de la plateforme.
+		if ( false === file_put_contents( $job . '/index.bin', $signed['index'] ) || false === file_put_contents( $job . '/index.sig', $signed['signature'] ) ) {
+			throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+		}
+		$state['phase'] = BackupState::FINALIZE;
+
+		return $state;
+	}
+
+	/**
+	 * @return array{bytes: int, sha256: string, signature: string, offset: int, chunk: string}
+	 */
+	private static function index_chunk( string $job, int $offset ): array {
+		$index     = (string) file_get_contents( $job . '/index.bin' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- index signé gardé dans le dossier de travail.
+		$signature = (string) file_get_contents( $job . '/index.sig' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- signature de l'index gardée dans le dossier de travail.
+		$offset    = max( 0, min( $offset, strlen( $index ) ) );
+
+		return [
+			'bytes'     => strlen( $index ),
+			'sha256'    => hash( 'sha256', $index ),
+			'signature' => bin2hex( $signature ),
+			'offset'    => $offset,
+			'chunk'     => bin2hex( (string) substr( $index, $offset, self::INDEX_CHUNK_BYTES ) ),
+		];
+	}
+
+	/**
+	 * La plateforme a déposé l'index : état local promu (complète qui porte les fichiers), dossier
+	 * retiré, état idle.
+	 *
+	 * @param array<string, mixed> $state
+	 * @return array{backup_id: string, phase: string, finished: bool, totals: array<string, mixed>}
+	 */
+	private function finish( string $raw, array $state, string $job, int $now ): array {
+		if ( 'full' === $state['type'] && 'db' !== $state['scope'] && is_file( $job . '/baseline-new.jsonl' ) ) {
+			( new IncrementalBaseline( WorkDir::baseline_dir() ) )->promote( $job . '/baseline-new.jsonl', (string) $state['backup_id'], (int) $state['created_at'] );
+		}
+		$this->close( $raw, $state, 'done', null, $now );
+
+		return [
+			'backup_id' => (string) $state['backup_id'],
+			'phase'     => BackupState::IDLE,
+			'finished'  => true,
+			'totals'    => (array) $state['totals'],
+		];
 	}
 
 	/**

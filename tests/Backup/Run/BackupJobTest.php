@@ -9,8 +9,11 @@ use G2RD\Connector\Backup\Commands\BackupRefused;
 use G2RD\Connector\Backup\Content\IncrementalBaseline;
 use G2RD\Connector\Backup\Crypto\Sodium;
 use G2RD\Connector\Backup\Files\FileWalker;
+use G2RD\Connector\Backup\Format\BackupIndex;
 use G2RD\Connector\Backup\Format\Hpke;
 use G2RD\Connector\Backup\Format\SegmentReader;
+use G2RD\Connector\Backup\Gate\UpdateWitness;
+use G2RD\Connector\Backup\Keys\SigningKey;
 use G2RD\Connector\Backup\Keys\SiteKeyStore;
 use G2RD\Connector\Backup\Payload\PayloadReader;
 use G2RD\Connector\Backup\Run\BackupJob;
@@ -798,5 +801,257 @@ final class BackupJobTest extends BackupTestCase {
 		$etat = BackupState::load()['state'];
 		self::assertSame( [ BackupState::IDLE, 'failed', 'backup_files_root_unreadable' ], [ $etat['phase'], $etat['last']['outcome'], $etat['last']['code'] ], 'arrêtée en échec, jamais dite finie avec un illisible de plus' );
 		self::assertDirectoryDoesNotExist( $this->dossier( self::B1 ), 'segments et journaux retirés' );
+	}
+
+	/**
+	 * Joue la plateforme jusqu'à la fin.
+	 *
+	 * @param array<string, mixed> $depart
+	 * @return array{segments: array<int, string>, index: array<string, mixed>, fin: array<string, mixed>, rapports: list<array<string, mixed>>}
+	 */
+	private function jouer( array $depart, ?object $wpdb = null ): array {
+		$job      = $this->job( $wpdb );
+		$rapport  = $job->start( $depart );
+		$rapports = [ $rapport ];
+		$segments = [];
+		$termines = [];
+		for ( $tour = 0; 'finalize' !== $rapport['phase'] && $tour < 50; $tour++ ) {
+			$envois = [];
+			foreach ( $rapport['pending'] as $p ) {
+				if ( count( $p['uploaded'] ) === count( $p['parts'] ) ) {
+					$termines[] = $p['segment'];
+					continue;
+				}
+				$segments[ $p['segment'] ] = (string) file_get_contents( $this->dossier( $depart['backup_id'] ) . '/seg-' . $p['segment'] . '.seg' );
+				$envois[]                  = [
+					'segment' => $p['segment'],
+					'parts'   => array_map(
+						static fn ( array $partie ): array => [
+							'part_number' => $partie['part_number'],
+							'url'         => 'https://stockage.test/b/k?partNumber=' . $partie['part_number'] . '&X-Amz-Signature=x',
+							'host'        => 'stockage.test',
+							'port'        => null,
+						],
+						$p['parts']
+					),
+				];
+			}
+			$rapport    = $job->step(
+				[
+					'backup_id' => $depart['backup_id'],
+					'uploads'   => $envois,
+					'completed' => $termines,
+				]
+			);
+			$rapports[] = $rapport;
+			$termines   = [];
+		}
+		self::assertSame( 'finalize', $rapport['phase'] );
+		$fin = $job->step(
+			[
+				'backup_id' => $depart['backup_id'],
+				'finished'  => true,
+			]
+		);
+
+		return [
+			'segments' => $segments,
+			'index'    => (array) $rapport['index'],
+			'fin'      => $fin,
+			'rapports' => $rapports,
+		];
+	}
+
+	/**
+	 * @param array<int, string> $segments
+	 * @return list<array<string, mixed>>
+	 */
+	private function manifeste( array $segments ): array {
+		$texte = '';
+		foreach ( $segments as $segment ) {
+			foreach ( $this->enregistrements( $segment ) as $e ) {
+				if ( 'manifest' === $e['type'] ) {
+					$texte .= $e['data'];
+				}
+			}
+		}
+		return array_map( static fn ( string $l ): array => json_decode( $l, true ), array_values( array_filter( explode( "\n", $texte ) ) ) );
+	}
+
+	public function test_sauvegarde_complete_des_fichiers_de_bout_en_bout(): void {
+		$r = $this->jouer( self::depart( self::B1 ) );
+
+		$index = (string) hex2bin( $r['index']['chunk'] );
+		self::assertSame( $r['index']['bytes'], strlen( $index ), 'index entier en un morceau' );
+		self::assertTrue( BackupIndex::verify( $index, (string) hex2bin( $r['index']['signature'] ), (string) SigningKey::public_key(), new Sodium() ) );
+		$champs = BackupIndex::parse( $index );
+		self::assertSame( [ 'files', 'manifest' ], array_column( $champs['segments'], 'kind' ) );
+		foreach ( $champs['segments'] as $s ) {
+			self::assertSame( hash( 'sha256', $r['segments'][ $s['index'] ] ), $s['sha256'], 'empreinte de l\'objet entier' );
+		}
+		$fichiers = array_column( array_filter( $this->enregistrements( $r['segments'][0] ), static fn ( array $e ): bool => 'file' === $e['type'] ), 'data', 'path' );
+		self::assertSame( 'bonjour', $fichiers['wp-content/a.txt'] );
+		self::assertSame( "<?php // accueil\n", $fichiers['index.php'] );
+		$manifeste = $this->manifeste( $r['segments'] );
+		self::assertSame( self::CLES_HEAD, array_keys( $manifeste[0] ), 'ligne head du contrat' );
+		self::assertSame( 'end', end( $manifeste )['t'] );
+		self::assertTrue( $r['fin']['finished'] );
+		self::assertSame( BackupState::IDLE, BackupState::load()['state']['phase'] );
+		self::assertSame( 'done', BackupState::load()['state']['last']['outcome'] );
+		self::assertDirectoryDoesNotExist( $this->dossier( self::B1 ), 'dossier de la sauvegarde retiré' );
+		self::assertFileExists( WorkDir::baseline_dir() . '/' . self::B1 . '.jsonl', 'état local promu' );
+		self::assertNotEmpty( $this->envois );
+	}
+
+	public function test_complete_a_la_fin_de_tranche_perdue_puis_incrementale_sans_suppression_fausse(): void {
+		$job = $this->job();
+		$job->start( self::depart( self::B1 ) );
+		$this->wpdb->before_write = function (): void {
+			$this->wpdb->before_write = function (): void {
+				$this->wpdb->write_fails = true;
+			};
+		};
+		try {
+			$job->step( [ 'backup_id' => self::B1 ] );
+		} catch ( BackupRefused $refus ) {
+			self::assertSame( BackupRefused::STORE_UNAVAILABLE, $refus->reason_code() );
+		}
+		$this->wpdb->write_fails = false;
+		$this->abandonner_puis_jouer_la_suite( $job, self::B1 );
+
+		$r = $this->jouer( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
+
+		self::assertSame( 'incremental', BackupIndex::parse( (string) hex2bin( $r['index']['chunk'] ) )['type'], 'état local de la complète utilisable' );
+		$supprimes = array_filter( $this->manifeste( $r['segments'] ), static fn ( array $l ): bool => 'file' === $l['t'] && 'deleted' === $l['state'] );
+		self::assertSame( [], array_values( $supprimes ), 'rien n\'a été supprimé du site : aucun « deleted »' );
+		foreach ( $r['segments'] as $segment ) {
+			self::assertSame( [], array_filter( $this->enregistrements( $segment ), static fn ( array $e ): bool => 'deleted' === $e['type'] ) );
+		}
+	}
+
+	/**
+	 * Termine une sauvegarde déjà commencée, la plateforme jouée comme dans jouer().
+	 */
+	private function abandonner_puis_jouer_la_suite( BackupJob $job, string $id ): void {
+		$rapport = $job->step( [ 'backup_id' => $id ] );
+		for ( $tour = 0; 'finalize' !== $rapport['phase'] && $tour < 50; $tour++ ) {
+			$envois   = [];
+			$termines = [];
+			foreach ( $rapport['pending'] as $p ) {
+				if ( count( $p['uploaded'] ) === count( $p['parts'] ) ) {
+					$termines[] = $p['segment'];
+					continue;
+				}
+				$envois[] = [ 'segment' => $p['segment'], 'parts' => array_map( static fn ( array $partie ): array => [ 'part_number' => $partie['part_number'], 'url' => 'https://stockage.test/x', 'host' => 'stockage.test', 'port' => null ], $p['parts'] ) ];
+			}
+			$rapport = $job->step( [ 'backup_id' => $id, 'uploads' => $envois, 'completed' => $termines ] );
+		}
+		self::assertTrue( $job->step( [ 'backup_id' => $id, 'finished' => true ] )['finished'] );
+	}
+
+	public function test_sauvegarde_de_la_base_seule(): void {
+		$base                       = new FakeDumpWpdb();
+		$base->tables['wp_options'] = [
+			'columns' => [ 'option_id' => 'bigint(20)', 'option_name' => 'varchar(191)', 'option_value' => 'longtext' ],
+			'pk'      => [ 'option_id' ],
+			'rows'    => [ [ 'option_id' => '1', 'option_name' => 'siteurl', 'option_value' => 'https://exemple.test' ] ],
+		];
+
+		$r = $this->jouer( self::depart( self::B1, 'db' ), $base );
+
+		self::assertSame( [ 'db', 'manifest' ], array_column( BackupIndex::parse( (string) hex2bin( $r['index']['chunk'] ) )['segments'], 'kind' ) );
+		$sql = implode( '', array_column( $this->enregistrements( $r['segments'][0] ), 'data' ) );
+		self::assertStringContainsString( "('1','siteurl','https://exemple.test')", $sql );
+		self::assertSame( [], array_filter( $this->manifeste( $r['segments'] ), static fn ( array $l ): bool => 'file' === $l['t'] ), 'aucune ligne de fichier' );
+		self::assertFileDoesNotExist( WorkDir::baseline_dir() . '/' . self::B1 . '.jsonl', 'base seule : état local inchangé' );
+	}
+
+	public function test_une_mise_a_jour_pendant_la_copie_interrompt_et_nettoie(): void {
+		$job = $this->job();
+		$job->start( self::depart( self::B1 ) );
+		BackupState::abort_if_capturing( 'interrupted_by_update', self::NOW );
+
+		try {
+			$job->step( [ 'backup_id' => self::B1 ] );
+			self::fail( 'Refus attendu.' );
+		} catch ( BackupRefused $refus ) {
+			self::assertSame( BackupRefused::INTERRUPTED, $refus->reason_code() );
+			self::assertStringContainsString( 'une mise à jour a changé le site pendant la copie', $refus->getMessage() );
+		}
+		$etat = BackupState::load()['state'];
+		self::assertSame( BackupState::IDLE, $etat['phase'] );
+		self::assertSame( [ 'aborted', 'interrupted_by_update' ], [ $etat['last']['outcome'], $etat['last']['code'] ] );
+		self::assertDirectoryDoesNotExist( $this->dossier( self::B1 ) );
+	}
+
+	public function test_une_mise_a_jour_sans_verrou_vivante_a_la_fin_de_la_copie_interrompt(): void {
+		$job = $this->job();
+		$job->start( self::depart( self::B1 ) );
+		// Une mise à jour de l'administration commence pendant la tranche : son entrée « sans
+		// verrou » est posée, mais son écriture d'abort n'a pas pu passer.
+		$this->wpdb->before_write = static function (): void {
+			UpdateWitness::add( 'upgrader', false, time() );
+		};
+
+		try {
+			$job->step( [ 'backup_id' => self::B1 ] );
+			self::fail( 'Refus attendu.' );
+		} catch ( BackupRefused $refus ) {
+			self::assertSame( BackupRefused::INTERRUPTED, $refus->reason_code() );
+		}
+		self::assertSame( 'interrupted_by_update', BackupState::load()['state']['last']['code'], 'jamais une copie finie pendant une mise à jour' );
+	}
+
+	public function test_autotest_en_echec_juste_avant_la_signature_porte_l_etape_index(): void {
+		$job     = $this->job();
+		$rapport = $job->start( self::depart( self::B1 ) );
+		for ( $tour = 0; BackupState::UPLOAD !== $rapport['phase'] && $tour < 20; $tour++ ) {
+			$rapport = $job->step( [ 'backup_id' => self::B1, 'completed' => array_column( $rapport['pending'], 'segment' ) ] );
+		}
+		$this->autotest_faux = true;
+
+		try {
+			$job->step( [ 'backup_id' => self::B1, 'completed' => array_column( $rapport['pending'], 'segment' ) ] );
+			self::fail( 'Refus attendu.' );
+		} catch ( BackupRefused $refus ) {
+			self::assertSame( [ BackupRefused::SELF_TEST_FAILED, 'index' ], [ $refus->reason_code(), $refus->stage() ] );
+			self::assertSame( 'index', $refus->outcome()['stage'] );
+		}
+		$dernier = BackupState::load()['state']['last'];
+		self::assertSame( [ 'failed', 'self_test_failed', 'index' ], [ $dernier['outcome'], $dernier['code'], $dernier['stage'] ] );
+		self::assertDirectoryDoesNotExist( $this->dossier( self::B1 ), 'aucun index gardé' );
+	}
+
+	public function test_le_rapport_reste_sous_la_borne_d_un_compte_rendu(): void {
+		file_put_contents( $this->racine . '/wp-content/gros.bin', random_bytes( 40 * 1048576 ) );
+
+		$r = $this->jouer( self::depart( self::B1 ) );
+
+		foreach ( $r['rapports'] as $rapport ) {
+			self::assertLessThanOrEqual( BackupJob::REPORT_MAX_BYTES, strlen( (string) json_encode( $rapport ) ) );
+			self::assertLessThanOrEqual( BackupJob::MAX_PENDING, count( $rapport['pending'] ) );
+		}
+		self::assertGreaterThan( 2, count( $r['segments'] ), 'un fichier de 40 Mio réparti sur plusieurs segments de 16 Mio' );
+	}
+
+	public function test_complete_puis_incrementale_un_dossier_passe_en_0000_n_est_jamais_dit_supprime(): void {
+		self::sauter_sans_droits_posix();
+		$this->dossier_prive();
+		// Complète jouée de bout en bout : son état local est celui que finish() promeut.
+		$this->jouer( self::depart( self::B1 ) );
+		$this->retirer_droits( 'wp-content/prive' );
+
+		$r = $this->jouer( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
+
+		self::assertSame( 'incremental', BackupIndex::parse( (string) hex2bin( $r['index']['chunk'] ) )['type'], 'état local promu par la complète' );
+		$manifeste = $this->manifeste( $r['segments'] );
+		$fichiers  = array_values( array_filter( $manifeste, static fn ( array $l ): bool => 'file' === $l['t'] ) );
+		self::assertSame( [], array_values( array_filter( $fichiers, static fn ( array $l ): bool => 'deleted' === $l['state'] ) ), 'rien n\'est dit supprimé sous le dossier passé en 0000' );
+		self::assertSame( [], preg_grep( '#^\S+ wp-content/prive(/|$)#', $this->chemins_ecrits( $r['segments'] ) ), 'rien d\'écrit pour le dossier refusé, ni « deleted » ni contenu' );
+		$prive = array_values( array_filter( $fichiers, static fn ( array $l ): bool => str_starts_with( (string) ( $l['path'] ?? '' ), 'wp-content/prive' ) ) );
+		self::assertSame( [ 'wp-content/prive', 'wp-content/prive/deux.txt', 'wp-content/prive/sous', 'wp-content/prive/sous/trois.txt', 'wp-content/prive/un.txt' ], array_column( $prive, 'path' ) );
+		self::assertSame( [ 'unreadable' ], array_values( array_unique( array_column( $prive, 'state' ) ) ), 'le dossier et les entrées de l\'état local sous lui : illisibles' );
+		self::assertSame( 5, end( $manifeste )['unreadable'], 'ligne de fin du manifeste : le dossier et les quatre entrées de l\'état local sous lui' );
+		self::assertSame( 5, $r['fin']['totals']['unreadable'] );
 	}
 }
