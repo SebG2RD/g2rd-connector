@@ -6,10 +6,15 @@
  * LIMIT/OFFSET pour une table sans clé, ORDER BY la clé LIMIT/OFFSET pour une clé qui contient un
  * ENUM, un SET, un FLOAT, un DOUBLE ou un REAL (UNSEEKABLE_TYPE : la valeur lue ne se compare pas
  * dans WHERE comme ORDER BY la trie, la reprise par la clé perdrait ou doublerait des lignes).
- * Colonnes binaires en hexadécimal ; colonnes générées (VIRTUAL, STORED, versions système
- * explicites de MariaDB) absentes de l'INSERT, comme le fait mysqldump : la restauration les
- * recalcule, et une valeur donnée la ferait échouer en mode strict ; lignes des options du module
- * exclues. Reprenable par curseur, borné par l'appelant ($stop). Aucune écriture dans la base.
+ * Colonnes binaires en hexadécimal ; colonnes FLOAT lues par leur texte exact (`c`*1e0, FLOAT_TYPE :
+ * le texte lu tel quel est arrondi à 6 chiffres significatifs) ; colonnes générées (VIRTUAL, STORED,
+ * versions système explicites de MariaDB) absentes de l'INSERT, comme le fait mysqldump : la
+ * restauration les recalcule, et une valeur donnée la ferait échouer en mode strict ; lignes des
+ * options du module exclues. Session en UTC pendant chaque avance (TIME_ZONE, annoncé par l'en-tête,
+ * comme mysqldump) : une valeur TIMESTAMP se lit, se compare dans WHERE et se restaure dans le fuseau
+ * de la session, et l'heure du passage à l'heure d'hiver est ambiguë dans un fuseau qui change
+ * d'heure. Reprenable par curseur, borné par l'appelant ($stop). Aucune écriture dans la base ; le
+ * fuseau de la session est rendu à la fin de l'avance.
  *
  * Limites écrites de la lecture par offset (tables sans clé comprises) :
  * - le coût : chaque lot relit les lignes qui le précèdent (OFFSET m fait parcourir m lignes au
@@ -19,7 +24,7 @@
  *   ligne déjà copiée (dans une table à clé, la restauration échoue alors sur une clé en double).
  *
  * Avant toute lecture, le jeu de caractères de la session est vérifié, et de nouveau si la connexion
- * a été rouverte ; les noms s'écrivent entre accents graves selon ce jeu (ident()), jamais par
+ * a été rouverte (une session rouverte hors d'UTC est refusée, réessayable) ; les noms s'écrivent entre accents graves selon ce jeu (ident()), jamais par
  * $wpdb->prepare() ; aucune requête exécutée sur le site ne dépend de \ ni du sql_mode (motifs
  * LIKE … ESCAPE '!', valeurs de la clé de reprise en hexadécimal).
  *
@@ -53,11 +58,21 @@ use G2RD\Connector\Support\ArrayShape;
 
 /**
  * @phpstan-type Cursor array{table: int, after_hex: list<string>|null, offset: int, started: bool, header: bool, rows: int, create_sha256: string|null, limit: int, charset: string}
- * @phpstan-type Meta array{columns: list<string>, insert: list<string>, binary: array<string, bool>, pk: list<string>, seek: bool, avg_row: int}
+ * @phpstan-type Meta array{columns: list<string>, insert: list<string>, binary: array<string, bool>, float: array<string, bool>, pk: list<string>, seek: bool, avg_row: int}
  */
 final class DatabaseDumper {
 
 	public const FOOTER = "SET FOREIGN_KEY_CHECKS=1;\n";
+
+	/**
+	 * Fuseau de la session pendant chaque avance, annoncé par l'en-tête (header()) : UTC, sans heure
+	 * ambiguë. Une valeur TIMESTAMP se lit, se compare dans WHERE et se restaure dans le fuseau de la
+	 * session : dans un fuseau qui change d'heure (SYSTEM sur un serveur réglé sur Paris), deux
+	 * instants de l'heure du passage à l'heure d'hiver se lisent avec le même texte (essai du
+	 * 08/11/2026 sur MariaDB 10.11.19 et MySQL 8.4.0 : clé TIMESTAMP, une ligne perdue à la reprise et
+	 * une restauration en erreur 1062).
+	 */
+	public const TIME_ZONE = '+00:00';
 
 	/** Lignes d'un lot, au plus ; réduites par la taille (BATCH_BYTES). */
 	public const BATCH_ROWS = 200;
@@ -117,15 +132,37 @@ final class DatabaseDumper {
 	 * - ENUM et SET : ORDER BY les trie par leur rang (ENUM : ordre de la définition ; SET : valeur
 	 *   numérique), WHERE les compare comme du texte (essai du 08/11/2026 sur MariaDB 10.11.19 : la
 	 *   reprise par la clé perdait ou doublait des lignes, clé simple comme composée).
-	 * - FLOAT : la valeur lue est le texte arrondi à 6 chiffres significatifs (« 0.1 » ; 0.6999999 et
-	 *   0.7 se lisent toutes deux « 0.7 »), que WHERE relit en un double qui n'est pas le float
-	 *   rangé : après « 0.1 », la ligne du curseur est relue (refus réessayable sans fin) ; après
-	 *   « 0.7 » lu de 0.6999999, la ligne 0.7 (0.699999988) n'est pas rendue, sans bruit (essais du
-	 *   08/11/2026 sur MariaDB 10.11.19 et MySQL 8.4.0).
-	 * - DOUBLE, et REAL (son synonyme, ou celui de FLOAT avec REAL_AS_FLOAT) : l'aller-retour du
-	 *   texte lu n'est vérifié que sur MariaDB ; lus par offset aussi, par prudence.
+	 * - FLOAT : lue telle quelle, la valeur est le texte arrondi à 6 chiffres significatifs (« 0.1 » ;
+	 *   0.6999999 et 0.7 se lisent toutes deux « 0.7 »), que WHERE relit en un double qui n'est pas
+	 *   le float rangé : après « 0.1 », la ligne du curseur est relue (refus réessayable sans fin) ;
+	 *   après « 0.7 » lu de 0.6999999, la ligne 0.7 (0.699999988) n'est pas rendue, sans bruit
+	 *   (essais du 08/11/2026 sur MariaDB 10.11.19 et MySQL 8.4.0). Elle se lit désormais par son
+	 *   texte exact (FLOAT_TYPE) ; la clé reste lue par offset, comme l'a décidé le propriétaire (la
+	 *   reprise par la clé n'a pas été réessayée avec ce texte).
+	 * - DOUBLE, et REAL (son synonyme, ou celui de FLOAT avec REAL_AS_FLOAT) : texte lu exact sur
+	 *   MariaDB 10.11.19, MySQL 8.0.16 et 8.4.0 (0.1e0+0.2e0 se lit 0.30000000000000004, essai du
+	 *   08/11/2026) ; lus par offset aussi, par prudence.
 	 */
 	private const UNSEEKABLE_TYPE = '/\A(?:(?:enum|set)\(|float\b|double\b|real\b)/i';
+
+	/**
+	 * Colonne FLOAT (simple précision ; REAL avec REAL_AS_FLOAT s'y affiche float), dans la clé ou
+	 * non, lue au début du Type de SHOW FULL COLUMNS : lue par `c`*1e0 AS `c`, le double exact du
+	 * float rangé, que le texte rendu (au plus 17 chiffres) redonne exactement à l'INSERT. Lue telle
+	 * quelle, la valeur est le texte arrondi à 6 chiffres : 0.6999999 et 0.7 s'écrivaient toutes deux
+	 * '0.7' (restauration en erreur 1062 pour une clé), 48.856613 devenait 48.8566, sans bruit hors de
+	 * la clé. Pourquoi *1e0 et pas +0e0 : x × 1 = x pour tout float, alors que -0 + 0 = +0 ; MySQL
+	 * range -0 dans un FLOAT et '-0' le restaure, MariaDB le range 0 (essai du 08/11/2026 sur MariaDB
+	 * 10.11.19, MySQL 8.0.16 et 8.4.0 : valeurs distinctes, restauration en STRICT_TRANS_TABLES
+	 * identique bit à bit). CAST(… AS DOUBLE) n'existe qu'à partir de MySQL 8.0.17.
+	 */
+	private const FLOAT_TYPE = '/\Afloat\b/i';
+
+	/**
+	 * Valeur de @@session.time_zone rendue à la fin d'une avance (restore_zone()) : SYSTEM, ±hh:mm ou
+	 * nom de fuseau, sans apostrophe ni \ ; toute autre valeur n'est pas réécrite.
+	 */
+	private const ZONE_PATTERN = '/\A[A-Za-z0-9_+:\/-]{1,64}\z/';
 
 	/**
 	 * Colonne générée, absente de l'INSERT (comme le fait mysqldump) : Extra de SHOW FULL COLUMNS
@@ -170,6 +207,9 @@ final class DatabaseDumper {
 	/** @var array{0: string, 1: string, 2: list<string>}|null Arguments du dernier contrôle complet. */
 	private ?array $guard_for = null;
 
+	/** Fuseau de la session avant que l'avance en cours le mette à UTC, rendu à sa fin ; null s'il l'était déjà. */
+	private ?string $zone_before = null;
+
 	/**
 	 * @param \wpdb                              $wpdb          $wpdb (un double en test).
 	 * @param array<string, array<string, true>> $excluded_rows Table des options du site principal → noms exclus.
@@ -182,10 +222,12 @@ final class DatabaseDumper {
 
 	/**
 	 * En-tête du dump : SET NAMES du jeu de caractères de la connexion (spécification § 6.3), pour que
-	 * les octets lus soient ceux que le dump annonce.
+	 * les octets lus soient ceux que le dump annonce ; SET TIME_ZONE du fuseau des lectures
+	 * (TIME_ZONE), pour que la restauration relise les valeurs TIMESTAMP aux mêmes instants (comme
+	 * mysqldump).
 	 */
 	public static function header( string $charset ): string {
-		return "-- G2RD backup dump v1\n/*!40101 SET NAMES " . $charset . " */;\nSET FOREIGN_KEY_CHECKS=0;\n";
+		return "-- G2RD backup dump v1\n/*!40101 SET NAMES " . $charset . " */;\n/*!40103 SET TIME_ZONE='" . self::TIME_ZONE . "' */;\nSET FOREIGN_KEY_CHECKS=0;\n";
 	}
 
 	/**
@@ -427,7 +469,9 @@ final class DatabaseDumper {
 	 * Avance le dump depuis $cursor jusqu'à ce que $stop() le demande (vérifié après un premier
 	 * progrès, avant chaque lot) ou que tout soit écrit. Le jeu de la session est contrôlé avant le
 	 * premier octet émis (guard()), et de nouveau après chaque requête si la connexion a été rouverte
-	 * (rows()) : une tranche refusée n'écrit rien de ce qu'elle a lu dans une autre session.
+	 * (rows()) : une tranche refusée n'écrit rien de ce qu'elle a lu dans une autre session. La
+	 * session passe en UTC (TIME_ZONE) avant toute lecture des tables, et revient à son fuseau à la
+	 * fin de l'avance, refus compris.
 	 *
 	 * @param list<string>              $tables Tables, dans l'ordre (tables(), ou tables_from_hex() de db.tables_hex).
 	 * @param array<string, mixed>|null $cursor Curseur rendu par l'appel précédent (relu de l'état JSON) ; null pour commencer.
@@ -438,13 +482,34 @@ final class DatabaseDumper {
 	 */
 	public function advance( array $tables, ?array $cursor, \Closure $emit, \Closure $stop ): array {
 		$cursor = self::cursor_from( $cursor );
-		$count  = count( $tables );
-		if ( $cursor['table'] >= $count ) {
+		if ( $cursor['table'] >= count( $tables ) ) {
 			// Rang hors de la liste (ou liste vide) : la fin du dump serait déclarée sans ses tables.
 			throw new BackupRefused( BackupRefused::DB_CURSOR_INVALID ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
 		}
 		$charset = $cursor['header'] ? $cursor['charset'] : $this->charset;
 		$this->guard( $charset, (string) $this->wpdb->base_prefix, $tables );
+		try {
+			// Avant toute lecture des tables : SHOW CREATE TABLE écrit aussi la valeur par défaut d'une colonne TIMESTAMP dans
+			// le fuseau de la session.
+			$this->utc_session();
+			return $this->dump_from( $tables, $cursor, $charset, $emit, $stop );
+		} finally {
+			$this->restore_zone();
+		}
+	}
+
+	/**
+	 * Corps de advance(), une fois la session contrôlée et en UTC.
+	 *
+	 * @param list<string>           $tables
+	 * @param Cursor                 $cursor
+	 * @param \Closure(string): void $emit
+	 * @param \Closure(): bool       $stop
+	 * @return array{cursor: Cursor|null, tables_done: list<array{name: string, rows: int, create_sha256: string}>, rows: int}
+	 * @throws BackupRefused DB_CHARSET_MISMATCH, DB_NAME_UNSUPPORTED, DB_CURSOR_INVALID (non réessayables), DB_READ_FAILED.
+	 */
+	private function dump_from( array $tables, array $cursor, string $charset, \Closure $emit, \Closure $stop ): array {
+		$count    = count( $tables );
 		$done     = [];
 		$rows     = 0;
 		$progress = false;
@@ -611,6 +676,55 @@ final class DatabaseDumper {
 	}
 
 	/**
+	 * Fuseau de la session (@@session.time_zone), ou '' s'il ne se lit pas.
+	 *
+	 * @throws BackupRefused DB_READ_FAILED (réessayable).
+	 */
+	private function session_zone(): string {
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- requête constante : fuseau de la session, pendant le dump (docs/backup-payload.md § 4).
+		$row = $this->wpdb->get_row( 'SELECT @@session.time_zone', ARRAY_N );
+		$this->fail_on_error( 'information_schema' );
+
+		return is_array( $row ) && isset( $row[0] ) ? (string) $row[0] : '';
+	}
+
+	/**
+	 * Session en UTC (TIME_ZONE) avant la première lecture d'une avance ; le fuseau d'avant est gardé
+	 * pour restore_zone(). Vérifié après le SET : une session restée dans un autre fuseau est un refus.
+	 *
+	 * @throws BackupRefused DB_READ_FAILED (réessayable) : fuseau illisible, ou autre qu'UTC après le SET.
+	 */
+	private function utc_session(): void {
+		$zone = $this->session_zone();
+		if ( self::TIME_ZONE === $zone ) {
+			return;
+		}
+		$this->zone_before = $zone;
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.NotPrepared -- requête constante (TIME_ZONE, '+00:00') : fuseau de la session, variable de session, aucune donnée écrite.
+		$this->wpdb->query( "SET time_zone = '" . self::TIME_ZONE . "'" );
+		$this->fail_on_error( 'information_schema' );
+		if ( self::TIME_ZONE !== $this->session_zone() ) {
+			throw new BackupRefused( BackupRefused::DB_READ_FAILED, null, 'information_schema' ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+		}
+	}
+
+	/**
+	 * Fin d'une avance, refus compris : la session reprend le fuseau qu'elle avait avant
+	 * utc_session() (les requêtes du site qui suivent, NOW() compris, restent dans leur fuseau).
+	 * Une valeur hors de ZONE_PATTERN n'est pas réécrite ; un échec n'est pas un refus (le dump est
+	 * déjà émis ou refusé).
+	 */
+	private function restore_zone(): void {
+		$before            = $this->zone_before;
+		$this->zone_before = null;
+		if ( null === $before || 1 !== preg_match( self::ZONE_PATTERN, $before ) ) {
+			return;
+		}
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- valeur lue de @@session.time_zone et contrôlée par ZONE_PATTERN (ni apostrophe ni \, sûre quel que soit le sql_mode) ; variable de session, aucune donnée écrite.
+		$this->wpdb->query( "SET time_zone = '" . $before . "'" );
+	}
+
+	/**
 	 * Noms perdus des seules tables copiées (§ 4, « Noms perdus ») : une ligne ne compte que si son
 	 * troisième champ (TABLE_NAME lu dans $charset, donc les octets de la liste) est dans $tables.
 	 *
@@ -664,11 +778,15 @@ final class DatabaseDumper {
 	/**
 	 * Juste après une requête du dump, avant d'en employer le résultat (§ 4, « Reconnexion
 	 * silencieuse ») : la reconnexion de wpdb::query() rejoue la requête dans une nouvelle session,
-	 * qui doit être contrôlée avant que le moindre octet en soit écrit.
+	 * qui doit être contrôlée avant que le moindre octet en soit écrit. Après le contrôle complet
+	 * (guard_for connu : seulement pendant une avance, tables() le remettant à null avant ses
+	 * lectures), la nouvelle session doit aussi être en UTC : wpdb::db_connect() ne règle que le jeu
+	 * et le sql_mode, et la requête rejouée dans le fuseau du serveur a lu ses dates TIMESTAMP (et les
+	 * valeurs par défaut de SHOW CREATE TABLE) dans ce fuseau.
 	 *
-	 * @throws BackupRefused DB_CHARSET_MISMATCH, DB_NAME_UNSUPPORTED (non réessayables), DB_READ_FAILED.
+	 * @throws BackupRefused DB_CHARSET_MISMATCH, DB_NAME_UNSUPPORTED (non réessayables), DB_READ_FAILED (réessayable : session rouverte hors d'UTC pendant une avance, rien n'est employé de la requête rejouée), qui nomme $table.
 	 */
-	private function recheck(): void {
+	private function recheck( string $table ): void {
 		if ( null === $this->identity || $this->connection_identity() === $this->identity ) {
 			return;
 		}
@@ -681,6 +799,10 @@ final class DatabaseDumper {
 		[ $charset, $prefix, $tables ] = $this->guard_for;
 		$this->guarded                 = null;
 		$this->guard( $charset, $prefix, $tables );
+		if ( self::TIME_ZONE !== $this->session_zone() ) {
+			// La tranche suivante repart d'une session neuve, mise en UTC avant toute lecture.
+			throw new BackupRefused( BackupRefused::DB_READ_FAILED, null, $table ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite et nom de table).
+		}
 	}
 
 	/**
@@ -716,7 +838,7 @@ final class DatabaseDumper {
 	 */
 	private function rows( string $sql, string $table ): array {
 		$rows = $this->read( $sql, $table );
-		$this->recheck();
+		$this->recheck( $table );
 
 		return $rows;
 	}
@@ -800,8 +922,9 @@ final class DatabaseDumper {
 	}
 
 	/**
-	 * Colonnes lues et colonnes de l'INSERT (et lesquelles sont binaires), clé primaire dans son
-	 * ordre, lecture de la table (seek), taille moyenne des lignes. Chaque nom de colonne passe par
+	 * Colonnes lues et colonnes de l'INSERT (et lesquelles sont binaires, lesquelles sont des FLOAT lus
+	 * par leur texte exact, FLOAT_TYPE), clé primaire dans son ordre, lecture de la table (seek),
+	 * taille moyenne des lignes. Chaque nom de colonne passe par
 	 * ident() : un nom mal formé dans le jeu est refusé avant le premier octet de la table et avant
 	 * toute lecture de ses lignes.
 	 *
@@ -824,6 +947,7 @@ final class DatabaseDumper {
 	private function metadata( string $table, string $charset ): array {
 		$names      = [];
 		$binary     = [];
+		$float      = [];
 		$unseekable = [];
 		$generated  = [];
 		foreach ( $this->rows( 'SHOW FULL COLUMNS FROM ' . self::ident( $table, $charset ), $table ) as $column ) {
@@ -835,6 +959,7 @@ final class DatabaseDumper {
 			$type                = (string) ( $column['Type'] ?? '' );
 			$names[]             = $name;
 			$binary[ $name ]     = 1 === preg_match( self::BINARY_TYPE, $type );
+			$float[ $name ]      = 1 === preg_match( self::FLOAT_TYPE, $type );
 			$unseekable[ $name ] = 1 === preg_match( self::UNSEEKABLE_TYPE, $type );
 			$generated[ $name ]  = 1 === preg_match( self::GENERATED_EXTRA, (string) ( $column['Extra'] ?? '' ) );
 		}
@@ -853,6 +978,7 @@ final class DatabaseDumper {
 			'columns' => [] === $read ? $names : $read,
 			'insert'  => $insert,
 			'binary'  => $binary,
+			'float'   => $float,
 			'pk'      => $pk,
 			'seek'    => [] !== $pk && [] === array_filter( $pk, static fn ( string $c ): bool => $unseekable[ $c ] ?? false ),
 			'avg_row' => $this->avg_row( $table ),
@@ -885,9 +1011,15 @@ final class DatabaseDumper {
 	 * les colonnes générées hors de la clé (metadata()), jamais SELECT * : une colonne INVISIBLE
 	 * (MySQL 8.0.23+, MariaDB 10.3+), dont my_row_id, la clé que MySQL 8.0.30+ ajoute avec
 	 * sql_generate_invisible_primary_key, n'est rendue que nommée ; les colonnes lues sont ainsi
-	 * celles de l'INSERT, et celles de la clé. Requête bâtie sans $wpdb->prepare() : noms par
-	 * ident(), valeurs de la clé par key_literal() (hexadécimal, quel que soit le sql_mode du site),
-	 * entiers convertis.
+	 * celles de l'INSERT, et celles de la clé. Une colonne FLOAT se lit `c`*1e0 AS `c` (FLOAT_TYPE) :
+	 * l'alias garde son nom, que key_hex() et l'INSERT cherchent dans la ligne. Lue par offset, une
+	 * table à clé s'ordonne par les colonnes de la clé qualifiées par la table (ORDER BY `t`.`c`) :
+	 * ORDER BY `c` prendrait l'alias, une expression, et trierait toute la table sans l'index (EXPLAIN
+	 * du 08/11/2026 : « Using filesort » sans clé ; avec `t`.`c`, PRIMARY), dans le même ordre (le
+	 * double d'un float le garde). Par la clé, aucune colonne de la clé n'est un FLOAT (UNSEEKABLE_TYPE) :
+	 * ORDER BY et WHERE nomment les colonnes elles-mêmes. Requête bâtie sans $wpdb->prepare() : noms
+	 * par ident(), valeurs de la clé par key_literal() (hexadécimal, quel que soit le sql_mode du
+	 * site), entiers convertis.
 	 *
 	 * Jamais une reprise au début de la table, qui recopierait des lignes (§ 4, « Curseur du dump ») :
 	 * refus avant la requête si le curseur a une clé de reprise et que la table ne se lit pas par la
@@ -920,11 +1052,14 @@ final class DatabaseDumper {
 			// lignes déjà écrites.
 			throw new BackupRefused( BackupRefused::DB_CURSOR_INVALID ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
 		}
-		$from    = 'SELECT ' . implode( ',', array_map( static fn ( string $c ): string => self::ident( $c, $charset ), $meta['columns'] ) ) . ' FROM ' . self::ident( $table, $charset );
+		$name    = self::ident( $table, $charset );
+		$from    = 'SELECT ' . self::select_list( $meta['columns'], $meta['float'], $charset ) . ' FROM ' . $name;
 		$columns = implode( ',', array_map( static fn ( string $c ): string => self::ident( $c, $charset ), $pk ) );
 		if ( ! $seek ) {
-			// ORDER BY une clé (unique) qui contient un type de UNSEEKABLE_TYPE : ordre déterministe d'un lot à l'autre.
-			$sql = $from . ( [] === $pk ? '' : ' ORDER BY ' . $columns ) . ' LIMIT ' . (int) $limit . ' OFFSET ' . (int) $cursor['offset'];
+			// ORDER BY une clé (unique) qui contient un type de UNSEEKABLE_TYPE : ordre déterministe d'un lot à l'autre ; colonnes
+			// qualifiées par la table, jamais l'alias d'un FLOAT lu par son texte exact.
+			$order = implode( ',', array_map( static fn ( string $c ): string => $name . '.' . self::ident( $c, $charset ), $pk ) );
+			$sql   = $from . ( [] === $pk ? '' : ' ORDER BY ' . $order ) . ' LIMIT ' . (int) $limit . ' OFFSET ' . (int) $cursor['offset'];
 		} elseif ( null === $after ) {
 			$sql = $from . ' ORDER BY ' . $columns . ' LIMIT ' . (int) $limit;
 		} else {
@@ -958,6 +1093,27 @@ final class DatabaseDumper {
 	}
 
 	/**
+	 * Colonnes lues d'un SELECT, dans leur ordre, chacune par ident() ; une colonne FLOAT
+	 * (FLOAT_TYPE) par `c`*1e0 AS `c`, le double exact du float rangé, sous son propre nom.
+	 *
+	 * @param list<string>        $columns
+	 * @param array<string, bool> $floats Colonnes FLOAT (FLOAT_TYPE).
+	 * @throws BackupRefused DB_NAME_UNSUPPORTED (non réessayable) : nom mal formé dans $charset.
+	 */
+	private static function select_list( array $columns, array $floats, string $charset ): string {
+		return implode(
+			',',
+			array_map(
+				static function ( string $c ) use ( $floats, $charset ): string {
+					$ident = self::ident( $c, $charset );
+					return ( $floats[ $c ] ?? false ) ? $ident . '*1e0 AS ' . $ident : $ident;
+				},
+				$columns
+			)
+		);
+	}
+
+	/**
 	 * Clé primaire de $row en hexadécimal, dans l'ordre de la clé. Une colonne de la clé absente de la
 	 * ligne lue, ou nulle (une clé primaire ne l'est jamais), est un refus, jamais '' : la reprise
 	 * WHERE (clé) > ('') repartirait du début de la table (une clé entière comparée à '' compare à 0).
@@ -986,7 +1142,7 @@ final class DatabaseDumper {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.NotPrepared -- requête bâtie ici : nom de la table par ident() (§ 4), aucune valeur ; lecture de la base pour la sauvegarde, rien à mettre en cache.
 		$row = $this->wpdb->get_row( 'SHOW CREATE TABLE ' . self::ident( $table, $charset ), ARRAY_A );
 		$this->fail_on_error( $table );
-		$this->recheck();
+		$this->recheck( $table );
 		$create = is_array( $row ) ? ( $row['Create Table'] ?? null ) : null;
 		if ( ! is_string( $create ) || '' === $create ) {
 			throw new BackupRefused( BackupRefused::DB_READ_FAILED, null, $table ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite et nom de table).

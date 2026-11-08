@@ -10,11 +10,18 @@
  * requête que la vraie base lirait autrement, ni une écriture qui dépend du sql_mode du site.
  * Comme la vraie base (essai du 08/11/2026 sur MariaDB 10.11.19), ORDER BY trie une colonne ENUM
  * par le rang de sa valeur dans la définition et un SET par sa valeur numérique, alors que
- * WHERE (clé) > (valeurs) les compare comme du texte ; une colonne FLOAT se lit arrondie à
- * 6 chiffres significatifs (0.6999999 et 0.7 se lisent toutes deux « 0.7 », MariaDB 10.11.19 et
- * MySQL 8.4.0), et WHERE relit ce texte en un double qui n'est pas la valeur rangée. Les colonnes
- * générées (Extra VIRTUAL GENERATED ou STORED GENERATED) ne se lisent que si elles sont dans la
- * clé : toute autre lecture qui les nomme lève.
+ * WHERE (clé) > (valeurs) les compare comme du texte ; une colonne FLOAT lue telle quelle rend le
+ * texte arrondi à 6 chiffres significatifs (0.6999999 et 0.7 se lisent toutes deux « 0.7 »,
+ * MariaDB 10.11.19 et MySQL 8.4.0), et WHERE relit ce texte en un double qui n'est pas la valeur
+ * rangée ; lue `c`*1e0 AS `c`, elle rend le double exact du float rangé (seule expression admise,
+ * et seulement pour une colonne FLOAT). Lue par offset, une table dont une colonne de la clé est
+ * lue par cette expression doit s'ordonner par la colonne qualifiée (`t`.`c`) : ORDER BY `c`
+ * prendrait l'alias (tri de toute la table, sans l'index). Une colonne TIMESTAMP est rangée en UTC
+ * (valeurs des lignes du faux) et se lit dans le fuseau de la session ($time_zone : +00:00, ou
+ * SYSTEM = Europe/Paris) ; WHERE relit son texte dans ce fuseau, une heure ambiguë (passage à
+ * l'heure d'hiver) à l'instant le plus tardif, comme les deux serveurs (essai du 08/11/2026). Les
+ * colonnes générées (Extra VIRTUAL GENERATED ou STORED GENERATED) ne se lisent que si elles sont
+ * dans la clé : toute autre lecture qui les nomme lève.
  *
  * @package G2RD\Connector
  */
@@ -30,6 +37,15 @@ final class FakeDumpWpdb {
 
 	/** Requête des variables de jeu de la session, au texte exact (docs/backup-payload.md § 4). */
 	public const SESSION_QUERY = 'SELECT @@character_set_client, @@character_set_connection, @@character_set_results';
+
+	/** Lecture du fuseau de la session, au texte exact (§ 4, « Fuseau de la session »). */
+	public const ZONE_QUERY = 'SELECT @@session.time_zone';
+
+	/** Passage de la session en UTC, au texte exact. */
+	public const UTC_QUERY = "SET time_zone = '+00:00'";
+
+	/** Fuseau que le faux rend pour SYSTEM : celui d'un serveur réglé sur Paris (heure d'été, heure d'hiver). */
+	private const SYSTEM_ZONE = 'Europe/Paris';
 
 	/** Début de la liste des tables et de leur taille moyenne (§ 4, « Tables copiées »). */
 	private const LIST_START = 'SELECT TABLE_NAME, AVG_ROW_LENGTH FROM information_schema.TABLES';
@@ -54,7 +70,8 @@ final class FakeDumpWpdb {
 	 * même nommées (anomalie simulée) ; where_ignored : la reprise WHERE (clé) > (…) relit depuis le
 	 * début (comme `my_row_id` > '' qui compare à 0) ; extra : champ Extra de SHOW FULL COLUMNS
 	 * d'une colonne (VIRTUAL GENERATED, STORED GENERATED, DEFAULT_GENERATED…), qui remplace
-	 * INVISIBLE. Une valeur de colonne FLOAT est le texte écrit à l'INSERT (rangé en simple précision).
+	 * INVISIBLE. Une valeur de colonne FLOAT est le texte écrit à l'INSERT (rangé en simple précision) ;
+	 * une valeur de colonne TIMESTAMP, l'instant rangé, écrit en UTC.
 	 *
 	 * @var array<string, array{columns: array<string, string>, pk: list<string>, rows: list<array<string, string|null>>, view?: bool, avg_row_length?: int, invisible?: list<string>, omitted?: list<string>, where_ignored?: bool, extra?: array<string, string>}>
 	 */
@@ -68,6 +85,15 @@ final class FakeDumpWpdb {
 
 	/** @var list<string|null> Variables de jeu de la session : client, connexion, résultats. */
 	public array $session = [ 'utf8mb4', 'utf8mb4', 'utf8mb4' ];
+
+	/** Fuseau de la session (@@session.time_zone) : SYSTEM (Europe/Paris), +00:00, ou toute valeur qu'un test lui donne. */
+	public string $time_zone = 'SYSTEM';
+
+	/** Fuseau d'une session rouverte (celui du serveur) : wpdb::db_connect() ne le règle pas. */
+	public string $default_time_zone = 'SYSTEM';
+
+	/** Vrai : SET time_zone n'a pas d'effet (anomalie simulée : la session reste dans son fuseau). */
+	public bool $zone_locked = false;
 
 	/**
 	 * Lignes rendues par la détection des noms perdus : hexadécimal de la table et de la colonne en
@@ -138,6 +164,22 @@ final class FakeDumpWpdb {
 	}
 
 	/**
+	 * Seule requête sans résultat admise : SET time_zone = '<fuseau>' (variable de session), le
+	 * fuseau entre apostrophes, sans \ ni apostrophe (SYSTEM, ±hh:mm ou un nom) ; sans effet si
+	 * $zone_locked. Toute autre requête lève.
+	 */
+	public function query( string $sql ): int {
+		$this->receive( $sql );
+		if ( 1 !== preg_match( "/\ASET time_zone = '([A-Za-z0-9_+:\/-]{1,64})'\z/", $sql, $m ) ) {
+			throw new \LogicException( 'Requête non prévue par le faux $wpdb du dump (seul SET time_zone l\'est) : ' . $sql );
+		}
+		if ( ! $this->zone_locked ) {
+			$this->time_zone = $m[1];
+		}
+		return 0;
+	}
+
+	/**
 	 * @return list<array<string, mixed>>
 	 */
 	public function get_results( string $sql, string $output = 'OBJECT' ): array {
@@ -199,11 +241,15 @@ final class FakeDumpWpdb {
 		}
 		foreach ( $this->tables as $candidate => $table ) {
 			$ident = self::ident_or_null( (string) $candidate, $this->charset );
-			$list  = $this->column_list( self::read_columns( $table ) );
-			$start = 'SELECT ' . $list . ' FROM ' . $ident . ' ';
-			if ( null !== $ident && null !== $list && str_starts_with( $sql, $start ) ) {
-				return $this->select( (string) $candidate, substr( $sql, strlen( $start ) - 1 ) );
+			$list  = $this->column_pattern( self::read_columns( $table ) );
+			if ( null === $ident || null === $list || 1 !== preg_match( '/\ASELECT ' . $list[0] . ' FROM ' . preg_quote( $ident, '/' ) . ' /s', $sql, $m ) ) {
+				continue;
 			}
+			$exact = [];
+			foreach ( $list[1] as $group => $column ) {
+				$exact[ $column ] = '' !== ( $m[ $group ] ?? '' );
+			}
+			return $this->select( (string) $candidate, substr( $sql, strlen( $m[0] ) - 1 ), $exact );
 		}
 		throw new \LogicException( 'Lecture non prévue par le faux $wpdb du dump (colonnes autres que celles que lit le dump, dans l\'ordre de la table ?) : ' . $sql );
 	}
@@ -239,32 +285,43 @@ final class FakeDumpWpdb {
 	}
 
 	/**
-	 * Colonnes de la table écrites par ident(), dans leur ordre, séparées par des virgules ; null si
-	 * un nom est refusé dans le jeu du faux ou si la table n'a pas de colonne.
+	 * Motif de la liste des colonnes lues, dans leur ordre, chacune écrite par ident() et séparées par
+	 * des virgules : une colonne FLOAT telle quelle ou `c`*1e0 AS `c` (groupe capturé, vide pour la
+	 * lecture telle quelle) ; null si un nom est refusé dans le jeu du faux ou si la table n'a pas de
+	 * colonne.
 	 *
 	 * @param array<string, string> $columns
+	 * @return array{0: string, 1: array<int, string>}|null Motif, puis la colonne FLOAT de chaque groupe.
 	 */
-	private function column_list( array $columns ): ?string {
-		$idents = [];
-		foreach ( array_keys( $columns ) as $column ) {
+	private function column_pattern( array $columns ): ?array {
+		$parts  = [];
+		$groups = [];
+		foreach ( $columns as $column => $type ) {
 			$ident = self::ident_or_null( (string) $column, $this->charset );
 			if ( null === $ident ) {
 				return null;
 			}
-			$idents[] = $ident;
+			$quoted = preg_quote( $ident, '/' );
+			if ( self::is_float( $type ) ) {
+				$groups[ count( $groups ) + 1 ] = (string) $column;
+				$parts[]                        = $quoted . '((?:' . preg_quote( '*1e0 AS ', '/' ) . $quoted . ')?)';
+			} else {
+				$parts[] = $quoted;
+			}
 		}
-		return [] === $idents ? null : implode( ',', $idents );
+		return [] === $parts ? null : [ implode( ',', $parts ), $groups ];
 	}
 
 	/**
 	 * Lignes telles que la base les rend pour la liste des colonnes lues (read_columns()) : chaque
-	 * colonne, dans l'ordre, sauf celles d'omitted (anomalie simulée) ; une colonne FLOAT, telle que
-	 * la base l'écrit en texte (shown()).
+	 * colonne, dans l'ordre, sauf celles d'omitted (anomalie simulée) ; une colonne FLOAT ou
+	 * TIMESTAMP, telle que la base l'écrit en texte (shown()).
 	 *
 	 * @param list<array<string, string|null>> $rows
+	 * @param array<string, bool>              $exact Colonnes FLOAT lues `c`*1e0 AS `c`.
 	 * @return list<array<string, string|null>>
 	 */
-	private function projected( string $name, array $rows ): array {
+	private function projected( string $name, array $rows, array $exact ): array {
 		$omitted = $this->tables[ $name ]['omitted'] ?? [];
 		$read    = [];
 		foreach ( $rows as $row ) {
@@ -277,7 +334,7 @@ final class FakeDumpWpdb {
 				if ( ! array_key_exists( $column, $row ) ) {
 					throw new \LogicException( 'Ligne du faux sans la colonne ' . $column . ' de ' . $name );
 				}
-				$line[ $column ] = self::shown( $type, $row[ $column ] );
+				$line[ $column ] = $this->shown( $type, $row[ $column ], $exact[ $column ] ?? false );
 			}
 			$read[] = $line;
 		}
@@ -285,20 +342,102 @@ final class FakeDumpWpdb {
 	}
 
 	/**
-	 * Valeur telle que la base l'écrit en texte : une colonne FLOAT arrondie à 6 chiffres
-	 * significatifs (relevé du 08/11/2026, MariaDB 10.11.19 et MySQL 8.4.0 : 0.6999999 et 0.7 se
-	 * lisent « 0.7 ») ; toute autre colonne telle quelle.
+	 * Valeur telle que la base l'écrit en texte : une colonne FLOAT lue telle quelle, arrondie à
+	 * 6 chiffres significatifs (relevé du 08/11/2026, MariaDB 10.11.19 et MySQL 8.4.0 : 0.6999999 et
+	 * 0.7 se lisent « 0.7 »), lue `c`*1e0 ($exact), le texte qui redonne exactement le float rangé ;
+	 * une colonne TIMESTAMP dans le fuseau de la session ; toute autre colonne telle quelle.
 	 */
-	private static function shown( string $type, ?string $value ): ?string {
-		if ( null === $value || ! self::is_float( $type ) ) {
-			return $value;
+	private function shown( string $type, ?string $value, bool $exact ): ?string {
+		if ( null === $value ) {
+			return null;
 		}
-		return sprintf( '%.6g', self::single( $value ) );
+		if ( self::is_float( $type ) ) {
+			$single = self::single( $value );
+			return $exact ? self::exact_text( $single ) : sprintf( '%.6g', $single );
+		}
+		if ( self::is_timestamp( $type ) ) {
+			return $this->in_session_zone( $value );
+		}
+		return $value;
+	}
+
+	/** Texte le plus court (au plus 17 chiffres significatifs) qui se relit en $value exactement. */
+	private static function exact_text( float $value ): string {
+		for ( $digits = 1; $digits < 17; $digits++ ) {
+			$text = sprintf( '%.' . $digits . 'g', $value );
+			if ( (float) $text === $value ) {
+				return $text;
+			}
+		}
+		return sprintf( '%.17g', $value );
 	}
 
 	/** Colonne FLOAT (simple précision), lue au début du Type. */
 	private static function is_float( string $type ): bool {
 		return 1 === preg_match( '/\Afloat\b/i', $type );
+	}
+
+	/** Colonne TIMESTAMP (rangée en UTC, lue dans le fuseau de la session), lue au début du Type. */
+	private static function is_timestamp( string $type ): bool {
+		return 1 === preg_match( '/\Atimestamp\b/i', $type );
+	}
+
+	/** Fuseau de la session pour PHP : SYSTEM est Europe/Paris ; toute autre valeur, telle quelle. */
+	private function zone(): \DateTimeZone {
+		try {
+			return new \DateTimeZone( 'SYSTEM' === $this->time_zone ? self::SYSTEM_ZONE : $this->time_zone );
+		} catch ( \Exception $e ) {
+			throw new \LogicException( 'Fuseau de session non prévu par le faux : ' . $this->time_zone, 0, $e );
+		}
+	}
+
+	/**
+	 * Date et heure, puis fraction de seconde (« .999999 », ou '').
+	 *
+	 * @return array{0: string, 1: string}
+	 */
+	private static function split_time( string $text ): array {
+		$dot = strpos( $text, '.' );
+		return false === $dot ? [ $text, '' ] : [ substr( $text, 0, $dot ), substr( $text, $dot ) ];
+	}
+
+	/** Valeur TIMESTAMP rangée (UTC) écrite dans le fuseau de la session. */
+	private function in_session_zone( string $utc ): string {
+		if ( '+00:00' === $this->time_zone ) {
+			return $utc;
+		}
+		[ $seconds, $fraction ] = self::split_time( $utc );
+		$instant                = \DateTimeImmutable::createFromFormat( '!Y-m-d H:i:s', $seconds, new \DateTimeZone( 'UTC' ) );
+		if ( false === $instant ) {
+			throw new \LogicException( 'TIMESTAMP du faux illisible : ' . $utc );
+		}
+		return $instant->setTimezone( $this->zone() )->format( 'Y-m-d H:i:s' ) . $fraction;
+	}
+
+	/**
+	 * Texte d'une valeur TIMESTAMP de WHERE, relu dans le fuseau de la session, en UTC ; une heure
+	 * ambiguë (deux instants s'écrivent ainsi au passage à l'heure d'hiver) prend l'instant le plus
+	 * tardif, comme MariaDB 10.11.19 et MySQL 8.4.0 (essai du 08/11/2026 : après « 02:30:00 », le
+	 * 25/10/2026 à Paris, la ligne de 01:30 UTC n'est pas rendue).
+	 */
+	private function from_session_zone( string $local ): string {
+		if ( '+00:00' === $this->time_zone ) {
+			return $local;
+		}
+		[ $seconds, $fraction ] = self::split_time( $local );
+		$zone                   = $this->zone();
+		$guess                  = \DateTimeImmutable::createFromFormat( '!Y-m-d H:i:s', $seconds, $zone );
+		if ( false === $guess ) {
+			throw new \LogicException( 'TIMESTAMP de WHERE illisible : ' . $local );
+		}
+		$best = new \DateTimeImmutable( '@' . $guess->getTimestamp() );
+		foreach ( [ -3600, 0, 3600 ] as $shift ) {
+			$candidate = new \DateTimeImmutable( '@' . ( $guess->getTimestamp() + $shift ) );
+			if ( $candidate->setTimezone( $zone )->format( 'Y-m-d H:i:s' ) === $seconds && $candidate > $best ) {
+				$best = $candidate;
+			}
+		}
+		return $best->format( 'Y-m-d H:i:s' ) . $fraction;
 	}
 
 	/** Valeur rangée par une colonne FLOAT : le nombre écrit, arrondi au float de simple précision le plus proche. */
@@ -321,6 +460,12 @@ final class FakeDumpWpdb {
 			}
 			return $this->session;
 		}
+		if ( self::ZONE_QUERY === $sql ) {
+			if ( 'ARRAY_N' !== $output ) {
+				throw new \LogicException( 'Fuseau de la session lu autrement que par ARRAY_N : ' . $output );
+			}
+			return [ $this->time_zone ];
+		}
 		$name = $this->table_named( $sql, 'SHOW CREATE TABLE ', '' );
 		if ( null === $name ) {
 			throw new \LogicException( 'Lecture non prévue par le faux $wpdb du dump : ' . $sql );
@@ -336,13 +481,16 @@ final class FakeDumpWpdb {
 	/**
 	 * Lignes d'un SELECT <colonnes> FROM : LIMIT … OFFSET … pour une table sans clé primaire, ORDER BY
 	 * la clé puis LIMIT sinon, avec WHERE (clé) > (valeurs) pour reprendre, ou OFFSET … après LIMIT
-	 * (sans WHERE) ; les valeurs se relisent par l'inverse de key_literal(), et lui seul. Le tri de
-	 * ORDER BY et la comparaison de WHERE sont ceux de la vraie base (compare_keys()).
+	 * (sans WHERE) ; les valeurs se relisent par l'inverse de key_literal(), et lui seul. ORDER BY
+	 * nomme les colonnes de la clé, ou les mêmes qualifiées par la table (`t`.`c`) ; non qualifiées,
+	 * jamais si l'une est lue `c`*1e0 AS `c` (ORDER BY prendrait l'alias). Le tri de ORDER BY et la
+	 * comparaison de WHERE sont ceux de la vraie base (compare_keys()).
 	 *
-	 * @param string $rest Texte qui suit le nom de la table (commence par une espace).
+	 * @param string              $rest  Texte qui suit le nom de la table (commence par une espace).
+	 * @param array<string, bool> $exact Colonnes FLOAT lues `c`*1e0 AS `c`.
 	 * @return list<array<string, string|null>>
 	 */
-	private function select( string $name, string $rest ): array {
+	private function select( string $name, string $rest, array $exact ): array {
 		$table = $this->tables[ $name ];
 		$pk    = $table['pk'];
 		$types = $table['columns'];
@@ -350,27 +498,46 @@ final class FakeDumpWpdb {
 			if ( 1 !== preg_match( '/\A LIMIT (\d+) OFFSET (\d+)\z/', $rest, $m ) ) {
 				throw new \LogicException( 'Lecture d\'une table sans clé primaire hors de LIMIT … OFFSET … : ' . $rest );
 			}
-			return $this->projected( $name, array_slice( $this->rows_of( $name ), (int) $m[2], (int) $m[1] ) );
+			return $this->projected( $name, array_slice( $this->rows_of( $name ), (int) $m[2], (int) $m[1] ), $exact );
 		}
-		$columns = implode( ',', array_map( fn ( string $c ): string => DatabaseDumper::ident( $c, $this->charset ), $pk ) );
-		$order   = ' ORDER BY ' . $columns . ' LIMIT ';
-		$where   = ' WHERE (' . $columns . ') > (';
-		$after   = null;
+		$columns   = implode( ',', array_map( fn ( string $c ): string => DatabaseDumper::ident( $c, $this->charset ), $pk ) );
+		$qualified = implode( ',', array_map( fn ( string $c ): string => DatabaseDumper::ident( $name, $this->charset ) . '.' . DatabaseDumper::ident( $c, $this->charset ), $pk ) );
+		$orders    = [ [ ' ORDER BY ' . $columns . ' LIMIT ', false ], [ ' ORDER BY ' . $qualified . ' LIMIT ', true ] ];
+		$where     = ' WHERE (' . $columns . ') > (';
+		$after     = null;
+		$limit     = null;
+		$by_table  = false;
 		if ( str_starts_with( $rest, $where ) ) {
 			$tail = substr( $rest, strlen( $where ) );
-			$cut  = strpos( $tail, ')' . $order );
-			if ( false === $cut ) {
+			foreach ( $orders as [ $order, $is_qualified ] ) {
+				$cut = strpos( $tail, ')' . $order );
+				if ( false !== $cut ) {
+					$after    = array_map( [ $this, 'key_value' ], explode( ',', substr( $tail, 0, $cut ) ) );
+					$limit    = substr( $tail, $cut + strlen( ')' . $order ) );
+					$by_table = $is_qualified;
+					break;
+				}
+			}
+			if ( null === $after ) {
 				throw new \LogicException( 'Reprise sans ORDER BY de la clé : ' . $rest );
 			}
-			$after = array_map( [ $this, 'key_value' ], explode( ',', substr( $tail, 0, $cut ) ) );
 			if ( count( $after ) !== count( $pk ) ) {
 				throw new \LogicException( 'Reprise dont le nombre de valeurs n\'est pas celui de la clé : ' . $rest );
 			}
-			$limit = substr( $tail, $cut + strlen( ')' . $order ) );
-		} elseif ( str_starts_with( $rest, $order ) ) {
-			$limit = substr( $rest, strlen( $order ) );
 		} else {
-			throw new \LogicException( 'Lecture d\'une table à clé primaire hors de ORDER BY la clé : ' . $rest );
+			foreach ( $orders as [ $order, $is_qualified ] ) {
+				if ( str_starts_with( $rest, $order ) ) {
+					$limit    = substr( $rest, strlen( $order ) );
+					$by_table = $is_qualified;
+					break;
+				}
+			}
+			if ( null === $limit ) {
+				throw new \LogicException( 'Lecture d\'une table à clé primaire hors de ORDER BY la clé : ' . $rest );
+			}
+		}
+		if ( ! $by_table && [] !== array_filter( $pk, static fn ( string $c ): bool => $exact[ $c ] ?? false ) ) {
+			throw new \LogicException( 'ORDER BY la clé non qualifiée alors qu\'une de ses colonnes est lue `c`*1e0 AS `c` : l\'alias serait trié, sans l\'index (EXPLAIN : Using filesort) : ' . $rest );
 		}
 		$offset = 0;
 		if ( null === $after && 1 === preg_match( '/\A([1-9]\d*) OFFSET (\d+)\z/', $limit, $m ) ) {
@@ -381,13 +548,13 @@ final class FakeDumpWpdb {
 			throw new \LogicException( 'LIMIT illisible : ' . $rest );
 		}
 		$rows = $this->rows_of( $name );
-		usort( $rows, static fn ( array $a, array $b ): int => self::compare_keys( $a, $b, $pk, $types, true ) );
+		usort( $rows, fn ( array $a, array $b ): int => $this->compare_keys( $a, $b, $pk, $types, true ) );
 		if ( null !== $after && empty( $table['where_ignored'] ) ) {
 			$key  = array_combine( $pk, $after );
-			$rows = array_values( array_filter( $rows, static fn ( array $row ): bool => self::compare_keys( $row, $key, $pk, $types, false ) > 0 ) );
+			$rows = array_values( array_filter( $rows, fn ( array $row ): bool => $this->compare_keys( $row, $key, $pk, $types, false ) > 0 ) );
 		}
 
-		return $this->projected( $name, array_slice( $rows, $offset, (int) $limit ) );
+		return $this->projected( $name, array_slice( $rows, $offset, (int) $limit ), $exact );
 	}
 
 	/**
@@ -478,14 +645,16 @@ final class FakeDumpWpdb {
 	 * WHERE (clé) > (valeurs) sinon. Une colonne ENUM ou SET se compare par son rang pour ORDER BY,
 	 * comme du texte pour WHERE ; une colonne FLOAT, par la valeur rangée (simple précision) d'une
 	 * ligne, et par le texte relu en double d'une valeur de WHERE (« 0.1 » vaut moins que le 0.1
-	 * rangé) ; toute autre colonne, de la même façon des deux côtés.
+	 * rangé) ; une colonne TIMESTAMP, par l'instant rangé (UTC) d'une ligne, et par le texte relu
+	 * dans le fuseau de la session d'une valeur de WHERE (from_session_zone()) ; toute autre colonne,
+	 * de la même façon des deux côtés.
 	 *
 	 * @param array<string, mixed>  $a
 	 * @param array<string, mixed>  $b
 	 * @param list<string>          $pk
 	 * @param array<string, string> $types Type de chaque colonne (SHOW FULL COLUMNS).
 	 */
-	private static function compare_keys( array $a, array $b, array $pk, array $types, bool $order_by ): int {
+	private function compare_keys( array $a, array $b, array $pk, array $types, bool $order_by ): int {
 		foreach ( $pk as $column ) {
 			$x       = (string) $a[ $column ];
 			$y       = (string) $b[ $column ];
@@ -494,6 +663,8 @@ final class FakeDumpWpdb {
 				$order = $order_by ? ( self::rank( $members, $x ) <=> self::rank( $members, $y ) ) : strcmp( $x, $y );
 			} elseif ( self::is_float( $types[ $column ] ?? '' ) ) {
 				$order = self::single( $x ) <=> ( $order_by ? self::single( $y ) : (float) $y );
+			} elseif ( self::is_timestamp( $types[ $column ] ?? '' ) ) {
+				$order = strcmp( $x, $order_by ? $y : $this->from_session_zone( $y ) );
 			} else {
 				$order = is_numeric( $x ) && is_numeric( $y ) ? ( (float) $x <=> (float) $y ) : strcmp( $x, $y );
 			}
@@ -561,7 +732,7 @@ final class FakeDumpWpdb {
 
 	/**
 	 * Requête reçue : comptée, erreur précédente oubliée ; reconnexion attendue faite avant le
-	 * résultat.
+	 * résultat, dans une session au fuseau du serveur ($default_time_zone).
 	 */
 	private function receive( string $sql ): void {
 		$this->queries[]  = $sql;
@@ -570,6 +741,7 @@ final class FakeDumpWpdb {
 			$this->closed[]  = $this->dbh;
 			$this->dbh       = new \stdClass();
 			$this->session   = $this->reconnect[1];
+			$this->time_zone = $this->default_time_zone;
 			$this->reconnect = null;
 		}
 	}

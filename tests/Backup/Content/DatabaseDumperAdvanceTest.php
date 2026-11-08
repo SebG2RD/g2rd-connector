@@ -678,8 +678,9 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 
 	public function test_reconnexion_en_latin1_refusee_sans_rien_emettre(): void {
 		$liste         = [ 'wp_options' ];
-		$deux_tranches = function ( ?array $session ) use ( $liste ): array {
-			$this->wpdb = self::faux();
+		$deux_tranches = function ( ?array $session, string $fuseau_du_serveur = DatabaseDumper::TIME_ZONE ) use ( $liste ): array {
+			$this->wpdb                    = self::faux();
+			$this->wpdb->default_time_zone = $fuseau_du_serveur;
 			if ( null !== $session ) {
 				$this->wpdb->reconnect_on( 'WHERE (', $session );
 			}
@@ -727,10 +728,21 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 		self::assertNull( $refus->retry_after(), 'non réessayable' );
 		self::assertSame( $debut, $emis, 'rien du lot lu dans la session latin1' );
 
+		// Serveur réglé en UTC : la session rouverte l'est aussi.
 		[ $reconnecte, $aucun_refus, $sessions_apres ] = $deux_tranches( [ 'utf8mb4', 'utf8mb4', 'utf8mb4' ] );
 		self::assertNull( $aucun_refus );
-		self::assertSame( $reference, $reconnecte, 'session conforme : le lot rejoué sert' );
+		self::assertSame( $reference, $reconnecte, 'session conforme et en UTC : le lot rejoué sert' );
 		self::assertSame( $sessions + 1, $sessions_apres, 'session contrôlée de nouveau après la reconnexion' );
+
+		// Serveur réglé sur Paris (SYSTEM) : wpdb::db_connect() ne règle pas le fuseau, le lot rejoué a lu ses dates TIMESTAMP
+		// dans celui du serveur.
+		[ $hors_utc, $refus_fuseau ] = $deux_tranches( [ 'utf8mb4', 'utf8mb4', 'utf8mb4' ], 'SYSTEM' );
+		self::assertInstanceOf( BackupRefused::class, $refus_fuseau );
+		self::assertSame( BackupRefused::DB_READ_FAILED, $refus_fuseau->reason_code() );
+		self::assertNotNull( $refus_fuseau->retry_after(), 'réessayable : la tranche suivante repart d\'une session mise en UTC' );
+		self::assertStringContainsString( 'wp_options', $refus_fuseau->getMessage(), 'message qui nomme la table' );
+		self::assertSame( $debut, $hors_utc, 'rien du lot rejoué hors d\'UTC' );
+		self::assertSame( 'SYSTEM', $this->wpdb->time_zone, 'la session rouverte reprend son fuseau à la fin de l\'avance refusée' );
 	}
 
 	public function test_liste_des_tables_relue_de_l_etat(): void {
@@ -920,8 +932,9 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 	public function test_cle_enum_ou_set_lue_par_offset_chaque_ligne_une_fois(): void {
 		// ORDER BY trie un ENUM par son rang dans la définition (z, a, m) et un SET par sa valeur numérique (z = 1,
 		// a = 2, z,a = 3), WHERE (clé) > (…) les compare comme du texte : une reprise par la clé perdrait ou doublerait des lignes.
-		// Un FLOAT se lit arrondi (0.6999999 et 0.7 : « 0.7 »), que WHERE relit en un double qui n'est pas la valeur rangée :
-		// après « 0.1 », la ligne du curseur revient ; après « 0.7 », la ligne 0.7 (0.699999988) n'est pas rendue.
+		// Un FLOAT lu tel quel est arrondi (0.6999999 et 0.7 : « 0.7 »), que WHERE relit en un double qui n'est pas la valeur
+		// rangée : après « 0.1 », la ligne du curseur revient ; après « 0.7 », la ligne 0.7 (0.699999988) n'est pas rendue. Lu
+		// désormais par son texte exact (test_float_lu_par_son_texte_exact()), la clé FLOAT reste lue par offset.
 		$cas = [
 			'clé FLOAT (valeur lue arrondie)' => [
 				[ 'k' => 'float' ],
@@ -1027,7 +1040,8 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 			self::assertGreaterThan( 0, max( array_column( $curseurs, 'offset' ) ), $nom . ' : la reprise avance par offset' );
 			$lectures = array_values( array_filter( $this->wpdb->queries, static fn ( string $q ): bool => str_starts_with( $q, FakeDumpWpdb::ROWS_START ) ) );
 			self::assertNotSame( [], $lectures );
-			$cle = implode( ',', array_map( static fn ( string $c ): string => '`' . $c . '`', $pk ) );
+			// Colonnes de la clé qualifiées par la table : ORDER BY `k` prendrait l'alias d'un FLOAT lu `k`*1e0 AS `k`.
+			$cle = implode( ',', array_map( static fn ( string $c ): string => '`wp_ord`.`' . $c . '`', $pk ) );
 			foreach ( $lectures as $lecture ) {
 				self::assertStringNotContainsString( ' WHERE ', $lecture, $nom );
 				self::assertMatchesRegularExpression( '/ FROM `wp_ord` ORDER BY ' . preg_quote( $cle, '/' ) . ' LIMIT [1-9]\d* OFFSET \d+\z/', $lecture, $nom . ' : ordre déterministe (la clé est unique)' );
@@ -1143,5 +1157,314 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 		[ $sql, $faites ] = $this->dump( [ 'wp_toutgen' ], static fn (): bool => false );
 		self::assertStringContainsString( "INSERT INTO `wp_toutgen` () VALUES\n(),\n(),\n();\n", $sql );
 		self::assertSame( 3, $faites[0]['rows'] );
+	}
+
+	/**
+	 * Valeurs des lignes des INSERT de $table, dans l'ordre, sans leurs apostrophes (les valeurs de
+	 * ces tests n'ont ni virgule, ni apostrophe, ni \).
+	 *
+	 * @return list<list<string>>
+	 */
+	private static function tuples( string $sql, string $table ): array {
+		$lignes = [];
+		preg_match_all( '/^INSERT INTO `' . preg_quote( $table, '/' ) . '` \([^)]*\) VALUES\n(.*?);\n/ms', $sql, $inserts );
+		foreach ( $inserts[1] as $valeurs ) {
+			foreach ( explode( ",\n", $valeurs ) as $tuple ) {
+				$lignes[] = array_map( static fn ( string $v ): string => trim( $v, "'" ), explode( ',', substr( $tuple, 1, -1 ) ) );
+			}
+		}
+		return $lignes;
+	}
+
+	/** Float de simple précision que range une colonne FLOAT pour ce texte (INSERT de la restauration). */
+	private static function simple( string $texte ): float {
+		$valeur = unpack( 'g', pack( 'g', (float) $texte ) );
+		self::assertIsArray( $valeur );
+		return (float) $valeur[1];
+	}
+
+	public function test_float_lu_par_son_texte_exact(): void {
+		// Relevé du 08/11/2026 (MariaDB 10.11.19, MySQL 8.0.16 et 8.4.0) : lu tel quel, un FLOAT est le texte arrondi à
+		// 6 chiffres significatifs : 0.6999999 et 0.7 s'écrivaient toutes deux '0.7' (restauration de la clé en erreur 1062),
+		// 48.856613 devenait 48.8566 sans bruit. `c`*1e0 AS `c` rend le double exact du float rangé, que l'INSERT redonne.
+		$this->wpdb->tables['wp_float'] = [
+			'columns'        => [
+				'k' => 'float',
+				'a' => 'float',
+				'b' => 'float(7,4)',
+				'd' => 'double',
+				'v' => 'varchar(20)',
+			],
+			'pk'             => [ 'k' ],
+			'rows'           => [
+				[
+					'k' => '0.8',
+					'a' => '48.856613',
+					'b' => '48.8566',
+					'd' => '0.30000000000000004',
+					'v' => 'ligne-0.8',
+				],
+				[
+					'k' => '0.7',
+					'a' => '2.3522219',
+					'b' => '999.9999',
+					'd' => '1e-7',
+					'v' => 'ligne-0.7',
+				],
+				[
+					'k' => '0.6999999',
+					'a' => '0.6999999',
+					'b' => '-12.3456',
+					'd' => '1.7976931348623157e308',
+					'v' => 'ligne-0.6999999',
+				],
+				[
+					'k' => '0.1',
+					'a' => '3.4028234e38',
+					'b' => '0.0001',
+					'd' => '5e-324',
+					'v' => 'ligne-0.1',
+				],
+			],
+			'avg_row_length' => DatabaseDumper::BATCH_BYTES,
+		];
+		$sources = array_column( $this->wpdb->tables['wp_float']['rows'], null, 'v' );
+		$liste   = [ 'wp_float' ];
+
+		[ $entier ]                          = $this->dump( $liste, static fn (): bool => false );
+		$this->wpdb->queries                 = [];
+		[ $repris, $faites, $appels, $etats ] = $this->dump( $liste, static fn (): bool => true );
+
+		self::assertSame( $entier, $repris, 'reprise par lots identique au dump d\'une traite' );
+		self::assertGreaterThan( 2, $appels, 'plusieurs lots' );
+		self::assertSame( 4, $faites[0]['rows'] );
+		self::assertSame( array_fill( 0, count( $etats ), null ), array_column( $etats, 'after_hex' ), 'clé FLOAT : toujours lue par offset' );
+		$lignes = self::tuples( $repris, 'wp_float' );
+		self::assertCount( 4, $lignes );
+		$cles = array_column( $lignes, 0 );
+		self::assertSame( $cles, array_values( array_unique( $cles ) ), 'valeurs de la clé distinctes dans l\'INSERT (sinon : restauration en erreur 1062)' );
+		self::assertSame( [ 'ligne-0.1', 'ligne-0.6999999', 'ligne-0.7', 'ligne-0.8' ], array_column( $lignes, 4 ), 'ordre de la clé, chaque ligne une fois' );
+		foreach ( $lignes as [ $k, $a, $b, $d, $v ] ) {
+			self::assertSame( self::simple( $sources[ $v ]['k'] ), self::simple( $k ), $v . ' : la clé écrite (' . $k . ') redonne le float rangé' );
+			self::assertSame( self::simple( $sources[ $v ]['a'] ), self::simple( $a ), $v . ' : FLOAT hors de la clé (' . $a . ') redonne le float rangé' );
+			self::assertSame( self::simple( $sources[ $v ]['b'] ), self::simple( $b ), $v . ' : FLOAT(7,4) (' . $b . ') redonne le float rangé' );
+			self::assertSame( $sources[ $v ]['d'], $d, $v . ' : DOUBLE lu tel quel (texte exact)' );
+		}
+		self::assertStringNotContainsString( "'48.8566'", $repris, '48.856613 n\'est pas arrondi' );
+		$lectures = array_values( array_filter( $this->wpdb->queries, static fn ( string $q ): bool => str_starts_with( $q, FakeDumpWpdb::ROWS_START ) ) );
+		self::assertNotSame( [], $lectures );
+		foreach ( $lectures as $lecture ) {
+			self::assertMatchesRegularExpression( '/\ASELECT `k`\*1e0 AS `k`,`a`\*1e0 AS `a`,`b`\*1e0 AS `b`,`d`,`v` FROM `wp_float` ORDER BY `wp_float`.`k` LIMIT [1-9]\d* OFFSET \d+\z/', $lecture, 'FLOAT sous son nom, DOUBLE tel quel, ORDER BY la colonne qualifiée' );
+		}
+
+		// FLOAT hors d'une clé qui sert à la reprise (type en capitales) : la table se lit par la clé, ORDER BY et WHERE nomment
+		// la colonne de la clé elle-même.
+		$this->wpdb->tables['wp_lieux'] = [
+			'columns'        => [
+				'id'  => 'bigint(20)',
+				'lat' => 'FLOAT',
+				'lng' => 'float unsigned',
+			],
+			'pk'             => [ 'id' ],
+			'rows'           => [
+				[
+					'id'  => '3',
+					'lat' => '43.604652',
+					'lng' => '1.444209',
+				],
+				[
+					'id'  => '1',
+					'lat' => '48.856613',
+					'lng' => '2.3522219',
+				],
+				[
+					'id'  => '2',
+					'lat' => '45.764042',
+					'lng' => '4.835659',
+				],
+			],
+			'avg_row_length' => DatabaseDumper::BATCH_BYTES,
+		];
+		$sources             = array_column( $this->wpdb->tables['wp_lieux']['rows'], null, 'id' );
+		$this->wpdb->queries = [];
+		[ $lieux, , , $etats ] = $this->dump( [ 'wp_lieux' ], static fn (): bool => true );
+
+		self::assertSame( [ bin2hex( '1' ) ], $etats[1]['after_hex'] ?? null, 'reprise par la clé' );
+		$lignes = self::tuples( $lieux, 'wp_lieux' );
+		self::assertSame( [ '1', '2', '3' ], array_column( $lignes, 0 ) );
+		foreach ( $lignes as [ $id, $lat, $lng ] ) {
+			self::assertSame( self::simple( $sources[ $id ]['lat'] ), self::simple( $lat ), $id . ' : latitude exacte (' . $lat . ')' );
+			self::assertSame( self::simple( $sources[ $id ]['lng'] ), self::simple( $lng ), $id . ' : longitude exacte (' . $lng . ')' );
+		}
+		$lectures = array_values( array_filter( $this->wpdb->queries, static fn ( string $q ): bool => str_starts_with( $q, FakeDumpWpdb::ROWS_START ) ) );
+		self::assertGreaterThan( 1, count( $lectures ) );
+		self::assertSame( 'SELECT `id`,`lat`*1e0 AS `lat`,`lng`*1e0 AS `lng` FROM `wp_lieux` ORDER BY `id` LIMIT 1', $lectures[0] );
+		self::assertStringStartsWith( 'SELECT `id`,`lat`*1e0 AS `lat`,`lng`*1e0 AS `lng` FROM `wp_lieux` WHERE (`id`) > (_utf8mb4 0x31) ORDER BY `id` LIMIT ', $lectures[1] );
+	}
+
+	/**
+	 * Table du faux à clé TIMESTAMP : quatre instants (UTC) autour du passage à l'heure d'hiver à
+	 * Paris, le 25/10/2026 (03:00 CEST = 01:00 UTC devient 02:00 CET) ; 00:30 et 01:30 UTC se
+	 * lisent toutes deux « 02:30:00 » dans le fuseau SYSTEM d'un serveur réglé sur Paris. m :
+	 * TIMESTAMP hors de la clé, à l'heure ambiguë pour deux lignes.
+	 */
+	private function table_timestamp(): void {
+		$this->wpdb->tables['wp_ts'] = [
+			'columns'        => [
+				'k' => 'timestamp',
+				'v' => 'varchar(10)',
+				'm' => 'timestamp',
+			],
+			'pk'             => [ 'k' ],
+			'rows'           => [
+				[
+					'k' => '2026-10-25 02:00:00',
+					'v' => 'd',
+					'm' => '2026-03-29 01:30:00',
+				],
+				[
+					'k' => '2026-10-25 00:30:00',
+					'v' => 'b',
+					'm' => '2026-10-25 00:30:00',
+				],
+				[
+					'k' => '2026-10-25 01:30:00',
+					'v' => 'c',
+					'm' => null,
+				],
+				[
+					'k' => '2026-10-25 00:00:00',
+					'v' => 'a',
+					'm' => '2026-10-25 01:30:00',
+				],
+			],
+			'avg_row_length' => DatabaseDumper::BATCH_BYTES,
+		];
+	}
+
+	public function test_session_en_utc_pendant_chaque_avance_cle_timestamp_au_changement_d_heure(): void {
+		// Essai du 08/11/2026 (MariaDB 10.11.19 et MySQL 8.4.0, fuseau SYSTEM réglé sur Paris) : dans le fuseau du serveur, la
+		// reprise après « 02:30:00 » perd la ligne de 01:30 UTC, et la restauration échoue (erreur 1062). En UTC, aucune heure
+		// n'est ambiguë ; l'en-tête l'annonce à la restauration.
+		$this->table_timestamp();
+		$liste    = [ 'wp_ts' ];
+		$sql      = '';
+		$emit     = static function ( string $morceau ) use ( &$sql ): void {
+			$sql .= $morceau;
+		};
+		$curseur  = null;
+		$annonces = 0;
+		$avances  = 0;
+		do {
+			$this->wpdb->queries = [];
+			$etape               = $this->dumper()->advance( $liste, $curseur, $emit, static fn (): bool => true );
+			$annonces           += array_sum( array_column( $etape['tables_done'], 'rows' ) );
+			$curseur             = self::par_l_etat( $etape['cursor'] );
+			++$avances;
+
+			$requetes = $this->wpdb->queries;
+			$utc      = array_search( FakeDumpWpdb::UTC_QUERY, $requetes, true );
+			self::assertIsInt( $utc, 'avance ' . $avances . ' : session mise en UTC' );
+			foreach ( $requetes as $rang => $requete ) {
+				if ( str_starts_with( $requete, 'SHOW ' ) || str_starts_with( $requete, FakeDumpWpdb::ROWS_START ) ) {
+					self::assertGreaterThan( $utc, $rang, 'avance ' . $avances . ' : aucune lecture des tables avant le passage en UTC : ' . $requete );
+				}
+			}
+			self::assertSame( "SET time_zone = 'SYSTEM'", end( $requetes ), 'avance ' . $avances . ' : fuseau rendu en dernier' );
+			self::assertSame( 'SYSTEM', $this->wpdb->time_zone, 'avance ' . $avances . ' : la session reprend son fuseau' );
+		} while ( null !== $curseur && $avances < 30 );
+
+		self::assertNull( $curseur, 'dump fini' );
+		self::assertGreaterThan( 3, $avances, 'lots d\'une ligne au départ' );
+		self::assertStringStartsWith( "-- G2RD backup dump v1\n/*!40101 SET NAMES utf8mb4 */;\n/*!40103 SET TIME_ZONE='+00:00' */;\nSET FOREIGN_KEY_CHECKS=0;\n", $sql, 'fuseau des valeurs annoncé à la restauration' );
+		self::assertSame( 4, $annonces, 'toutes les lignes annoncées' );
+		$lignes = self::tuples( $sql, 'wp_ts' );
+		self::assertSame(
+			[
+				[ '2026-10-25 00:00:00', 'a', '2026-10-25 01:30:00' ],
+				[ '2026-10-25 00:30:00', 'b', '2026-10-25 00:30:00' ],
+				[ '2026-10-25 01:30:00', 'c', 'NULL' ],
+				[ '2026-10-25 02:00:00', 'd', '2026-03-29 01:30:00' ],
+			],
+			$lignes,
+			'chaque instant une fois, écrit en UTC, clé comme hors de la clé'
+		);
+	}
+
+	public function test_fuseau_rendu_apres_un_refus_et_jamais_change_s_il_est_deja_utc(): void {
+		$this->table_timestamp();
+		$this->wpdb->fails_on = 'wp_ts';
+		$refus                = self::refus(
+			fn () => $this->dumper()->advance(
+				[ 'wp_ts' ],
+				null,
+				static function ( string $morceau ): void {
+					unset( $morceau );
+				},
+				static fn (): bool => false
+			)
+		);
+
+		self::assertSame( BackupRefused::DB_READ_FAILED, $refus->reason_code() );
+		self::assertSame( 'SYSTEM', $this->wpdb->time_zone, 'fuseau rendu après le refus' );
+		self::assertSame( "SET time_zone = 'SYSTEM'", end( $this->wpdb->queries ) );
+
+		// Session déjà en UTC : ni SET ni retour.
+		$this->wpdb->fails_on  = null;
+		$this->wpdb->time_zone = DatabaseDumper::TIME_ZONE;
+		$this->wpdb->queries   = [];
+		[ $sql ]               = $this->dump( [ 'wp_ts' ], static fn (): bool => false );
+
+		self::assertStringContainsString( "('2026-10-25 01:30:00','c',NULL)", $sql );
+		self::assertSame( [], array_values( array_filter( $this->wpdb->queries, static fn ( string $q ): bool => str_starts_with( $q, 'SET ' ) ) ), 'aucun SET' );
+		self::assertSame( DatabaseDumper::TIME_ZONE, $this->wpdb->time_zone );
+
+		// Même instance pour deux avances : le fuseau rendu par la première ne resert pas à la seconde, commencée en UTC.
+		$dumper                = $this->dumper();
+		$rien                  = static function ( string $morceau ): void {
+			unset( $morceau );
+		};
+		$this->wpdb->time_zone = 'SYSTEM';
+		$curseur               = self::par_l_etat( $dumper->advance( [ 'wp_ts' ], null, $rien, static fn (): bool => true )['cursor'] );
+		self::assertSame( 'SYSTEM', $this->wpdb->time_zone );
+		$this->wpdb->time_zone = DatabaseDumper::TIME_ZONE;
+		$this->wpdb->queries   = [];
+		$dumper->advance( [ 'wp_ts' ], $curseur, $rien, static fn (): bool => true );
+		self::assertSame( [], array_values( array_filter( $this->wpdb->queries, static fn ( string $q ): bool => str_starts_with( $q, 'SET ' ) ) ), 'seconde avance : aucun SET' );
+		self::assertSame( DatabaseDumper::TIME_ZONE, $this->wpdb->time_zone, 'seconde avance : session laissée en UTC' );
+	}
+
+	public function test_fuseau_hors_du_motif_jamais_reecrit(): void {
+		// Valeur de @@session.time_zone qui contiendrait une apostrophe : la réécrire entre apostrophes ferait exécuter la suite.
+		$this->table_timestamp();
+		$this->wpdb->time_zone = "Europe/Paris'; DROP TABLE wp_ts; --";
+		[ $sql ]               = $this->dump( [ 'wp_ts' ], static fn (): bool => false );
+
+		self::assertStringContainsString( "('2026-10-25 01:30:00','c',NULL)", $sql, 'dump lu en UTC' );
+		self::assertSame( [ FakeDumpWpdb::UTC_QUERY ], array_values( array_filter( $this->wpdb->queries, static fn ( string $q ): bool => str_starts_with( $q, 'SET ' ) ) ), 'seul le passage en UTC, jamais la valeur lue' );
+		self::assertSame( DatabaseDumper::TIME_ZONE, $this->wpdb->time_zone, 'session laissée en UTC' );
+	}
+
+	public function test_session_restee_hors_d_utc_refusee_avant_toute_lecture(): void {
+		$this->table_timestamp();
+		$this->wpdb->zone_locked = true;
+		$emis                    = '';
+		$refus                   = self::refus(
+			fn () => $this->dumper()->advance(
+				[ 'wp_ts' ],
+				null,
+				static function ( string $morceau ) use ( &$emis ): void {
+					$emis .= $morceau;
+				},
+				static fn (): bool => false
+			)
+		);
+
+		self::assertSame( BackupRefused::DB_READ_FAILED, $refus->reason_code() );
+		self::assertNotNull( $refus->retry_after(), 'réessayable' );
+		self::assertSame( '', $emis, 'rien émis, en-tête compris' );
+		foreach ( $this->wpdb->queries as $requete ) {
+			self::assertFalse( str_starts_with( $requete, 'SHOW ' ) || str_starts_with( $requete, FakeDumpWpdb::ROWS_START ), 'aucune lecture des tables : ' . $requete );
+		}
 	}
 }
