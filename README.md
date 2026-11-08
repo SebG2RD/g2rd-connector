@@ -45,7 +45,9 @@ g2rd-connector/
 │   ├── Backup/                 sauvegardes chiffrées : bibliothèque (phase 2), lots 4-A (état, porte des mises à jour, parcours) et 4-B (contenu, segment, index), éteintes par défaut
 │   │   ├── Crypto/             AES-256-GCM, HKDF, X25519 et Ed25519 (sodium ou sodium_compat), autotest
 │   │   ├── Format/             format G2BK v1 : en-tête, HPKE, segments, index signé, certificat
-│   │   ├── Commands/           refus à code stable et délai (BackupRefused)
+│   │   ├── Keys/               clé de signature du site (créée à la demande) et clé de site reçue du service de clés
+│   │   ├── Commands/           commandes backup_* : refus à code stable et délai (BackupRefused), exécution des tranches
+│   │   ├── Snapshot/           bloc backup du /snapshot (clé publique de signature, état, dernière issue ; jamais de clé secrète ni de nom de fichier)
 │   │   ├── State/              état de la sauvegarde (option du site principal, écritures conditionnelles)
 │   │   ├── Gate/               porte des mises à jour, témoin « mise à jour en cours », verrou des tranches, second filet
 │   │   ├── Files/              parcours reprenable de la racine du site (FileWalker)
@@ -923,22 +925,24 @@ chacun s'additionne.
 
   Les champs JSON sont inchangés.
 
-## Sauvegardes chiffrées (préparation, éteintes par défaut)
+## Sauvegardes chiffrées (éteintes par défaut)
 
-`includes/Backup/` prépare les sauvegardes chiffrées de bout en bout. À la phase 2 du chantier, c'était
-une bibliothèque **que rien n'appelait**. Aujourd'hui encore, aucune commande `backup_*` n'existe
-(`CommandExecutor::ALLOWED` et `SIGNED_ONLY` sont inchangées), aucune route ni tâche planifiée
-ajoutée, aucun appel réseau, et rien ne s'exécute au chargement de ses fichiers. Rien n'est envoyé et rien
-ne change pour un site : `readme.txt` n'en dit donc rien. `tests/Backup/NoWiringTest.php` le
-contrôle sur le code. Les commandes `backup_*` et la capacité `encrypted_backup` viendront en
-phase 4.
+`includes/Backup/` réalise les sauvegardes chiffrées de bout en bout : base et fichiers du site, chiffrés
+sur le serveur avant d'en sortir (AES-256-GCM, une clé neuve par segment, scellée pour le service de clés de
+G2RD), envoyés vers les URL de stockage que le manager fournit pour chaque sauvegarde. **Dormant par défaut** :
+tant que la case « Sauvegardes chiffrées » des réglages est décochée, rien n'est créé, rien n'est envoyé, les
+commandes `backup_*` sont refusées (`backup_disabled`) et le bloc `backup` du `/snapshot` reste au repos.
+La porte des mises à jour est alors transparente (case décochée : aucune attente, aucun témoin écrit).
 
-Depuis le lot 4-A de la phase 4, le module compte aussi `Backup/State/` (état de la sauvegarde),
-`Backup/Gate/` (porte des mises à jour, témoin, verrou, second filet), `Backup/Files/` (parcours
-reprenable) et `Backup/Commands/` (refus à code stable). Seuls quatre fichiers le citent hors de
-`includes/Backup/` (`CommandExecutor`, `CommandRunsController`, `AfterResponseRunner`, `Plugin`) :
-c'est la liste fermée de `tests/Backup/NoWiringTest.php`. Porte des mises à jour transparente tant
-que les sauvegardes sont éteintes (case des réglages décochée).
+Le module compte `Backup/Keys/` (clé de signature du site, créée à la demande ; clé de site reçue du service de
+clés), `Backup/State/` (état de la sauvegarde), `Backup/Gate/` (porte des mises à jour, témoin, verrou, second
+filet), `Backup/Files/` (parcours reprenable), `Backup/Commands/` (commandes `backup_*`, refus à code stable) et
+`Backup/Snapshot/` (bloc `backup` du `/snapshot` : clé publique de signature, état, issue de la dernière
+sauvegarde ; jamais de clé secrète ni de nom de fichier). Seuls les fichiers de la liste fermée de
+`tests/Backup/NoWiringTest.php` le citent hors de `includes/Backup/` (dont `uninstall.php`, qui retire à la
+désinstallation les options `g2rd_backup_*` et les fichiers que le module a créés dans
+`wp-content/g2rd-backups`, sans jamais toucher un fichier étranger). Données envoyées : voir
+« External service » dans `readme.txt`.
 
 Le lot 4-B ajoute le contenu d'un segment, toujours sans appelant hors de `includes/Backup/` :
 `Backup/Payload/` (charge utile G2P1), `Backup/Content/` (dump de la base, archive des fichiers, journal du
