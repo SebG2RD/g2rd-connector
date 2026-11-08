@@ -948,6 +948,14 @@ ailleurs que scellée dans son en-tête ; le producteur ne reçoit que la clé p
 (débit, mémoire, dump de 100 000 lignes et de 300 lignes de 2 Mio sous 128 Mo) :
 `docs/superpowers/mesures/2026-11-08-sauvegardes-module/`.
 
+Multisite : une sauvegarde couvre toute l'installation (tables `base_prefix` de tous les blogs, fichiers
+d'`ABSPATH`, clés et état rangés sur le site principal). Seul le site principal du réseau peut donc
+l'allumer, même règle que la lecture du journal PHP partagé : sur un site secondaire
+(`BackupSwitch::secondary_site()`), les cases des sauvegardes ne sont pas enregistrées par le panneau,
+la capacité `encrypted_backup` n'est pas annoncée, les quatre commandes `backup_*` sont refusées
+(`backup_disabled`) sans rien lire ni écrire, et le bloc `backup` du snapshot reste au repos (aucune
+clé créée, ni état ni issue du réseau).
+
 - `Backup/Crypto/` : les primitives. AES-256-GCM par OpenSSL (étiquette de 16 octets imposée),
   HKDF-SHA256, X25519 et Ed25519 par l'extension sodium ou, sans elle, par la copie de
   `sodium_compat` que livre WordPress (`wp-includes/sodium_compat`), choisie par

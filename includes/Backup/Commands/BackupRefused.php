@@ -88,6 +88,13 @@ final class BackupRefused extends \RuntimeException {
 	 */
 	public const DETAIL_KEY = 'key';
 
+	/**
+	 * Détail de DISABLED quand la commande arrive sur un site secondaire d'un réseau multisite (seul
+	 * le site principal sauvegarde le réseau, cf. BackupSwitch) : seule la phrase change, le code
+	 * reste backup_disabled.
+	 */
+	public const DETAIL_SECONDARY_SITE = 'secondary_site';
+
 	/** Tous les codes, dans l'ordre du contrat. */
 	public const CODES = [
 		self::SLICE_RUNNING,
@@ -144,8 +151,8 @@ final class BackupRefused extends \RuntimeException {
 	/**
 	 * @param string      $reason_code Un des codes de CODES.
 	 * @param int|null    $retry_after Délai conseillé ; ignoré pour un refus non réessayable.
-	 * @param string      $detail      Raison d'une interruption, nom de table, taille, ou DETAIL_KEY
-	 *                                 (marqueur fixe) : jamais la valeur d'une clé.
+	 * @param string      $detail      Raison d'une interruption, nom de table, taille, DETAIL_KEY ou
+	 *                                 DETAIL_SECONDARY_SITE (marqueurs fixes) : jamais la valeur d'une clé.
 	 * @param string|null $stage       Étape d'un autotest en échec (STAGES) ; ignorée pour un autre code.
 	 * @throws \InvalidArgumentException Code inconnu : erreur de programmation.
 	 */
@@ -232,7 +239,9 @@ final class BackupRefused extends \RuntimeException {
 				__( 'La sauvegarde n’a pas pu lire la table « %s » de la base de données du site. Ce qui était déjà copié est gardé ; la tranche sera refaite. Cause probable : base momentanément indisponible, ou table endommagée. Action : aucune si cela ne se répète pas ; sinon, faire réparer la base par l’hébergeur.', 'g2rd-connector' ),
 				'' === $detail ? '?' : $detail
 			),
-			self::DISABLED => __( 'La sauvegarde n’a pas été lancée : les sauvegardes chiffrées sont désactivées sur ce site. Rien n’a été modifié. Cause probable : case « Sauvegardes chiffrées » décochée dans les réglages du connecteur, ou constante G2RD_CONNECTOR_DISABLE_BACKUP posée dans wp-config.php. Action : cocher la case dans les réglages du connecteur G2RD (ou retirer la constante), puis relancer.', 'g2rd-connector' ),
+			self::DISABLED => self::DETAIL_SECONDARY_SITE === $detail
+				? __( 'La commande de sauvegarde a été refusée : ce site est un site secondaire d’un réseau multisite. Rien n’a été modifié. Cause : une sauvegarde couvre tout le réseau (la base de données de tous ses sites et les fichiers de WordPress), seul le site principal du réseau peut donc la lancer ou la piloter. Action : enrôler le site principal du réseau dans G2RD WP Manager, puis allumer les sauvegardes dans les réglages du connecteur de ce site principal.', 'g2rd-connector' )
+				: __( 'La sauvegarde n’a pas été lancée : les sauvegardes chiffrées sont désactivées sur ce site. Rien n’a été modifié. Cause probable : case « Sauvegardes chiffrées » décochée dans les réglages du connecteur, ou constante G2RD_CONNECTOR_DISABLE_BACKUP posée dans wp-config.php. Action : cocher la case dans les réglages du connecteur G2RD (ou retirer la constante), puis relancer.', 'g2rd-connector' ),
 			self::NO_SITE_KEY => __( 'La sauvegarde n’a pas été lancée : ce site n’a pas encore reçu sa clé de chiffrement. Rien n’a été modifié. Cause probable : activation des sauvegardes pas encore terminée par la plateforme. Action : relancer l’activation des sauvegardes de ce site depuis la plateforme.', 'g2rd-connector' ),
 			self::KEY_VERSION_MISMATCH => __( 'La sauvegarde n’a pas été lancée : la clé de chiffrement demandée n’est pas celle que le site détient. Rien n’a été modifié. Cause probable : clé renouvelée sur la plateforme sans que le site ait reçu la nouvelle. Action : renvoyer la clé au site depuis la plateforme, puis relancer.', 'g2rd-connector' ),
 			self::CERTIFICATE_INVALID => __( 'La clé de chiffrement reçue a été refusée : sa signature par le service de clés G2RD est absente, fausse, ou faite par une clé que ce connecteur ne connaît pas. Aucune clé n’a été enregistrée. Cause probable : connecteur trop ancien pour le service de clés, ou clé qui ne vient pas du service de clés G2RD. Action : mettre le connecteur à jour, puis renvoyer la clé ; si le refus se répète, le signaler au support G2RD.', 'g2rd-connector' ),

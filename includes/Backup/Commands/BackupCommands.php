@@ -6,7 +6,8 @@
  * tranche. backup_set_key exige les sauvegardes allumées et aucune sauvegarde en cours (une clé
  * changée au milieu d'une sauvegarde mêlerait deux versions de clé) ; un état illisible ne passe
  * jamais pour « aucune sauvegarde en cours » (backup_store_unavailable, réessayable). backup_abort
- * reste permis sauvegardes éteintes, pour nettoyer. La file des commandes ne les exécute pas avant
+ * reste permis sauvegardes éteintes, pour nettoyer. Sur un site secondaire d'un réseau multisite,
+ * les quatre sont refusées (backup_disabled) sans effet. La file des commandes ne les exécute pas avant
  * E8 (lot 5-D) : refus `backup_queue_unsupported` (Cron\HeartbeatJob).
  *
  * @package G2RD\Connector
@@ -37,6 +38,12 @@ final class BackupCommands {
 	 * @throws BackupRefused Refus à code stable (CommandExecutor le rend avec error_code et retry_after).
 	 */
 	public static function run( string $command, array $payload ): array {
+		// Site secondaire d'un réseau : aucune des quatre commandes, pas même backup_abort, n'y agit
+		// sur la sauvegarde du réseau (état rangé sur le site principal). Refus avant le verrou, sans
+		// rien lire ni écrire (cf. BackupSwitch::secondary_site()).
+		if ( BackupSwitch::secondary_site() ) {
+			throw new BackupRefused( BackupRefused::DISABLED, null, BackupRefused::DETAIL_SECONDARY_SITE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+		}
 		$now = time();
 
 		return BackupLock::for_slice(

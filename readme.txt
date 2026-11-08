@@ -81,6 +81,10 @@ Disconnect from the plugin settings (button **Disconnect from manager**), or rev
 
 All plugin options (`g2rd_connector_settings`, restore point index, signature state) are removed, as are the records of the commands run in the background (`g2rd_cmdrun_*` options, finished or not, on every site of a multisite network) and the PHP errors kept for the manager (`g2rd_php_errors`, `g2rd_php_errors_log_cursor`, on every site of a multisite network); the cron jobs are unscheduled, the restore point archives the plugin created in `wp-content/g2rd-snapshots/` are deleted (nothing else in that folder is touched), and the site stops sending anything. The manager-side record is preserved until you delete it from the dashboard.
 
+= Who can turn on encrypted backups on a multisite network? =
+
+Since 1.17, only the main site of the network. A backup covers the whole installation (the database tables of every site of the network and the WordPress files), so on any other site of the network the setting has no effect: it is not saved from the connector settings panel, the site does not offer backups to the manager, every backup command is refused without changing anything, and the `/snapshot` answer reports backups as off (no signing key is created there, and nothing about the network's backups is sent).
+
 == Screenshots ==
 
 1. Standalone settings page with manager URL, invitation token and feature toggles.

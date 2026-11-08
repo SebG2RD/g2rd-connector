@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Tests\Backup\Commands;
 
+use Brain\Monkey\Functions;
 use G2RD\Connector\Backup\Commands\BackupCommands;
 use G2RD\Connector\Backup\Run\BackupJob;
 use G2RD\Connector\Backup\State\BackupState;
@@ -11,6 +12,8 @@ use G2RD\Connector\CommandRuns\AsyncCommands;
 use G2RD\Connector\Commands\CommandExecutor;
 use G2RD\Connector\Cron\HeartbeatJob;
 use G2RD\Connector\Tests\Backup\BackupTestCase;
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 
 final class BackupCommandsTest extends BackupTestCase {
 
@@ -78,6 +81,37 @@ final class BackupCommandsTest extends BackupTestCase {
 		$apres_une_sauvegarde = CommandExecutor::run( 'backup_set_key', [ 'version' => 1 ] );
 		self::assertSame( 'backup_invalid_payload', $apres_une_sauvegarde['error_code'] ?? null, 'au repos après une sauvegarde : rien ne bloque' );
 		self::assertSame( [], $this->wpdb->held_here, 'verrou rendu' );
+	}
+
+	/**
+	 * Site secondaire d'un réseau, case cochée, sauvegarde du réseau en cours : aucune des quatre
+	 * commandes n'y agit, pas même backup_step ou backup_abort avec le bon identifiant (sinon le blog
+	 * clôturerait la sauvegarde du site principal) ; refus avant le verrou. Processus séparé, car le
+	 * test simule is_main_site() (cf. BackupSwitchTest).
+	 */
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_site_secondaire_les_quatre_commandes_refusees_sans_effet(): void {
+		Functions\when( 'is_multisite' )->justReturn( true );
+		Functions\when( 'is_main_site' )->justReturn( false );
+		$this->settings(
+			[
+				'backup_enabled'          => true,
+				'remote_commands_enabled' => true,
+			]
+		);
+		$this->put_state( [ 'phase' => BackupState::UPLOAD, 'backup_id' => str_repeat( 'b', 32 ) ] );
+		$avant = $this->wpdb->tables['wp_options'][ BackupState::OPTION ];
+
+		foreach ( BackupCommands::NAMES as $commande ) {
+			$issue = CommandExecutor::run( $commande, [ 'backup_id' => str_repeat( 'b', 32 ), 'version' => 1 ] );
+
+			self::assertSame( 'failed', $issue['status'] ?? null, $commande );
+			self::assertSame( 'backup_disabled', $issue['error_code'] ?? null, $commande );
+			self::assertStringContainsString( 'site secondaire d’un réseau multisite', (string) ( $issue['error'] ?? '' ), $commande );
+			self::assertSame( $avant, $this->wpdb->tables['wp_options'][ BackupState::OPTION ], 'état du réseau inchangé : ' . $commande );
+			self::assertSame( [], $this->wpdb->held_here, 'aucun verrou : ' . $commande );
+		}
 	}
 
 	public function test_arret_permis_sauvegardes_eteintes(): void {

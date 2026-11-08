@@ -4,7 +4,8 @@
  * snapshot-backup-v1.json) : interrupteur, capacité, moteur sodium, clé publique de signature et son
  * empreinte de comparaison, clé de site reçue, état de la sauvegarde en cours, issue de la dernière.
  * Lecture seule, sauf la création de la clé de signature quand la case est cochée et qu'elle manque
- * (choix n° 11). Ne lève jamais : une lecture impossible donne les valeurs de repos.
+ * (choix n° 11). Ne lève jamais : une lecture impossible donne les valeurs de repos. Sur un site
+ * secondaire d'un réseau multisite, valeurs de repos aussi (cf. BackupSwitch::secondary_site()).
  *
  * @package G2RD\Connector
  */
@@ -72,6 +73,18 @@ final class BackupBlock {
 	 * @return array<string, mixed>
 	 */
 	private static function read( int $now, Sodium $sodium ): array {
+		if ( BackupSwitch::secondary_site() ) {
+			// Site secondaire d'un réseau : la sauvegarde, ses clés et son état sont ceux du réseau,
+			// rangés sur le site principal (BackupSwitch). Rien n'en est lu ici, aucune clé n'est
+			// créée : valeurs de repos, sauf le moteur et la constante, qui décrivent ce serveur.
+			return array_replace(
+				self::at_rest(),
+				[
+					'disabled_by_constant' => BackupSwitch::disabled_by_constant(),
+					'engine'               => self::engine( $sodium ),
+				]
+			);
+		}
 		$enabled = BackupSwitch::enabled();
 		$public  = SigningKey::public_key();
 		if ( $enabled && null === $public ) {
@@ -81,15 +94,11 @@ final class BackupBlock {
 				$public = null;
 			}
 		}
-		try {
-			$engine = $sodium->backend();
-		} catch ( \Throwable ) {
-			$engine = Sodium::BACKEND_NONE;
-		}
-		$key   = SiteKeyStore::current();
-		$state = BackupState::peek() ?? BackupState::idle();
-		$slice = is_array( $state['slice'] ?? null ) ? $state['slice'] : [];
-		$last  = is_array( $state['last'] ?? null ) ? $state['last'] : null;
+		$engine = self::engine( $sodium );
+		$key    = SiteKeyStore::current();
+		$state  = BackupState::peek() ?? BackupState::idle();
+		$slice  = is_array( $state['slice'] ?? null ) ? $state['slice'] : [];
+		$last   = is_array( $state['last'] ?? null ) ? $state['last'] : null;
 
 		return [
 			'version'              => self::VERSION,
@@ -123,5 +132,14 @@ final class BackupBlock {
 				'totals'    => is_array( $last['totals'] ?? null ) ? $last['totals'] : null,
 			],
 		];
+	}
+
+	/** Moteur sodium de ce serveur ; une lecture qui lève donne « aucun ». */
+	private static function engine( Sodium $sodium ): string {
+		try {
+			return $sodium->backend();
+		} catch ( \Throwable ) {
+			return Sodium::BACKEND_NONE;
+		}
 	}
 }

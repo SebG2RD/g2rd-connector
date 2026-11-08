@@ -24,6 +24,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Rest;
 
+use G2RD\Connector\Backup\BackupSwitch;
 use G2RD\Connector\BootData;
 use G2RD\Connector\Cron\HeartbeatJob;
 use G2RD\Connector\Outbound\ManagerClient;
@@ -68,7 +69,8 @@ final class AdminController {
 				'required' => false,
 				'type'     => 'boolean',
 			],
-			// Sauvegardes chiffrées (phase 4) : décochée par défaut.
+			// Sauvegardes chiffrées (phase 4) : décochée par défaut ; ignorée, comme la suivante, sur
+			// un site secondaire d'un réseau (cf. collect_settings()).
 			'backup_enabled'          => [
 				'required' => false,
 				'type'     => 'boolean',
@@ -220,6 +222,12 @@ final class AdminController {
 			if ( null !== $value ) {
 				$settings[ $flag ] = (bool) $value;
 			}
+		}
+		// Sauvegardes : une sauvegarde couvre tout le réseau, seul le site principal les règle
+		// (BackupSwitch::secondary_site()) ; l'administrateur d'un site secondaire n'y touche pas.
+		$backup_flags = array_intersect_key( $settings, array_flip( BackupSwitch::NETWORK_SETTINGS ) );
+		if ( [] !== $backup_flags && BackupSwitch::secondary_site() ) {
+			$settings = array_diff_key( $settings, $backup_flags );
 		}
 		// Relevé décoché : la lecture du journal suit (cf. Settings::sanitize()).
 		if ( false === ( $settings['php_errors_enabled'] ?? null ) ) {
