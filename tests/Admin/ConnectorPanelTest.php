@@ -554,11 +554,31 @@ final class ConnectorPanelTest extends TestCase {
 		self::assertStringContainsString( 'backup_enabled: d.backupEnabled,', $panneau, 'valeur enregistrée envoyée telle quelle' );
 		preg_match( "/if \\( d\\.backup\\.disabledByConstant \\) \\{\\s*return '([^']*)';/", $panneau, $phrase );
 		self::assertArrayHasKey( 1, $phrase, 'Phrase de la constante introuvable dans backupDescription().' );
+		self::assertStringContainsString( ' Cause probable : ', $phrase[1], 'la phrase dit la cause probable' );
 		self::assertStringContainsString( ' Action : ', $phrase[1], 'la phrase dit quoi faire' );
-		self::assertStringContainsString( 'si elle était cochée avant la constante, les sauvegardes reprennent dès ce retrait.', $phrase[1], 'la phrase dit ce que devient la valeur enregistrée' );
+		self::assertStringContainsString( 'les sauvegardes reprendront si la case était cochée.', $phrase[1], 'la phrase dit ce que devient la valeur enregistrée' );
+		self::assertStringNotContainsString( 'peut sauvegarder', $phrase[1], 'constante posée : rien ne dit que le manager peut sauvegarder' );
+		// Courte : 35 mots au plus, rien de technique au-delà du nom de la constante et de wp-config.php.
+		self::assertLessThanOrEqual( 35, preg_match_all( '/[\p{L}\p{N}_]+(?:[’\'.\-][\p{L}\p{N}_]+)*/u', $phrase[1] ), 'phrase de la constante trop longue' );
+		preg_match_all( '/\b[A-Z0-9]+(?:_[A-Z0-9]+)+\b|[\w-]+\.php\b/u', $phrase[1], $techniques );
+		self::assertSame( [ 'G2RD_CONNECTOR_DISABLE_BACKUP', 'wp-config.php' ], array_values( array_unique( $techniques[0] ) ), 'seuls termes techniques : la constante et wp-config.php' );
 		self::assertStringContainsString( "esc_html__( '" . $phrase[1] . "', 'g2rd-connector' )", self::source( 'includes/Admin/Page.php' ), 'même phrase dans la page de secours' );
 		self::assertSame( 1, substr_count( $panneau, 'd.backup.fingerprint' ), 'empreinte dans une seule branche' );
 		self::assertMatchesRegularExpression( '/if \( d\.backup\.disabledByConstant \).*if \( d\.backup\.lockMessage \).*if \( d\.backupEnabled \) \{\s*return `[^`]*d\.backup\.fingerprint/s', $panneau, 'empreinte seulement case cochée, sans constante ni verrou' );
+		// Clé pas encore créée : « créée à l'enregistrement », même règle dans la page de secours.
+		self::assertStringContainsString( "d.backup.fingerprint ?? 'créée à l’enregistrement'", $panneau );
+		self::assertStringContainsString( 'G2RD : créée à l’enregistrement.', self::source( 'includes/Admin/Page.php' ) );
+	}
+
+	/**
+	 * Sauvegardes chiffrées et IPv4 vers le stockage, au modèle du relevé des erreurs PHP de la
+	 * 1.16.0-rc.2 : titre court, aide qui dit aussi comment l'arrêter (interrupteur allumé).
+	 */
+	public function test_les_lignes_des_sauvegardes_disent_comment_les_arreter(): void {
+		$panneau = self::panneau();
+
+		self::assertMatchesRegularExpression( '/if \( d\.backupEnabled \) \{\s*return `[^`]*Pour les arrêter, coupez l’interrupteur puis enregistrez\.`;/', $panneau );
+		self::assertMatchesRegularExpression( '/title="IPv4 vers le stockage des sauvegardes"\s*description="[^"]*Pour l’arrêter, coupez l’interrupteur puis enregistrez\."/', $panneau );
 	}
 
 	public function test_la_feuille_garde_le_correctif_des_cases_cochees(): void {

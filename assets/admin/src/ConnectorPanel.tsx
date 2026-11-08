@@ -91,21 +91,22 @@ function settingsPayload( d: ConnectorBootData ) {
 }
 
 /**
- * Phrase d'aide de la case « Sauvegardes chiffrées » : constante d'arrêt (case grisée et
- * décochée, même phrase que la page de secours), verrou du réseau, case cochée (avec
- * l'empreinte à comparer au service de clés), case décochée.
+ * Phrase d'aide de la case « Sauvegardes chiffrées », une seule à la fois, même règle que la
+ * page de secours : constante d'arrêt (case grisée et décochée, même phrase), verrou du
+ * réseau, case cochée (avec l'empreinte à comparer au service de clés et la manière de les
+ * arrêter), case décochée.
  *
  * @param d État du panneau.
  */
 function backupDescription( d: ConnectorBootData ): string {
 	if ( d.backup.disabledByConstant ) {
-		return 'Désactivées par la constante G2RD_CONNECTOR_DISABLE_BACKUP de wp-config.php : aucune sauvegarde ne part de ce site, et cette case ne peut pas être changée tant que la constante est posée. Action : retirez cette constante de wp-config.php (ou faites-la retirer par la personne qui gère l’hébergement), puis cochez la case ; si elle était cochée avant la constante, les sauvegardes reprennent dès ce retrait.';
+		return 'Aucune sauvegarde ne part de ce site ; case bloquée. Cause probable : la constante G2RD_CONNECTOR_DISABLE_BACKUP, posée par la personne qui gère l’hébergement. Action : la retirer de wp-config.php ; les sauvegardes reprendront si la case était cochée.';
 	}
 	if ( d.backup.lockMessage ) {
 		return d.backup.lockMessage;
 	}
 	if ( d.backupEnabled ) {
-		return `G2RD WP Manager peut sauvegarder ce site : base et fichiers sont chiffrés avant de quitter le serveur. Empreinte de la clé de signature du site, à comparer à celle de la page d’approbation du service de clés G2RD : ${ d.backup.fingerprint ?? 'créée à l’enregistrement' }.`;
+		return `G2RD WP Manager peut sauvegarder ce site : base et fichiers sont chiffrés avant de quitter le serveur. Empreinte de la clé de signature du site, à comparer à celle de la page d’approbation du service de clés G2RD : ${ d.backup.fingerprint ?? 'créée à l’enregistrement' }. Pour les arrêter, coupez l’interrupteur puis enregistrez.`;
 	}
 	return 'Désactivées : aucune sauvegarde ne part de ce site, et les mises à jour se déroulent exactement comme avant.';
 }
@@ -799,7 +800,7 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 						id="g2rd-connector-ipv4-storage"
 						icon="globe"
 						title="IPv4 vers le stockage des sauvegardes"
-						description="À activer si l’hébergeur bloque l’IPv6 sortante du serveur : l’envoi des sauvegardes vers le stockage passe alors par l’IPv4. Ne concerne que cet envoi."
+						description="À activer si l’hébergeur bloque l’IPv6 sortante du serveur : l’envoi des sauvegardes vers le stockage passe alors par l’IPv4. Ne concerne que cet envoi. Pour l’arrêter, coupez l’interrupteur puis enregistrez."
 						checked={ state.forceIpv4ToStorage }
 						onChange={ ( forceIpv4ToStorage ) =>
 							update( { forceIpv4ToStorage } )
