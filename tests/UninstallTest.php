@@ -13,6 +13,7 @@ use G2RD\Connector\Events\LoginFailedThrottle;
 use G2RD\Connector\PhpErrors\Buffer;
 use G2RD\Connector\PhpErrors\LogTail;
 use G2RD\Connector\Rest\DbHealth;
+use G2RD\Connector\Rest\SnapshotController;
 use G2RD\Connector\Rollback\UpdateTransaction;
 use G2RD\Connector\Settings;
 use G2RD\Connector\Tests\CommandRuns\FakeOptionsTable;
@@ -308,6 +309,24 @@ final class UninstallTest extends TestCase {
 		foreach ( [ 1, 2 ] as $blog ) {
 			self::assertContains( $blog . ':' . Buffer::OPTION, $deleted );
 			self::assertContains( $blog . ':' . LogTail::CURSOR_OPTION, $deleted );
+		}
+	}
+
+	/** Empreinte des fichiers à la dernière invalidation d'OPcache (cf. Rest\SnapshotController), sur chaque blog. */
+	public function test_l_empreinte_opcache_est_retiree_sur_chaque_blog(): void {
+		$deleted = [];
+		Functions\when( 'delete_option' )->alias(
+			function ( string $key ) use ( &$deleted ): bool {
+				$deleted[] = $this->blog . ':' . $key;
+				unset( $this->options[ $key ] );
+				return true;
+			}
+		);
+
+		$this->uninstall();
+
+		foreach ( [ 1, 2 ] as $blog ) {
+			self::assertContains( $blog . ':' . SnapshotController::OPCACHE_OPTION, $deleted );
 		}
 	}
 

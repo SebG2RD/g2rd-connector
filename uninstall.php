@@ -28,6 +28,8 @@ delete_option( 'g2rd_connector_db_health' );
 // Erreurs PHP relevées et décalage de lecture du journal (1.16, cf. PhpErrors\Buffer et PhpErrors\LogTail).
 delete_option( 'g2rd_php_errors' );
 delete_option( 'g2rd_php_errors_log_cursor' );
+// Empreinte des fichiers du connecteur à la dernière invalidation d'OPcache (cf. Rest\SnapshotController).
+delete_option( 'g2rd_connector_opcache_files' );
 
 // Si multisite, suppression sur chaque blog. 'number' => 0 : tous les blogs
 // (get_sites() n'en rend que 100 par défaut ; au-delà, les réglages, dont le jeton
@@ -47,6 +49,7 @@ if ( is_multisite() ) {
 		delete_option( 'g2rd_connector_db_health' );
 		delete_option( 'g2rd_php_errors' );
 		delete_option( 'g2rd_php_errors_log_cursor' );
+		delete_option( 'g2rd_connector_opcache_files' );
 		restore_current_blog();
 	}
 }

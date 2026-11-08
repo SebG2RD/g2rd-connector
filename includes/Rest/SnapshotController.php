@@ -11,7 +11,7 @@
  * seulement pour un transient de mise à jour absent, ou sans réponse de wordpress.org
  * depuis plus de 3 h, ou ne couvrant pas ce qui est installé, santé
  * de la base calculée au plus une fois par jour, OPcache invalidé pour le seul
- * connecteur. Les données renvoyées restent celles que WordPress tient pour vraies.
+ * connecteur, et seulement si ses fichiers ont changé sur un serveur qui ne les revoit pas. Les données renvoyées restent celles que WordPress tient pour vraies.
  *
  * @package G2RD\Connector
  */
@@ -36,6 +36,13 @@ use WP_REST_Server;
 
 final class SnapshotController {
 
+	/**
+	 * Empreinte des fichiers du connecteur à la dernière invalidation d'OPcache. Option
+	 * NON autochargée (lue seulement sur un serveur à `opcache.validate_timestamps=0`,
+	 * jamais à chaque page) ; retirée à la désinstallation.
+	 */
+	public const OPCACHE_OPTION = 'g2rd_connector_opcache_files';
+
 	public function register(): void {
 		register_rest_route(
 			G2RD_CONNECTOR_REST_NS,
@@ -56,12 +63,9 @@ final class SnapshotController {
 
 		$now = time();
 
-		// OPcache : seulement les fichiers du connecteur (cf. opcache_files()).
-		if ( function_exists( 'opcache_invalidate' ) ) {
-			foreach ( self::opcache_files() as $file ) {
-				opcache_invalidate( $file, true );
-			}
-		}
+		// OPcache : jamais d'invalidation si le serveur revoit lui-même les fichiers modifiés ;
+		// sinon seulement si les fichiers du connecteur ont changé (cf. sync_opcache()).
+		self::sync_opcache();
 
 		// Ce que l'inventaire relit, et seulement cela (plus de wp_cache_flush()).
 		self::forget_stale_caches();
@@ -110,8 +114,85 @@ final class SnapshotController {
 	}
 
 	/**
-	 * Fichiers dont l'OPcache est invalidé à chaque inventaire : ceux du connecteur, et
-	 * eux seuls.
+	 * Invalide l'OPcache des fichiers du connecteur, seulement quand c'est utile.
+	 *
+	 * Avec `opcache.validate_timestamps` actif (le cas des serveurs mutualisés usuels),
+	 * OPcache revoit lui-même les fichiers modifiés, au rythme de `revalidate_freq` : aucune
+	 * invalidation. Invalider à chaque inventaire n'apportait rien et laissait à chaque fois
+	 * de la mémoire « gaspillée » (rendue seulement au redémarrage d'OPcache, qui recompile le
+	 * code de tous les sites du serveur) et une recompilation à la requête suivante.
+	 *
+	 * Avec `validate_timestamps=0`, OPcache ne revoit jamais rien : un connecteur mis à jour
+	 * hors de WordPress (WP-CLI, panneau de l'hébergeur, FTP) continuerait d'annoncer
+	 * l'ancienne version. On compare alors l'empreinte des fichiers (chemin relatif, mtime,
+	 * taille) à celle gardée à la dernière invalidation : inchangée, rien ; changée, tous les
+	 * fichiers sont invalidés ensemble (n'en invalider qu'un mêlerait du code neuf et ancien),
+	 * puis la nouvelle empreinte est gardée (une seule écriture, seulement en cas de
+	 * changement). Si OPcache refuse l'invalidation (API restreinte, OPcache inactif), rien
+	 * n'est gardé : le prochain inventaire réessaie, comme avant.
+	 *
+	 * Les paramètres sont injectables pour les tests ; par défaut, la configuration réelle.
+	 *
+	 * @param bool|null                     $validate_timestamps Valeur de `opcache.validate_timestamps`.
+	 * @param (\Closure(string): bool)|null $invalidate          Invalidation d'un fichier ; opcache_invalidate() sinon.
+	 * @param list<string>|null             $files               Fichiers du connecteur ; opcache_files() sinon.
+	 */
+	public static function sync_opcache( ?bool $validate_timestamps = null, ?\Closure $invalidate = null, ?array $files = null ): void {
+		if ( null === $invalidate ) {
+			if ( ! function_exists( 'opcache_invalidate' ) ) {
+				return;
+			}
+			$invalidate = static fn ( string $file ): bool => (bool) opcache_invalidate( $file, true );
+		}
+
+		$validate_timestamps ??= filter_var( ini_get( 'opcache.validate_timestamps' ), FILTER_VALIDATE_BOOLEAN );
+		if ( $validate_timestamps ) {
+			return;
+		}
+
+		$files       = $files ?? self::opcache_files();
+		$fingerprint = self::opcache_fingerprint( $files );
+		if ( get_option( self::OPCACHE_OPTION, '' ) === $fingerprint ) {
+			return;
+		}
+
+		$invalidated = false;
+		foreach ( $files as $file ) {
+			$invalidated = $invalidate( $file ) || $invalidated;
+		}
+		if ( $invalidated ) {
+			update_option( self::OPCACHE_OPTION, $fingerprint, false );
+		}
+	}
+
+	/**
+	 * Empreinte des fichiers : chemin relatif au dossier du connecteur, date de modification
+	 * et taille de chacun, triés par chemin (l'ordre du disque n'est pas stable).
+	 *
+	 * @param list<string> $files
+	 */
+	private static function opcache_fingerprint( array $files ): string {
+		clearstatcache( true );
+
+		$root  = defined( 'G2RD_CONNECTOR_DIR' ) ? str_replace( '\\', '/', (string) G2RD_CONNECTOR_DIR ) : '';
+		$lines = [];
+		foreach ( $files as $file ) {
+			$path = str_replace( '\\', '/', $file );
+			if ( '' !== $root && str_starts_with( $path, $root ) ) {
+				$path = substr( $path, strlen( $root ) );
+			}
+			$mtime   = @filemtime( $file ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- fichier disparu : empreinte à 0, pas d'avertissement.
+			$size    = @filesize( $file ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- idem.
+			$lines[] = $path . '|' . (int) $mtime . '|' . (int) $size;
+		}
+		sort( $lines, SORT_STRING );
+
+		return sha1( implode( "\n", $lines ) );
+	}
+
+	/**
+	 * Fichiers du connecteur dont l'OPcache est invalidé quand ils ont changé (cf.
+	 * sync_opcache()) : ceux du connecteur, et eux seuls.
 	 *
 	 * Les versions des extensions et des thèmes n'en dépendent pas : elles sont lues
 	 * par get_file_data() (file_get_contents() des 8 premiers Ko, wp-includes/functions.php),
