@@ -28,7 +28,8 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 
 	/**
 	 * Faux $wpdb du site : options (dont une ligne du module), postmeta à clé composée de 450
-	 * lignes, et une table sans clé primaire avec une colonne binaire.
+	 * lignes, et une table sans clé primaire avec une colonne binaire. Les valeurs sont de type TEXT :
+	 * un LONGTEXT commence par un lot d'une ligne (LARGE_TYPE), cas des tests « statistiques périmées ».
 	 */
 	private static function faux(): FakeDumpWpdb {
 		$wpdb                       = new FakeDumpWpdb();
@@ -36,7 +37,7 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 			'columns' => [
 				'option_id'    => 'bigint(20) unsigned',
 				'option_name'  => 'varchar(191)',
-				'option_value' => 'longtext',
+				'option_value' => 'text',
 			],
 			'pk'      => [ 'option_id' ],
 			'rows'    => [
@@ -69,7 +70,7 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 			'columns' => [
 				'post_id'    => 'bigint(20)',
 				'meta_key'   => 'varchar(255)',
-				'meta_value' => 'longtext',
+				'meta_value' => 'text',
 			],
 			'pk'      => [ 'post_id', 'meta_key' ],
 			'rows'    => $lignes,
@@ -265,6 +266,8 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 			'st' => 'bit',
 		] + $ligne;
 		$this->wpdb->tables['wp_types']['avg_row_length'] = intdiv( DatabaseDumper::BATCH_BYTES, 2 );
+		// BLOB (64 Kio) et non LONGBLOB : un LONGBLOB commence par un lot d'une ligne (LARGE_TYPE), ce que ce test ne vérifie pas.
+		$this->wpdb->tables['wp_types']['columns']['lb'] = 'blob';
 		$this->wpdb->queries                              = [];
 		[ $repris, , $appels, $curseurs ]                 = $this->dump( [ 'wp_types' ], static fn (): bool => true );
 
@@ -339,7 +342,7 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 		$this->wpdb->tables['wp_grosse'] = [
 			'columns' => [
 				'id' => 'bigint(20)',
-				'v'  => 'longtext',
+				'v'  => 'text',
 			],
 			'pk'      => [ 'id' ],
 			'rows'    => $lignes,
@@ -357,6 +360,55 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 		}
 	}
 
+	/**
+	 * Table d'un LONGTEXT dont la taille moyenne annoncée est périmée (relevé du 08/11/2026 : 54 octets
+	 * annoncés, 300 lignes de 2 Mio, premier lot de 200 lignes, 400 Mio, erreur fatale sous 128 Mo).
+	 *
+	 * @return list<int> LIMIT lus, dans l'ordre.
+	 */
+	private function limites_d_une_table_large( string $type, int $moyenne ): array {
+		$valeur = str_repeat( 'x', 2 * 1048576 - 1024 );
+		$lignes = [];
+		for ( $i = 1; $i <= 8; $i++ ) {
+			// Une seule chaîne partagée par les lignes du faux : 2 Mio en mémoire au lieu de 80 Mio.
+			$lignes[] = [
+				'id' => (string) $i,
+				'v'  => $valeur,
+			];
+		}
+		$this->wpdb->tables['wp_large'] = [
+			'columns'        => [
+				'id' => 'bigint(20)',
+				'v'  => $type,
+			],
+			'pk'             => [ 'id' ],
+			'rows'           => $lignes,
+			'avg_row_length' => $moyenne,
+		];
+		unset( $lignes );
+
+		return $this->limites_lues( 'wp_large', $sql );
+	}
+
+	public function test_une_colonne_de_plusieurs_mio_commence_par_un_lot_d_une_ligne_meme_si_la_moyenne_est_petite(): void {
+		foreach ( [ 'longtext', 'MEDIUMTEXT', 'longblob', 'mediumblob', 'json' ] as $type ) {
+			$this->wpdb->queries = [];
+			$limites             = $this->limites_d_une_table_large( $type, 54 );
+
+			self::assertSame( 1, $limites[0], $type . ' : une ligne pour commencer, jamais BATCH_ROWS lignes sur la foi de 54 octets' );
+			self::assertLessThanOrEqual( 4, max( $limites ), $type . ' : le lot suivant se règle sur la taille lue (2 Mio la ligne)' );
+		}
+	}
+
+	public function test_une_colonne_de_64_kio_garde_le_premier_lot_de_la_taille_moyenne(): void {
+		foreach ( [ 'text', 'blob', 'tinytext', 'varchar(255)' ] as $type ) {
+			$this->wpdb->queries = [];
+			$limites             = $this->limites_d_une_table_large( $type, 1048576 );
+
+			self::assertSame( 8, $limites[0], $type . ' : BATCH_BYTES / 1 Mio' );
+		}
+	}
+
 	public function test_lots_reduits_de_moitie_quand_la_moyenne_trompe(): void {
 		$lignes = [];
 		$valeur = str_repeat( 'x', 102400 );
@@ -370,7 +422,7 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 		$this->wpdb->tables['wp_grosse'] = [
 			'columns'        => [
 				'id' => 'bigint(20)',
-				'v'  => 'longtext',
+				'v'  => 'text',
 			],
 			'pk'             => [ 'id' ],
 			'rows'           => $lignes,
@@ -493,7 +545,7 @@ final class DatabaseDumperAdvanceTest extends TestCase {
 		$this->wpdb->tables['wp_sessions'] = [
 			'columns' => [
 				'k' => 'varchar(191)',
-				'v' => 'longtext',
+				'v' => 'text',
 			],
 			'pk'      => [ 'k' ],
 			'rows'    => [ $ordre[1], $ordre[2], $ordre[0], $ordre[3] ],

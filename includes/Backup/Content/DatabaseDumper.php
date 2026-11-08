@@ -58,7 +58,7 @@ use G2RD\Connector\Support\ArrayShape;
 
 /**
  * @phpstan-type Cursor array{table: int, after_hex: list<string>|null, offset: int, started: bool, header: bool, rows: int, create_sha256: string|null, limit: int, charset: string}
- * @phpstan-type Meta array{columns: list<string>, insert: list<string>, binary: array<string, bool>, float: array<string, bool>, pk: list<string>, seek: bool, avg_row: int}
+ * @phpstan-type Meta array{columns: list<string>, insert: list<string>, binary: array<string, bool>, float: array<string, bool>, pk: list<string>, seek: bool, avg_row: int, large: bool}
  */
 final class DatabaseDumper {
 
@@ -157,6 +157,16 @@ final class DatabaseDumper {
 	 * identique bit à bit). CAST(… AS DOUBLE) n'existe qu'à partir de MySQL 8.0.17.
 	 */
 	private const FLOAT_TYPE = '/\Afloat\b/i';
+
+	/**
+	 * Colonne dont la valeur peut peser des Mio (MEDIUMTEXT, LONGTEXT, MEDIUMBLOB, LONGBLOB, JSON ; TEXT et BLOB
+	 * s'arrêtent à 64 Kio) : le premier lot d'une table qui en a une est d'une ligne (initial_limit()), puis
+	 * s'adapte à la taille lue. La taille moyenne d'information_schema ne suffit pas à le dimensionner : MySQL 8
+	 * la garde 24 h (`information_schema_stats_expiry`), InnoDB l'estime par échantillon, et une table remplie
+	 * depuis son annonce l'a toujours petite. Relevé du 08/11/2026 (MariaDB 10.11.19, `memory_limit=128M`, 300
+	 * lignes de 2 Mio, taille moyenne annoncée 54 octets) : premier lot de 200 lignes, 400 Mio, erreur fatale.
+	 */
+	private const LARGE_TYPE = '/\A(?:(?:medium|long)(?:text|blob)|json)\b/i';
 
 	/**
 	 * Valeur de @@session.time_zone rendue à la fin d'une avance (restore_zone()) : SYSTEM, ±hh:mm ou
@@ -528,7 +538,7 @@ final class DatabaseDumper {
 				$cursor['started']       = true;
 				$cursor['rows']          = 0;
 				$cursor['create_sha256'] = hash( 'sha256', $create );
-				$cursor['limit']         = self::initial_limit( $meta['avg_row'] );
+				$cursor['limit']         = self::initial_limit( $meta['avg_row'], $meta['large'] );
 				$progress                = true;
 			}
 			while ( true ) {
@@ -889,8 +899,11 @@ final class DatabaseDumper {
 		];
 	}
 
-	/** Premier lot d'une table : BATCH_BYTES divisé par la taille moyenne d'une ligne, de 1 à BATCH_ROWS. */
-	private static function initial_limit( int $average_row ): int {
+	/** Premier lot d'une table : une ligne si elle a une colonne qui peut peser des Mio (LARGE_TYPE), sinon BATCH_BYTES divisé par la taille moyenne d'une ligne, de 1 à BATCH_ROWS. */
+	private static function initial_limit( int $average_row, bool $large ): int {
+		if ( $large ) {
+			return 1;
+		}
 		return max( 1, min( self::BATCH_ROWS, intdiv( self::BATCH_BYTES, max( 1, $average_row ) ) ) );
 	}
 
@@ -950,6 +963,7 @@ final class DatabaseDumper {
 		$float      = [];
 		$unseekable = [];
 		$generated  = [];
+		$large      = false;
 		foreach ( $this->rows( 'SHOW FULL COLUMNS FROM ' . self::ident( $table, $charset ), $table ) as $column ) {
 			$name = (string) ( $column['Field'] ?? '' );
 			if ( '' === $name ) {
@@ -962,6 +976,7 @@ final class DatabaseDumper {
 			$float[ $name ]      = 1 === preg_match( self::FLOAT_TYPE, $type );
 			$unseekable[ $name ] = 1 === preg_match( self::UNSEEKABLE_TYPE, $type );
 			$generated[ $name ]  = 1 === preg_match( self::GENERATED_EXTRA, (string) ( $column['Extra'] ?? '' ) );
+			$large               = $large || 1 === preg_match( self::LARGE_TYPE, $type );
 		}
 		if ( [] === $names ) {
 			// Aucune colonne lue : ni SELECT ni INSERT ne s'écriraient ; refus avant le premier octet de la table.
@@ -982,6 +997,7 @@ final class DatabaseDumper {
 			'pk'      => $pk,
 			'seek'    => [] !== $pk && [] === array_filter( $pk, static fn ( string $c ): bool => $unseekable[ $c ] ?? false ),
 			'avg_row' => $this->avg_row( $table ),
+			'large'   => $large,
 		];
 	}
 
