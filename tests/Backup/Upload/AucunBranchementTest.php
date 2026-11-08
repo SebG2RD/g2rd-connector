@@ -26,6 +26,9 @@ final class AucunBranchementTest extends TestCase {
 	/** Dossier où PartUploader et PartUploadResult ont le droit d'être cités. */
 	private const DOSSIER_UPLOAD = 'includes/Backup/Upload/';
 
+	/** Phase 4 : seul appelant permis de l'envoi par parties hors de son dossier (plan de la phase 4, tâche 28). */
+	private const APPELANTS_PERMIS = [ 'includes/Backup/Run/BackupJob.php' ];
+
 	/** Réglages par défaut d'origin/main : ni clé ajoutée, ni valeur changée. */
 	private const REGLAGES_D_ORIGINE = [
 		'manager_url'             => 'https://wp-manager.g2rd.fr',
@@ -87,7 +90,7 @@ final class AucunBranchementTest extends TestCase {
 			}
 			if ( str_starts_with( $relatif, self::DOSSIER_UPLOAD ) ) {
 				$dans_upload[] = $relatif;
-			} else {
+			} elseif ( ! in_array( $relatif, self::APPELANTS_PERMIS, true ) ) {
 				$hors_upload[] = $relatif;
 			}
 		}
