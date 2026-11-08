@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.16.0-rc.2
+Stable tag: 1.17.0-rc.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -97,9 +97,20 @@ Backups are prepared in wp-content/g2rd-backups, inside a folder whose name is d
 
 == Changelog ==
 
-= Unreleased =
+= 1.17.0-rc.1 =
 
-* **New: encrypted backups (off by default).** Uninstalling the plugin now also removes the encrypted backup options and the files it prepared in `wp-content/g2rd-backups/`; see "What is sent, when" in the External service section.
+* **New: encrypted backups, off by default.** With the "Sauvegardes chiffrées" option on, G2RD WP
+  Manager can back up the site's database and files; they are encrypted on the site before they
+  leave the server. Off, nothing is sent and updates run exactly as before. This pre-release ships
+  the site side only: the manager does not start backups yet.
+* **New: the `G2RD_CONNECTOR_DISABLE_BACKUP` constant** in `wp-config.php` turns backups off and
+  locks the option, with a message that says why and what to do.
+* **New: "IPv4 vers le stockage des sauvegardes" option**, for hosts that block outgoing IPv6: only
+  the upload of backups to the storage goes through IPv4.
+* **Multisite: backups are set on the main site by a super administrator**, since a backup covers the
+  whole network.
+* Uninstalling the plugin now also removes the encrypted backup options and the files it prepared in
+  `wp-content/g2rd-backups/`; see "What is sent, when" in the External service section.
 
 = 1.16.0-rc.2 =
 
