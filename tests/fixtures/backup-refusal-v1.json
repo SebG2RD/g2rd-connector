@@ -1,0 +1,45 @@
+{
+  "description": "Refus d'une commande par la porte des mises à jour ou par une tranche de sauvegarde (vue d'ensemble des phases 2 à 5, § 6, lot 4-A, point 4 bis). Les clés de « variable_keys » changent d'une réponse à l'autre ; les autres valeurs sont exactes. « codes » : refus réessayables, avec retry_after ; « dump_refusal » : refus du dump de la base, au départ ou pendant une tranche, non réessayables, sans retry_after ; « start_refusal » : refus de backup_start pour l'identifiant de la dernière sauvegarde du site, déjà terminée (son résultat est gardé, rien n'est créé ni écrit), non réessayable, sans retry_after.",
+  "version": 1,
+  "retry_after": { "min": 1, "max": 60 },
+  "codes": [ "backup_slice_running", "update_in_progress", "backup_lock_unavailable" ],
+  "dump_refusal": { "codes": [ "backup_db_charset_mismatch", "backup_db_name_unsupported", "backup_db_tables_not_found", "backup_db_cursor_invalid" ], "retryable": false, "spec": "docs/backup-payload.md § 4" },
+  "start_refusal": { "codes": [ "backup_already_finished" ], "retryable": false, "command": "backup_start" },
+  "stage": { "when_error_code": "self_test_failed", "values": [ "start", "segment", "index" ], "copied_into": [ "command_failed.body", "queue_result.body.result" ] },
+  "command_failed": {
+    "route": "POST /wp-json/g2rd/v1/command",
+    "http_status": 500,
+    "body": {
+      "command": "update_plugin",
+      "status": "failed",
+      "result": null,
+      "error": "…",
+      "error_code": "backup_slice_running",
+      "retry_after": 17,
+      "at": "2026-10-30T01:00:00+00:00"
+    },
+    "variable_keys": [ "error", "at", "retry_after" ],
+    "types": { "command": "string", "status": "string", "result": "null", "error": "string", "error_code": "string", "retry_after": "integer", "at": "string" }
+  },
+  "command_run_refused": {
+    "route": "POST /wp-json/g2rd/v1/command-runs",
+    "http_status": 409,
+    "body": {
+      "code": "g2rd_connector_backup_slice_running",
+      "message": "…",
+      "data": { "status": 409, "retry_after": 17 }
+    },
+    "variable_keys": [ "message", "data.retry_after" ],
+    "types": { "code": "string", "message": "string", "data.status": "integer", "data.retry_after": "integer" }
+  },
+  "queue_result": {
+    "route": "POST /api/agent/sites/{id}/commands/{commandId}/result",
+    "body": {
+      "status": "failed",
+      "result": { "error_code": "update_in_progress", "retry_after": 60 },
+      "error": "…"
+    },
+    "variable_keys": [ "error" ],
+    "types": { "status": "string", "result.error_code": "string", "result.retry_after": "integer", "error": "string" }
+  }
+}

@@ -1,0 +1,42 @@
+# E5 fpm : parent inconnu
+
+### pilote  [e05-fpm.txt]
+# debut 2026-11-08T12:08:21+01:00
+Clé de site reçue : version 1, empreinte 60c9554e427c729b89ecf08266d461b6
+Sauvegarde f3e1b7a6249c6606d854d96d540b9e80 : phase db, type full (complète : baseline_other_backup)
+Tranche 1 : phase files, 2 segments écrits, 2 en attente, 11882 ms
+Tranche 2 : phase files, 2 segments écrits, 2 en attente, 497 ms
+Segment 0 déposé : stored
+Segment 1 déposé : stored
+Tranche 3 : phase files, 4 segments écrits, 2 en attente, 2641 ms
+Tranche 4 : phase files, 4 segments écrits, 2 en attente, 914 ms
+Segment 2 déposé : stored
+Segment 3 déposé : stored
+Tranche 5 : phase files, 6 segments écrits, 2 en attente, 3334 ms
+Tranche 6 : phase files, 6 segments écrits, 2 en attente, 833 ms
+Segment 4 déposé : stored
+Segment 5 déposé : stored
+Tranche 7 : phase files, 8 segments écrits, 2 en attente, 3144 ms
+Tranche 8 : phase files, 8 segments écrits, 2 en attente, 769 ms
+Segment 6 déposé : stored
+Segment 7 déposé : stored
+Tranche 9 : phase upload, 9 segments écrits, 1 en attente, 123 ms
+Tranche 10 : phase upload, 9 segments écrits, 1 en attente, 42 ms
+Segment 8 déposé : stored
+Tranche 11 : phase finalize, 9 segments écrits, 0 en attente, 66 ms
+Dépôt de index.sig : stored
+Dépôt de index : stored
+Tranche 12 : phase idle, 0 segments écrits, 0 en attente, 0 ms
+OK sauvegarde f3e1b7a6249c6606d854d96d540b9e80 : 9 segments, 12 tranches, 30 s
+Segment 0 relu et déchiffré
+Segment 1 relu et déchiffré
+Segment 2 relu et déchiffré
+Segment 3 relu et déchiffré
+Segment 4 relu et déchiffré
+Segment 5 relu et déchiffré
+Segment 6 relu et déchiffré
+Segment 7 relu et déchiffré
+Segment 8 relu et déchiffré
+OK relev� C:\Users\gerar\Downloads\DeveloppementWeb\G2RD-Projet\G2RD_manager_projet\.claude\worktrees\sauvegardes-module/tools/banc-sauvegardes/var/f3e1b7a6249c6606d854d96d540b9e80/releve.json : 4080 fichiers, 14 tables, 4627 lignes de manifeste, 0 illisibles
+# fin 2026-11-08T12:09:08+01:00 duree_s=48 code=0
+

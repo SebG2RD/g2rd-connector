@@ -1,0 +1,149 @@
+# E11 fpm : deux mises à jour simultanées
+
+### update_plugin /command  [e11-maj-plugin.txt]
+résumé : HTTP 200 {"command": "update_plugin", "status": "done", "result.updated": true, "result.version_before": "1.0", "result.version_after": "1.1", "result.reason": null}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://fpm.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=200
+duree_s=41.744
+signature_check=ok
+corps :
+{
+    "command": "update_plugin",
+    "status": "done",
+    "result": {
+        "updated": true,
+        "file": "banc-extension/banc-extension.php",
+        "version_before": "1.0",
+        "version_after": "1.1",
+        "was_active": true,
+        "reactivated": true,
+        "reason": null
+    },
+    "error": null,
+    "at": "2026-11-08T11:30:48+00:00",
+    "signature_check": {
+        "status": "ok"
+    }
+}
+
+
+### update_theme /command-runs  [e11-maj-theme.txt]
+résumé : HTTP 202 {"state": "accepted"}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://fpm.test/wp-json/g2rd/v1/command-runs (route signée /g2rd/v1/command-runs, jeton dans Authorization)
+statut=202
+duree_s=0.370
+signature_check=ok
+corps :
+{
+    "command_id": "4d152df9e79b5a6689a3999a91483b54",
+    "state": "accepted",
+    "accepted_at": "2026-11-08T11:30:10+00:00",
+    "poll_after_seconds": 2,
+    "served_at": "2026-11-08T11:30:10+00:00"
+}
+
+
+### témoin (valeurs distinctes)  [e11-temoin.txt]
+11:30:04.802 
+11:30:05.110 
+11:30:05.416 
+11:30:05.723 
+11:30:06.032 
+11:30:06.339 
+11:30:06.646 
+11:30:06.952 
+11:30:07.261 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:07.569 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:07.876 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:08.183 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:08.489 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:08.797 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:09.104 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:09.411 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:09.718 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:10.026 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:10.333 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:10.640 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:10.947 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null},{"id":"804a9487dde4ffbb","command":"update_theme","since":1794137410,"held":false,"until":1794138310}]}
+11:30:11.253 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null},{"id":"804a9487dde4ffbb","command":"update_theme","since":1794137410,"held":false,"until":1794138310}]}
+11:30:11.562 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:11.870 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:12.178 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:12.484 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:12.791 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:13.099 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:13.406 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:13.712 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:14.020 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:14.327 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:14.633 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:14.939 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:15.246 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:15.553 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:15.860 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:16.166 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:16.473 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:16.779 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:17.086 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:17.394 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:17.701 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:18.008 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:18.315 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:18.621 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:18.927 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:19.234 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:19.540 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:19.846 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:20.153 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:20.462 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:20.770 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:21.077 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:21.384 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:21.699 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:22.011 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:22.319 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:22.626 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:22.933 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:23.239 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:23.546 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:23.852 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:24.159 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:24.466 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:24.772 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:25.078 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:25.384 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:25.690 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:25.997 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:26.303 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:26.611 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:26.919 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:27.226 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:27.533 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:27.840 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:28.147 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:28.455 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:28.761 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:29.069 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:29.376 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:29.683 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:29.990 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:30.296 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:30.603 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:30.910 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:31.217 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:31.523 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:31.831 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:32.139 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:32.445 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:32.752 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:33.059 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:33.365 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:33.673 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:33.982 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:34.288 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:34.595 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:34.901 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+11:30:35.209 {"v":1,"entries":[{"id":"b9d56b6d42d42171","command":"update_plugin","since":1794137406,"held":true,"until":null}]}
+

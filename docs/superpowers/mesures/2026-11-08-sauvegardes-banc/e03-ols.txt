@@ -1,0 +1,23 @@
+# E3 ols : --perimetre=db
+
+### pilote  [e03-ols.txt]
+# debut 2026-11-08T13:06:26+01:00
+Clé de site reçue : version 1, empreinte 62cfeaa451873ad1c98d6616c3d1ee91
+Sauvegarde cb712c68cc544bca63c5ccb5df07dd4c : phase db, type full
+Tranche 1 : phase upload, 2 segments écrits, 2 en attente, 7483 ms
+Tranche 2 : phase upload, 2 segments écrits, 2 en attente, 134 ms
+Segment 0 déposé : stored
+Segment 1 déposé : stored
+Tranche 3 : phase finalize, 2 segments écrits, 0 en attente, 121 ms
+Dépôt de index.sig : stored
+Dépôt de index : stored
+Tranche 4 : phase idle, 0 segments écrits, 0 en attente, 0 ms
+OK sauvegarde cb712c68cc544bca63c5ccb5df07dd4c : 2 segments, 4 tranches, 10 s
+Segment 0 relu et déchiffré
+Segment 1 relu et déchiffré
+OK relev� C:\Users\gerar\Downloads\DeveloppementWeb\G2RD-Projet\G2RD_manager_projet\.claude\worktrees\sauvegardes-module/tools/banc-sauvegardes/var/cb712c68cc544bca63c5ccb5df07dd4c/releve.json : 0 fichiers, 14 tables, 16 lignes de manifeste, 0 illisibles
+# fin 2026-11-08T13:06:42+01:00 duree_s=16 code=0
+# verifications de E3
+enregistrements file du manifeste : 0 | fichiers reconstruits 0
+manifeste scope : ['db'] | tables 14
+

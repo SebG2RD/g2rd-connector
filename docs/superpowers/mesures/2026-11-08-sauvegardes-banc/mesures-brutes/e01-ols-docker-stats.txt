@@ -1,0 +1,27 @@
+12:58:23
+g2rd-p4-wordpress-ols-1 cpu=9.05% mem=63.21MiB / 15.53GiB
+g2rd-p4-wordpress-ols-db-1 cpu=3.33% mem=217MiB / 15.53GiB
+12:58:30
+g2rd-p4-wordpress-ols-1 cpu=48.68% mem=70.31MiB / 15.53GiB
+g2rd-p4-wordpress-ols-db-1 cpu=11.58% mem=221.5MiB / 15.53GiB
+12:58:37
+g2rd-p4-wordpress-ols-1 cpu=4.04% mem=72.45MiB / 15.53GiB
+g2rd-p4-wordpress-ols-db-1 cpu=0.01% mem=221MiB / 15.53GiB
+12:58:44
+g2rd-p4-wordpress-ols-1 cpu=96.52% mem=92.16MiB / 15.53GiB
+g2rd-p4-wordpress-ols-db-1 cpu=0.08% mem=221MiB / 15.53GiB
+12:58:51
+g2rd-p4-wordpress-ols-1 cpu=44.83% mem=171.6MiB / 15.53GiB
+g2rd-p4-wordpress-ols-db-1 cpu=0.76% mem=221MiB / 15.53GiB
+12:58:58
+g2rd-p4-wordpress-ols-1 cpu=7.25% mem=107.5MiB / 15.53GiB
+g2rd-p4-wordpress-ols-db-1 cpu=0.31% mem=221MiB / 15.53GiB
+12:59:05
+g2rd-p4-wordpress-ols-1 cpu=2.95% mem=108MiB / 15.53GiB
+g2rd-p4-wordpress-ols-db-1 cpu=0.01% mem=221MiB / 15.53GiB
+12:59:11
+g2rd-p4-wordpress-ols-1 cpu=2.46% mem=122.5MiB / 15.53GiB
+g2rd-p4-wordpress-ols-db-1 cpu=0.01% mem=221MiB / 15.53GiB
+12:59:19
+g2rd-p4-wordpress-ols-1 cpu=3.02% mem=208.3MiB / 15.53GiB
+g2rd-p4-wordpress-ols-db-1 cpu=0.02% mem=221MiB / 15.53GiB

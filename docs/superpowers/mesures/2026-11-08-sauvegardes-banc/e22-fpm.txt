@@ -1,0 +1,20 @@
+# E22 fpm : lecture web du dossier de travail
+
+### pilote arrêté après une tranche  [e22-fpm-pilote.txt]
+# debut 2026-11-08T12:56:23+01:00
+Clé de site reçue : version 1, empreinte 60c9554e427c729b89ecf08266d461b6
+Sauvegarde 2ea8c56271158d5d0b65b3649d485926 : phase db, type full
+Tranche 1 : phase files, 2 segments écrits, 2 en attente, 13550 ms
+Arrêt demandé après 1 tranches : reprendre avec --reprendre=2ea8c56271158d5d0b65b3649d485926 (corps de la tranche suivante : C:\Users\gerar\Downloads\DeveloppementWeb\G2RD-Projet\G2RD_manager_projet\.claude\worktrees\sauvegardes-module/tools/banc-sauvegardes/v
+# fin 2026-11-08T12:56:41+01:00 duree_s=17 code=0
+
+
+### lectures web  [e22-fpm.txt]
+/wp-content/g2rd-backups/ -> HTTP 200 0 octets ; nom du dossier prive dans la reponse: non
+/wp-content/g2rd-backups/baseline/current.json -> HTTP 404 58328 octets ; nom du dossier prive dans la reponse: non
+/wp-content/g2rd-backups/job-2ea8c56271158d5d0b65b3649d485926/manifest.jsonl -> HTTP 404 58328 octets ; nom du dossier prive dans la reponse: non
+/wp-content/g2rd-backups/index.php -> HTTP 200 0 octets ; nom du dossier prive dans la reponse: non
+/wp-content/g2rd-backups/<dossier-prive>/ -> HTTP 200 0 octets ; nom du dossier prive dans la reponse: non
+/wp-content/g2rd-backups/<dossier-prive>/baseline/current.json -> HTTP 200 163 octets ; nom du dossier prive dans la reponse: non
+/wp-content/g2rd-backups/<dossier-prive>/job-2ea8c56271158d5d0b65b3649d485926/manifest.jsonl -> HTTP 200 307477 octets ; nom du dossier prive dans la reponse: non
+

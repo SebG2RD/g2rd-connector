@@ -19,6 +19,18 @@
  * serveur (délai, mémoire : aucun `finally` ne s'exécute) n'est pas relancée avant
  * 20 h, et read() la dit ratée passé KILLED_AFTER_SECONDS.
  *
+ * Mesure reprenable (phase 4, décision n° 8)
+ * ------------------------------------------
+ * Sans mesureur injecté, et avec des médias absents ou dans wp-content sans lien entre
+ * les deux (Backup\Files\ResumableSizeMeasure::applies()), les fichiers sont mesurés
+ * par passages bornés (5 s par défaut) : un passage arrêté par la borne garde sa
+ * reprise (`resume` : dernier chemin vu, relatif à wp-content, et totaux) et le statut
+ * `partial` (valeurs minimums) ; le passage suivant reprend au chemin suivant, sous la
+ * garde de RESUME_GUARD_SECONDS ; le dernier rend les totaux exacts et l'option
+ * retrouve sa forme `{at, attempted_at, sizes}`. Une mesure en échec abandonne sa
+ * reprise. Un mesureur injecté (tests), ou des médias hors de wp-content ou atteints
+ * par un lien, gardent la mesure d'Environment\SizeMeter, non reprenable.
+ *
  * Passages concurrents
  * --------------------
  * Verrou `GET_LOCK` non bloquant, commun au réseau (Support\MysqlLock) : tenu ailleurs
@@ -29,7 +41,8 @@
  * `notoptions` si elle était absente) : sans cela, ce processus relirait la valeur
  * lue avant le verrou et ne verrait pas une mesure écrite entre-temps.
  *
- * Option de RÉSEAU, non autochargée (OPTION, `{at, attempted_at, sizes}`) : en
+ * Option de RÉSEAU, non autochargée (OPTION, `{at, attempted_at, sizes}`, plus `resume`
+ * pendant une mesure reprenable en cours) : en
  * multisite, wp-content et la base sont communs, une mesure vaut pour tous les blogs.
  * En site simple, update_site_option() écrit une option non autochargée. Les médias
  * sont ceux du site principal, qui contiennent `uploads/sites/N` de tous les blogs.
@@ -40,8 +53,9 @@
  * Risque connu : un site sans WP-Cron (DISABLE_WP_CRON sans vrai cron) ne mesure
  * jamais ; il reste `pending`, dit comme tel par la plateforme.
  *
- * Aucun chemin ni message d'erreur gardé : des totaux, un statut et des dates. Aucun
- * effet au chargement.
+ * Aucun chemin ni message d'erreur gardé : des totaux, un statut et des dates ; seule la
+ * reprise d'une mesure en cours garde un chemin relatif à wp-content, que read() ne lit
+ * jamais (rien n'en sort dans le snapshot). Aucun effet au chargement.
  *
  * @package G2RD\Connector
  */
@@ -50,11 +64,12 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Environment;
 
+use G2RD\Connector\Backup\Files\ResumableSizeMeasure;
 use G2RD\Connector\Support\MysqlLock;
 
 final class SizeReport {
 
-	/** Option de réseau : `{at, attempted_at, sizes}`. */
+	/** Option de réseau : `{at, attempted_at, sizes}`, plus `resume` pendant une mesure reprenable en cours. */
 	public const OPTION = 'g2rd_connector_environment';
 
 	/**
@@ -64,6 +79,15 @@ final class SizeReport {
 	 * par WordPress.
 	 */
 	public const RETRY_GUARD_SECONDS = 72000;
+
+	/**
+	 * Mesure reprenable en cours : reprise au passage suivant de la tâche biquotidienne
+	 * `RestorePointPurgeJob::HOOK`, donc environ toutes les 12 h ; la garde d'une heure
+	 * n'écarte qu'un second passage rapproché (tâche lancée deux fois, déclenchement
+	 * manuel). Un gros site peut rester plusieurs jours en `partial` (minimum affiché) ;
+	 * la première sauvegarde donne les tailles exactes.
+	 */
+	public const RESUME_GUARD_SECONDS = 3600;
 
 	/** Budget de temps par défaut du parcours des fichiers (filtre `g2rd_connector_environment_scan_seconds`). */
 	public const DEFAULT_SECONDS = 5;
@@ -174,20 +198,36 @@ final class SizeReport {
 	 * valeurs réussies et leur date ; son message, qui peut porter un chemin, n'est ni
 	 * gardé ni journalisé.
 	 *
-	 * @param array{at: int|null, attempted_at: int|null, sizes: array<mixed>|null} $stored Option relue sous verrou.
-	 * @param int                                                                    $now    Début de la tentative.
-	 * @param SizeMeter|null                                                         $meter  Mesureur injecté, ou null.
+	 * Sans mesureur injecté et si ResumableSizeMeasure::applies(), les fichiers sont mesurés
+	 * par un passage de la mesure reprenable (cf. en-tête), qui reprend `$stored['resume']` ;
+	 * sinon par SizeMeter, comme avant la mesure reprenable. La base est toujours mesurée
+	 * par SizeMeter. Une mesure en échec abandonne la reprise.
+	 *
+	 * @param array{at: int|null, attempted_at: int|null, sizes: array<mixed>|null, resume: array<string, mixed>|null} $stored Option relue sous verrou.
+	 * @param int                                                                                                     $now    Début de la tentative.
+	 * @param SizeMeter|null                                                                                          $meter  Mesureur injecté, ou null.
 	 */
 	private static function measure( array $stored, int $now, ?SizeMeter $meter ): void {
 		$stored['attempted_at'] = $now;
-		update_site_option( self::OPTION, $stored );
+		self::write( $stored );
 
 		try {
-			$meter ??= new SizeMeter( ...self::scan_bounds() );
-			$files   = $meter->measure_files( WP_CONTENT_DIR, self::uploads_dir() );
-			$db      = $meter->measure_database();
-			update_site_option(
-				self::OPTION,
+			$uploads = self::uploads_dir();
+			$resume  = null;
+			if ( null === $meter ) {
+				$bounds = self::scan_bounds();
+				$meter  = new SizeMeter( ...$bounds );
+				if ( ResumableSizeMeasure::applies( WP_CONTENT_DIR, $uploads ) ) {
+					$files  = ResumableSizeMeasure::measure( WP_CONTENT_DIR, $uploads, $stored['resume'], ...$bounds );
+					$resume = $files['resume'];
+				} else {
+					$files = $meter->measure_files( WP_CONTENT_DIR, $uploads );
+				}
+			} else {
+				$files = $meter->measure_files( WP_CONTENT_DIR, $uploads );
+			}
+			$db = $meter->measure_database();
+			self::write(
 				[
 					// Fin de la mesure des fichiers, à la seconde, sur l'horloge du passage.
 					'at'           => $now + intdiv( $files['scan_ms'], 1000 ),
@@ -201,29 +241,51 @@ final class SizeReport {
 						'db_status'        => $db['db_status'],
 						'scan_ms'          => $files['scan_ms'],
 					],
+					'resume'       => $resume,
 				]
 			);
 		} catch ( \Throwable ) {
-			$stored['sizes'] = [ 'status' => self::STATUS_FAILED ] + self::values( $stored['sizes'] );
-			update_site_option( self::OPTION, $stored );
+			$stored['sizes']  = [ 'status' => self::STATUS_FAILED ] + self::values( $stored['sizes'] );
+			$stored['resume'] = null;
+			self::write( $stored );
 		}
 	}
 
 	/**
-	 * Dernière tentative à moins de 20 h de $now. Une date future compte aussi (processus
-	 * parti juste après celui-ci), sauf au-delà de 20 h : une horloge reculée ou une
-	 * valeur abîmée ne bloque jamais la mesure indéfiniment.
+	 * Écrit l'option ; `resume` seulement s'il n'est pas null : l'option d'une mesure complète
+	 * (ou ratée) garde exactement sa forme d'avant la mesure reprenable, `{at, attempted_at, sizes}`.
 	 *
-	 * @param array{at: int|null, attempted_at: int|null, sizes: array<mixed>|null} $stored Option lue.
+	 * @param array{at: int|null, attempted_at: int|null, sizes: array<mixed>|null, resume: array<string, mixed>|null} $value Option à écrire.
 	 */
-	private static function recently_attempted( array $stored, int $now ): bool {
-		return null !== $stored['attempted_at'] && abs( $now - $stored['attempted_at'] ) < self::RETRY_GUARD_SECONDS;
+	private static function write( array $value ): void {
+		update_site_option(
+			self::OPTION,
+			array_filter(
+				$value,
+				static fn ( mixed $item, string $key ): bool => 'resume' !== $key || null !== $item,
+				ARRAY_FILTER_USE_BOTH
+			)
+		);
 	}
 
 	/**
-	 * Option lue et vérifiée : une valeur abîmée compte comme absente.
+	 * Dernière tentative à moins de 20 h de $now (d'une heure, RESUME_GUARD_SECONDS, si une
+	 * mesure reprenable est en cours). Une date future compte aussi (processus parti juste
+	 * après celui-ci), sauf au-delà de la garde : une horloge reculée ou une valeur abîmée ne
+	 * bloque jamais la mesure indéfiniment.
 	 *
-	 * @return array{at: int|null, attempted_at: int|null, sizes: array<mixed>|null}
+	 * @param array{at: int|null, attempted_at: int|null, sizes: array<mixed>|null, resume: array<string, mixed>|null} $stored Option lue.
+	 */
+	private static function recently_attempted( array $stored, int $now ): bool {
+		$guard = null !== $stored['resume'] ? self::RESUME_GUARD_SECONDS : self::RETRY_GUARD_SECONDS;
+		return null !== $stored['attempted_at'] && abs( $now - $stored['attempted_at'] ) < $guard;
+	}
+
+	/**
+	 * Option lue et vérifiée : une valeur abîmée compte comme absente (la reprise, vérifiée
+	 * champ par champ par ResumableSizeMeasure, seulement si elle n'est pas un tableau).
+	 *
+	 * @return array{at: int|null, attempted_at: int|null, sizes: array<mixed>|null, resume: array<string, mixed>|null}
 	 */
 	private static function stored(): array {
 		$stored = get_site_option( self::OPTION, [] );
@@ -235,6 +297,7 @@ final class SizeReport {
 			'at'           => self::int_or_null( $stored['at'] ?? null ),
 			'attempted_at' => self::int_or_null( $stored['attempted_at'] ?? null ),
 			'sizes'        => $valid ? $sizes : null,
+			'resume'       => is_array( $stored['resume'] ?? null ) ? $stored['resume'] : null,
 		];
 	}
 

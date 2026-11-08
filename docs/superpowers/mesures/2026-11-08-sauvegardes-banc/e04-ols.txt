@@ -1,0 +1,79 @@
+# E4 ols : incrémentale sur /command (complète de socle, puis trois modifiés, un ajouté, un supprimé)
+
+### socle (complète)  [e04-ols-socle.txt]
+# debut 2026-11-08T13:03:38+01:00
+Clé de site reçue : version 1, empreinte 62cfeaa451873ad1c98d6616c3d1ee91
+Sauvegarde fa966961b6b9fef9bac8a9790d44e786 : phase db, type full
+Tranche 1 : phase files, 2 segments écrits, 2 en attente, 12890 ms
+Tranche 2 : phase files, 2 segments écrits, 2 en attente, 563 ms
+Segment 0 déposé : stored
+Segment 1 déposé : stored
+Tranche 3 : phase files, 4 segments écrits, 2 en attente, 2756 ms
+Tranche 4 : phase files, 4 segments écrits, 2 en attente, 833 ms
+Segment 2 déposé : stored
+Segment 3 déposé : stored
+Tranche 5 : phase files, 6 segments écrits, 2 en attente, 3112 ms
+Tranche 6 : phase files, 6 segments écrits, 2 en attente, 815 ms
+Segment 4 déposé : stored
+Segment 5 déposé : stored
+Tranche 7 : phase files, 8 segments écrits, 2 en attente, 3153 ms
+Tranche 8 : phase files, 8 segments écrits, 2 en attente, 677 ms
+Segment 6 déposé : stored
+Segment 7 déposé : stored
+Tranche 9 : phase upload, 9 segments écrits, 1 en attente, 126 ms
+Tranche 10 : phase upload, 9 segments écrits, 1 en attente, 50 ms
+Segment 8 déposé : stored
+Tranche 11 : phase finalize, 9 segments écrits, 0 en attente, 90 ms
+Dépôt de index.sig : stored
+Dépôt de index : stored
+Tranche 12 : phase idle, 0 segments écrits, 0 en attente, 0 ms
+OK sauvegarde fa966961b6b9fef9bac8a9790d44e786 : 9 segments, 12 tranches, 31 s
+Segment 0 relu et déchiffré
+Segment 1 relu et déchiffré
+Segment 2 relu et déchiffré
+Segment 3 relu et déchiffré
+Segment 4 relu et déchiffré
+Segment 5 relu et déchiffré
+Segment 6 relu et déchiffré
+Segment 7 relu et déchiffré
+Segment 8 relu et déchiffré
+OK relev� C:\Users\gerar\Downloads\DeveloppementWeb\G2RD-Projet\G2RD_manager_projet\.claude\worktrees\sauvegardes-module/tools/banc-sauvegardes/var/fa966961b6b9fef9bac8a9790d44e786/releve.json : 4080 fichiers, 14 tables, 4627 lignes de manifeste, 0 illisibles
+OK arbre reconstruit identique au site : 4080 fichiers
+# fin 2026-11-08T13:04:38+01:00 duree_s=60 code=0
+
+
+### modifications du site  [e04-ols-modifs.txt]
+d533a5f91205d6e39517634fc02d9f9dd221e801e0d5129592de653bcb3e3943  lot/d4/f4.bin
+35e8bca578c8afaa56a7bc7658f2aa46c8a8034cb51698f1822b4ce0a3d5e00c  lot/d6/f46.bin
+ab3d5628d579aee985b679b0d4c017f5f433d5fc3564304314371314df360fc2  lot/d8/f8.bin
+47c7e3c5a65358f1bfda3c5cb82c15b32ef3ea70a6f881eded6cbd31b071588a  lot/d0/nouveau-e4b.bin
+
+
+### pilote et vérifications  [e04-ols.txt]
+# debut 2026-11-08T13:04:59+01:00
+Clé de site reçue : version 1, empreinte 62cfeaa451873ad1c98d6616c3d1ee91
+Sauvegarde f226f26da7a9de55d3edf24481d76ca0 : phase db, type incremental
+Tranche 1 : phase files, 2 segments écrits, 2 en attente, 8234 ms
+Tranche 2 : phase files, 2 segments écrits, 2 en attente, 207 ms
+Segment 0 déposé : stored
+Segment 1 déposé : stored
+Tranche 3 : phase upload, 3 segments écrits, 1 en attente, 97 ms
+Tranche 4 : phase upload, 3 segments écrits, 1 en attente, 49 ms
+Segment 2 déposé : stored
+Tranche 5 : phase finalize, 3 segments écrits, 0 en attente, 74 ms
+Dépôt de index.sig : stored
+Dépôt de index : stored
+Tranche 6 : phase idle, 0 segments écrits, 0 en attente, 0 ms
+OK sauvegarde f226f26da7a9de55d3edf24481d76ca0 : 3 segments, 6 tranches, 12 s
+Segment 0 relu et déchiffré
+Segment 1 relu et déchiffré
+Segment 2 relu et déchiffré
+OK relev� C:\Users\gerar\Downloads\DeveloppementWeb\G2RD-Projet\G2RD_manager_projet\.claude\worktrees\sauvegardes-module/tools/banc-sauvegardes/var/f226f26da7a9de55d3edf24481d76ca0/releve.json : 4 fichiers, 14 tables, 4628 lignes de manifeste, 0 illisibles
+OK arbre reconstruit identique au site : 4080 fichiers
+# fin 2026-11-08T13:05:22+01:00 duree_s=23 code=0
+# verifications de E4 (script verif_e4.py), parent = complete fa966961b6b9fef9bac8a9790d44e786
+fichiers de la sauvegarde : 4 ['wp-content/uploads/banc/lot/d0/nouveau-e4b.bin', 'wp-content/uploads/banc/lot/d4/f4.bin', 'wp-content/uploads/banc/lot/d6/f46.bin', 'wp-content/uploads/banc/lot/d8/f8.bin']
+sha256 egaux a ceux du site : OK
+deleted : ['wp-content/uploads/banc/lot/d2/f2.bin'] -> OK
+illisibles : []
+

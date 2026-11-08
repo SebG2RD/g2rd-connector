@@ -58,6 +58,23 @@ export interface ConnectorBootData {
 	 * unique valable une minute. Cochée par défaut.
 	 */
 	allowDirectLogin: boolean;
+	/** Sauvegardes chiffrées (phase 4) : décochée par défaut. */
+	backupEnabled: boolean;
+	/** IPv4 forcée vers l'hôte de stockage des sauvegardes. */
+	forceIpv4ToStorage: boolean;
+	backup: {
+		enabled: boolean;
+		disabledByConstant: boolean;
+		/** Réglage verrouillé en multisite : site secondaire, ou utilisateur qui n'est pas super-administrateur. */
+		lock: 'secondary' | 'super_admin' | null;
+		/** Phrase qui explique le verrou (quoi, cause, action) ; null si réglable. */
+		lockMessage: string | null;
+		/** Empreinte de comparaison, huit groupes de quatre ; null tant qu'aucune clé n'existe. */
+		fingerprint: string | null;
+		siteKeyVersion: number | null;
+		lastOutcome: string | null;
+		lastAt: string | null;
+	};
 	/**
 	 * Relevé des erreurs PHP (1.16) : les erreurs fatales de PHP du site sont gardées 7 jours
 	 * et transmises au manager avec l'inventaire, message filtré sur le site. Décochée par défaut.

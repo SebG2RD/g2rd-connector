@@ -16,7 +16,23 @@ updates:
     labels: [dependencies]
     groups:
       dev-minor-patch:
+        patterns: ['*']
         update-types: [minor, patch]
+        # paragonie/sodium_compat à part : sa PR fait échouer la CI tant que le
+        # relevé ci-dessous n'est pas fait, elle ne doit pas bloquer les autres.
+        exclude-patterns: [paragonie/sodium_compat]
+    ignore:
+      # paragonie/sodium_compat est épinglée sur la copie que WordPress livre au parc
+      # (1.24.0 dans WordPress 6.9 à 7.1.3) : les cas « compat » des tests doivent
+      # voir le même code que les sites. Seules les montées MAJEURES sont ignorées
+      # (WordPress livre la ligne 1.x). Les correctifs (mineures, patchs, sécurité)
+      # restent proposés : une telle PR fait échouer
+      # tests/Backup/Crypto/SodiumCompatCopieTest.php, et c'est voulu. Elle sert
+      # d'alerte : refaire le relevé de la copie du parc (règle écrite dans le
+      # docblock de ce test) avant de changer l'épinglage. Ne pas la fusionner
+      # telle quelle.
+      - dependency-name: paragonie/sodium_compat
+        update-types: [version-update:semver-major]
 
   - package-ecosystem: npm
     directory: /

@@ -1,0 +1,32 @@
+# E22 ols : lecture web du dossier de travail
+
+### pilote arrêté après une tranche  [e22-ols-pilote.txt]
+# debut 2026-11-08T13:40:57+01:00
+Clé de site reçue : version 1, empreinte 62cfeaa451873ad1c98d6616c3d1ee91
+Sauvegarde e353ab55bba63d78b7c4a83f596bcdfb : phase db, type full
+Tranche 1 : phase files, 2 segments écrits, 2 en attente, 13621 ms
+Arrêt demandé après 1 tranches : reprendre avec --reprendre=e353ab55bba63d78b7c4a83f596bcdfb (corps de la tranche suivante : C:\Users\gerar\Downloads\DeveloppementWeb\G2RD-Projet\G2RD_manager_projet\.claude\worktrees\sauvegardes-module/tools/banc-sauvegardes/v
+# fin 2026-11-08T13:41:14+01:00 duree_s=17 code=0
+
+
+### lectures web  [e22-ols.txt]
+dossier prive present (nom non recopie)
+/wp-content/g2rd-backups/ -> HTTP 200 0 octets ; nom du dossier prive dans la reponse: non
+/wp-content/g2rd-backups/baseline/current.json -> HTTP 404 58358 octets ; nom du dossier prive dans la reponse: non
+/wp-content/g2rd-backups/job-e353ab55bba63d78b7c4a83f596bcdfb/manifest.jsonl -> HTTP 404 58358 octets ; nom du dossier prive dans la reponse: non
+/wp-content/g2rd-backups/index.php -> HTTP 200 0 octets ; nom du dossier prive dans la reponse: non
+/wp-content/g2rd-backups/<dossier-prive>/ -> HTTP 200 0 octets ; nom du dossier prive dans la reponse: non
+/wp-content/g2rd-backups/<dossier-prive>/baseline/current.json -> HTTP 200 163 octets ; nom du dossier prive dans la reponse: non
+/wp-content/g2rd-backups/<dossier-prive>/job-e353ab55bba63d78b7c4a83f596bcdfb/manifest.jsonl -> HTTP 200 307268 octets ; nom du dossier prive dans la reponse: non
+--- fichiers du dossier de travail (sans le nom prive)
+# G2RD Connector : sauvegardes en préparation, jamais servies par HTTP.
+<IfModule mod_authz_core.c>
+	Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+	Order deny,allow
+	Deny from all
+</IfModule>
+<?php
+// Silence is golden.
+

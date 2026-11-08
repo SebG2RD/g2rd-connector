@@ -1,0 +1,15 @@
+#!/bin/sh
+# Banc de mesure (phase 4, tâche 26) : lancé dans un conteneur jetable de l'image WordPress locale,
+# relié par un réseau interne à un conteneur MariaDB jetable. Une mesure par processus PHP (pics isolés).
+set -eu
+cp /mesure/mesure.php.txt /tmp/mesure.php
+cp /mesure/amorce.php.txt /tmp/amorce.php
+php /tmp/amorce.php
+for passage in 1 2; do
+  echo "# passage $passage"
+  for mode in texte medias petites grosses perimees; do
+    php -d memory_limit=128M /tmp/mesure.php "$mode" || true
+  done
+done
+echo "# suite des LIMIT de la table aux grosses valeurs (un lot par appel)"
+php -d memory_limit=128M /tmp/mesure.php lots || true

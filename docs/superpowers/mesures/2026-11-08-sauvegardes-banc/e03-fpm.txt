@@ -1,0 +1,23 @@
+# E3 fpm : --perimetre=db
+
+### pilote  [e03-fpm.txt]
+# debut 2026-11-08T12:09:16+01:00
+Clé de site reçue : version 1, empreinte 60c9554e427c729b89ecf08266d461b6
+Sauvegarde 024d78eb4cf6412348234ce5519310ec : phase db, type full
+Tranche 1 : phase upload, 2 segments écrits, 2 en attente, 6890 ms
+Tranche 2 : phase upload, 2 segments écrits, 2 en attente, 130 ms
+Segment 0 déposé : stored
+Segment 1 déposé : stored
+Tranche 3 : phase finalize, 2 segments écrits, 0 en attente, 105 ms
+Dépôt de index.sig : stored
+Dépôt de index : stored
+Tranche 4 : phase idle, 0 segments écrits, 0 en attente, 0 ms
+OK sauvegarde 024d78eb4cf6412348234ce5519310ec : 2 segments, 4 tranches, 10 s
+Segment 0 relu et déchiffré
+Segment 1 relu et déchiffré
+OK relev� C:\Users\gerar\Downloads\DeveloppementWeb\G2RD-Projet\G2RD_manager_projet\.claude\worktrees\sauvegardes-module/tools/banc-sauvegardes/var/024d78eb4cf6412348234ce5519310ec/releve.json : 0 fichiers, 14 tables, 16 lignes de manifeste, 0 illisibles
+# fin 2026-11-08T12:09:31+01:00 duree_s=15 code=0
+# verifications de E3
+enregistrements file du manifeste : 0 | fichiers reconstruits 0
+manifeste scope : ['db'] | tables 14
+

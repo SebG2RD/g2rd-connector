@@ -1,0 +1,48 @@
+<?php
+/**
+ * Amorce du banc (phase 4, tâche 26) : base `essai` avec deux tables de préfixe wp_ sur MariaDB.
+ * wp_petites : 100 000 petites lignes (clé entière, titre, entier, court texte).
+ * wp_grosses : 300 lignes de 2 Mio de texte (contenus de constructeurs de pages).
+ * wp_options : exigée par le dump (filet d'existence).
+ */
+declare(strict_types=1);
+
+$db = new mysqli( 'g2rd-4b-mariadb', 'root', 'essai', '', 3306 );
+$db->set_charset( 'utf8mb4' );
+$db->query( 'DROP DATABASE IF EXISTS essai' );
+$db->query( 'CREATE DATABASE essai CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_520_ci' );
+$db->select_db( 'essai' );
+$db->query( 'CREATE TABLE wp_options (option_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, option_name VARCHAR(191) NOT NULL, option_value LONGTEXT NOT NULL) ENGINE=InnoDB' );
+$db->query( "INSERT INTO wp_options (option_name, option_value) VALUES ('siteurl', 'https://essai.example')" );
+$db->query( 'CREATE TABLE wp_petites (id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, titre VARCHAR(100) NOT NULL, n INT NOT NULL, court TEXT NULL) ENGINE=InnoDB' );
+$db->query( 'CREATE TABLE wp_grosses (id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, contenu LONGTEXT NOT NULL) ENGINE=InnoDB' );
+mt_srand( 26 );
+for ( $lot = 0; $lot < 100; $lot++ ) {
+	$valeurs = [];
+	for ( $i = 0; $i < 1000; $i++ ) {
+		$n         = $lot * 1000 + $i;
+		$valeurs[] = sprintf( "('Article d\'essai n° %d', %d, 'Texte court de la ligne %d, avec des accents é è à et une apostrophe d\'essai.')", $n, mt_rand(), $n );
+	}
+	$db->query( 'INSERT INTO wp_petites (titre, n, court) VALUES ' . implode( ',', $valeurs ) );
+}
+for ( $i = 0; $i < 300; $i++ ) {
+	// 2 Mio de JSON de constructeur de pages : motifs répétés et identifiants variables.
+	$bloc = '';
+	while ( strlen( $bloc ) < 2097152 ) {
+		$bloc .= '{"id":"' . bin2hex( random_bytes( 4 ) ) . '","type":"section","settings":{"titre":"Zone é à ' . mt_rand() . '","couleur":"#' . bin2hex( random_bytes( 3 ) ) . '"}},';
+	}
+	$db->query( "INSERT INTO wp_grosses (contenu) VALUES ('" . $db->real_escape_string( mb_strcut( $bloc, 0, 2097152, 'UTF-8' ) ) . "')" );
+}
+// wp_perimees : statistiques périmées (une ligne minuscule au moment de l'analyse, 300 lignes de 2 Mio ensuite,
+// recalcul automatique coupé) : cas d'un MySQL 8, dont information_schema garde ses statistiques 24 h.
+$db->query( 'CREATE TABLE wp_perimees (id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, contenu LONGTEXT NOT NULL) ENGINE=InnoDB STATS_AUTO_RECALC=0' );
+$db->query( "INSERT INTO wp_perimees (contenu) VALUES ('x')" );
+$db->query( 'ANALYZE TABLE wp_perimees' )->free();
+$db->query( 'INSERT INTO wp_perimees (contenu) SELECT contenu FROM wp_grosses' );
+$db->query( 'ANALYZE TABLE wp_petites, wp_grosses, wp_options' )->free();
+$r = $db->query( "SELECT TABLE_NAME, TABLE_ROWS, AVG_ROW_LENGTH, DATA_LENGTH FROM information_schema.TABLES WHERE TABLE_SCHEMA='essai' ORDER BY TABLE_NAME" );
+while ( $ligne = $r->fetch_assoc() ) {
+	echo 'amorce ', json_encode( $ligne ), PHP_EOL;
+}
+$r = $db->query( 'SELECT VERSION() v, @@max_allowed_packet p' )->fetch_assoc();
+echo 'serveur ', json_encode( $r ), PHP_EOL;

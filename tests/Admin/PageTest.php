@@ -6,9 +6,13 @@ namespace G2RD\Connector\Tests\Admin;
 
 use Brain\Monkey\Functions;
 use G2RD\Connector\Admin\Page;
+use G2RD\Connector\Backup\Keys\Fingerprint;
+use G2RD\Connector\Backup\Keys\SigningKey;
 use G2RD\Connector\BootData;
 use G2RD\Connector\Settings;
 use G2RD\Connector\Tests\TestCase;
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 
 /**
  * Page de réglages autonome (formulaire PHP, sans le thème G2RD) : la case
@@ -31,11 +35,21 @@ final class PageTest extends TestCase {
 		Functions\when( 'sanitize_key' )->alias( static fn ( string $key ): string => strtolower( $key ) );
 		Functions\when( 'settings_errors' )->justReturn( null );
 		Functions\when( 'get_bloginfo' )->justReturn( '7.1.3' );
+		Functions\when( 'is_multisite' )->justReturn( false );
 		Functions\when( 'checked' )->alias(
 			static function ( $checked, $current = true, bool $display = true ): string {
 				$result = (string) $checked === (string) $current ? " checked='checked'" : '';
 				if ( $display ) {
 					echo $result; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- doublure de checked().
+				}
+				return $result;
+			}
+		);
+		Functions\when( 'disabled' )->alias(
+			static function ( $disabled, $current = true, bool $display = true ): string {
+				$result = (string) $disabled === (string) $current ? " disabled='disabled'" : '';
+				if ( $display ) {
+					echo $result; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- doublure de disabled().
 				}
 				return $result;
 			}
@@ -125,6 +139,159 @@ final class PageTest extends TestCase {
 		self::assertTrue( $this->options[ Settings::OPTION_KEY ]['allow_direct_login'] );
 	}
 
+	/**
+	 * Réseau multisite : le formulaire PHP suit la même règle que le panneau. Processus séparé,
+	 * comme les autres tests qui simulent is_multisite() (une fonction simulée reste définie).
+	 */
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_site_secondaire_le_formulaire_ignore_les_cases_et_les_affiche_desactivees(): void {
+		Functions\when( 'is_multisite' )->justReturn( true );
+		Functions\when( 'is_main_site' )->justReturn( false );
+		$this->options[ Settings::OPTION_KEY ] = [
+			'backup_enabled' => true,
+			'force_ipv4_to_storage' => true,
+		];
+		$_POST                                 = $this->saved_form() + [ 'g2rd_backup_enabled' => '1' ];
+
+		$html = $this->render();
+
+		self::assertTrue( $this->options[ Settings::OPTION_KEY ]['backup_enabled'], 'valeur enregistrée gardée' );
+		self::assertTrue( $this->options[ Settings::OPTION_KEY ]['force_ipv4_to_storage'], 'valeur enregistrée gardée' );
+		self::assertMatchesRegularExpression( '/name=.g2rd_backup_enabled. value=.1.\s+disabled=.disabled.>/', $html, 'case décochée et désactivée' );
+		self::assertMatchesRegularExpression( '/name=.g2rd_force_ipv4_to_storage. value=.1.\s+disabled=.disabled.>/', $html );
+		self::assertStringContainsString( 'les sauvegardes se règlent sur le site principal', $html );
+		self::assertStringContainsString( 'ouvrez les réglages du connecteur du site principal', $html );
+		// Comme le panneau : la phrase du verrou tient lieu d'aide, reliée à la case ; ni aide qui dit
+		// de décocher une case grisée, ni empreinte.
+		self::assertStringContainsString( 'aria-describedby="g2rd_backup_enabled_verrou" name="g2rd_backup_enabled"', $html );
+		self::assertStringContainsString( '<p class="description" id="g2rd_backup_enabled_verrou">Sur un réseau multisite, ', $html );
+		self::assertStringNotContainsString( 'id="g2rd_backup_enabled_aide"', $html );
+		self::assertStringNotContainsString( 'Empreinte de la clé de signature du site', $html );
+		// Case IPv4 grisée par le même verrou : son aide ne dit pas de la décocher, elle dit pourquoi.
+		preg_match( '/<p class="description" id="g2rd_force_ipv4_to_storage_aide">(.*?)<\/p>/s', $html, $aide );
+		self::assertArrayHasKey( 1, $aide, 'aide de la case IPv4 introuvable' );
+		self::assertStringNotContainsString( 'décochez la case', $aide[1] );
+		self::assertStringContainsString( 'les sauvegardes se règlent sur le site principal', $aide[1] );
+	}
+
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_administrateur_non_super_administrateur_le_formulaire_garde_la_valeur_enregistree(): void {
+		Functions\when( 'is_multisite' )->justReturn( true );
+		Functions\when( 'is_main_site' )->justReturn( true );
+		Functions\when( 'is_super_admin' )->justReturn( false );
+		$this->options[ Settings::OPTION_KEY ] = [ 'backup_enabled' => false ];
+		$_POST                                 = $this->saved_form() + [
+			'g2rd_backup_enabled' => '1',
+			'g2rd_force_ipv4_to_storage' => '1',
+		];
+
+		$html = $this->render();
+
+		self::assertFalse( $this->options[ Settings::OPTION_KEY ]['backup_enabled'] );
+		self::assertFalse( $this->options[ Settings::OPTION_KEY ]['force_ipv4_to_storage'] ?? false );
+		self::assertMatchesRegularExpression( '/name=.g2rd_backup_enabled. value=.1.\s+disabled=.disabled.>/', $html );
+		self::assertStringContainsString( 'seul un super-administrateur peut régler les sauvegardes', $html );
+		// Case IPv4 grisée par le même verrou : son aide ne dit pas de la décocher, elle dit pourquoi.
+		preg_match( '/<p class="description" id="g2rd_force_ipv4_to_storage_aide">(.*?)<\/p>/s', $html, $aide );
+		self::assertArrayHasKey( 1, $aide, 'aide de la case IPv4 introuvable' );
+		self::assertStringNotContainsString( 'décochez la case', $aide[1] );
+		self::assertStringContainsString( 'seul un super-administrateur peut régler les sauvegardes', $aide[1] );
+	}
+
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_super_administrateur_du_site_principal_le_formulaire_enregistre_les_cases(): void {
+		Functions\when( 'is_multisite' )->justReturn( true );
+		Functions\when( 'is_main_site' )->justReturn( true );
+		Functions\when( 'is_super_admin' )->justReturn( true );
+		$_POST = $this->saved_form() + [ 'g2rd_backup_enabled' => '1' ];
+
+		$html = $this->render();
+
+		self::assertTrue( $this->options[ Settings::OPTION_KEY ]['backup_enabled'] );
+		self::assertDoesNotMatchRegularExpression( '/name=.g2rd_backup_enabled. value=.1.\s+checked=.checked. disabled/', $html );
+		self::assertStringNotContainsString( 'seul un super-administrateur', $html );
+	}
+
+	/** Clé de signature du site enregistrée : son empreinte est connue des deux écrans. */
+	private function cle_de_signature(): string {
+		$publique                            = str_repeat( 'ab', 32 );
+		$this->options[ SigningKey::OPTION ] = [
+			'seed'       => 'graine-chiffree',
+			'public_key' => $publique,
+			'created_at' => 1800000000,
+		];
+
+		return Fingerprint::display( (string) hex2bin( $publique ) );
+	}
+
+	/**
+	 * Décision n° 5 du point de contrôle n° 2 de la phase 4 : constante d'arrêt posée, case grisée
+	 * ET décochée (valeur enregistrée gardée), phrase courte qui dit quoi, la cause probable et quoi
+	 * faire, reliée à la case ; aucune empreinte, comme le panneau. Aucun texte de la ligne ne dit
+	 * plus que le manager « peut sauvegarder ce site » : la phrase de la constante tient lieu d'aide.
+	 */
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_constante_d_arret_case_grisee_et_decochee_avec_son_explication(): void {
+		define( 'G2RD_CONNECTOR_DISABLE_BACKUP', true );
+		$this->options[ Settings::OPTION_KEY ] = [ 'backup_enabled' => true ];
+		$empreinte                             = $this->cle_de_signature();
+
+		$html = $this->render();
+
+		self::assertMatchesRegularExpression( '/name=.g2rd_backup_enabled. value=.1.\s+disabled=.disabled.>/', $html, 'case décochée et désactivée' );
+		self::assertStringContainsString( 'aria-describedby="g2rd_backup_enabled_constante" name="g2rd_backup_enabled"', $html, 'explication reliée à la case' );
+		self::assertMatchesRegularExpression( '/<p class="description" id="g2rd_backup_enabled_constante">Aucune sauvegarde ne part de ce site[^<]* Cause probable : [^<]*G2RD_CONNECTOR_DISABLE_BACKUP[^<]* Action : [^<]*wp-config\.php[^<]*<\/p>/', $html, 'quoi, cause probable, action' );
+		self::assertStringContainsString( 'les sauvegardes reprendront si elles étaient activées.', $html, 'valeur enregistrée dite' );
+		self::assertStringNotContainsString( 'peut sauvegarder ce site', $html, 'constante posée : rien ne dit que le manager peut sauvegarder' );
+		self::assertStringNotContainsString( 'id="g2rd_backup_enabled_aide"', $html, 'la phrase de la constante tient lieu d’aide' );
+		self::assertStringNotContainsString( $empreinte, $html, 'aucune empreinte, comme le panneau' );
+		self::assertStringNotContainsString( 'Empreinte de la clé de signature du site', $html );
+		self::assertTrue( $this->options[ Settings::OPTION_KEY ]['backup_enabled'], 'valeur enregistrée gardée' );
+	}
+
+	/**
+	 * Clé de signature pas encore créée (sa création a échoué à cette lecture), case cochée et
+	 * réglable : même règle que le panneau, la ligne de l'empreinte dit « créée à l'enregistrement ».
+	 */
+	public function test_case_des_sauvegardes_cochee_sans_cle_l_empreinte_est_dite_creee_a_l_enregistrement(): void {
+		Functions\when( 'add_option' )->justReturn( false );
+		$this->options[ Settings::OPTION_KEY ] = [ 'backup_enabled' => true ];
+
+		$html = $this->render();
+
+		self::assertArrayNotHasKey( SigningKey::OPTION, $this->options, 'aucune clé enregistrée' );
+		self::assertMatchesRegularExpression( '/name=.g2rd_backup_enabled. value=.1.\s+checked=.checked.\s*>/', $html );
+		self::assertStringContainsString( '<p class="description">Empreinte de la clé de signature du site, à comparer à celle de la page d’approbation du service de clés G2RD : créée à l’enregistrement.</p>', $html );
+	}
+
+	public function test_case_des_sauvegardes_decochee_aucune_empreinte_comme_le_panneau(): void {
+		$this->options[ Settings::OPTION_KEY ] = [ 'backup_enabled' => false ];
+		$empreinte                             = $this->cle_de_signature();
+
+		$html = $this->render();
+
+		self::assertDoesNotMatchRegularExpression( '/name=.g2rd_backup_enabled. value=.1.\s+checked/', $html );
+		self::assertStringNotContainsString( 'Empreinte de la clé de signature du site', $html );
+		self::assertStringNotContainsString( $empreinte, $html );
+		self::assertStringNotContainsString( 'créée à l’enregistrement', $html );
+		self::assertStringNotContainsString( 'g2rd_backup_enabled_constante', $html, 'sans constante : aucune phrase de constante' );
+	}
+
+	public function test_case_des_sauvegardes_cochee_l_empreinte_est_montree(): void {
+		$this->options[ Settings::OPTION_KEY ] = [ 'backup_enabled' => true ];
+		$empreinte                             = $this->cle_de_signature();
+
+		$html = $this->render();
+
+		self::assertMatchesRegularExpression( '/name=.g2rd_backup_enabled. value=.1.\s+checked=.checked.\s*>/', $html );
+		self::assertStringContainsString( 'aria-describedby="g2rd_backup_enabled_aide" name="g2rd_backup_enabled"', $html );
+		self::assertStringContainsString( 'Empreinte de la clé de signature du site, à comparer à celle de la page d’approbation du service de clés G2RD : <code>' . $empreinte . '</code>', $html );
+	}
+
 	public function test_la_case_du_releve_est_affichee_decochee_par_defaut(): void {
 		$html = $this->render();
 
@@ -177,13 +344,27 @@ final class PageTest extends TestCase {
 	 * version du thème parent, celui qui fournit la console, qui compte.
 	 */
 	public function test_un_theme_enfant_d_un_theme_g2rd_1_19_ou_plus_donne_l_onglet(): void {
-		$this->active_theme( 'g2rd-child', 'g2rd-theme', [ 'g2rd-child' => '1.0.0', 'g2rd-theme' => '1.39.0' ] );
+		$this->active_theme(
+			'g2rd-child',
+			'g2rd-theme',
+			[
+				'g2rd-child' => '1.0.0',
+				'g2rd-theme' => '1.39.0',
+			]
+		);
 
 		self::assertSame( 'onglet', $this->display_mode() );
 	}
 
 	public function test_un_theme_enfant_d_un_theme_g2rd_plus_ancien_que_1_19_donne_la_page(): void {
-		$this->active_theme( 'g2rd-child', 'g2rd-theme', [ 'g2rd-child' => '1.0.0', 'g2rd-theme' => '1.18.9' ] );
+		$this->active_theme(
+			'g2rd-child',
+			'g2rd-theme',
+			[
+				'g2rd-child' => '1.0.0',
+				'g2rd-theme' => '1.18.9',
+			]
+		);
 
 		self::assertSame( 'page', $this->display_mode() );
 	}
@@ -224,7 +405,14 @@ final class PageTest extends TestCase {
 	 * d'entrée de menu. Elle sert le formulaire PHP, avec ses assets sur son hook.
 	 */
 	public function test_en_mode_onglet_la_page_de_secours_est_enregistree_sans_entree_de_menu(): void {
-		$this->active_theme( 'g2rd-child', 'g2rd-theme', [ 'g2rd-child' => '1.0.0', 'g2rd-theme' => '1.39.0' ] );
+		$this->active_theme(
+			'g2rd-child',
+			'g2rd-theme',
+			[
+				'g2rd-child' => '1.0.0',
+				'g2rd-theme' => '1.39.0',
+			]
+		);
 		$submenu_pages = [];
 		Functions\when( 'add_submenu_page' )->alias(
 			static function ( ...$args ) use ( &$submenu_pages ): string {
@@ -334,6 +522,19 @@ final class PageTest extends TestCase {
 		self::assertStringContainsString( 'aria-describedby="g2rd_php_errors_enabled_aide"', $html );
 		self::assertStringContainsString( '<p class="description" id="g2rd_php_errors_enabled_aide">', $html );
 		self::assertStringContainsString( 'Pour l’arrêter, décochez la case puis enregistrez', $html );
+		// Sauvegardes chiffrées et IPv4 vers le stockage : même modèle (libellé court dans le label,
+		// explication en aide grise reliée par aria-describedby, qui dit comment l'arrêter).
+		foreach (
+			[
+				'g2rd_backup_enabled'        => [ 'Autoriser les sauvegardes chiffrées de ce site', 'Pour les arrêter, décochez la case puis enregistrez' ],
+				'g2rd_force_ipv4_to_storage' => [ 'Envoyer les sauvegardes par l’IPv4', 'Pour l’arrêter, décochez la case puis enregistrez' ],
+			] as $case => [ $libelle, $arret ]
+		) {
+			self::assertStringNotContainsString( 'id="' . $case . '_titre"', $html, "« {$case} » : titre sans identifiant, comme le relevé des erreurs PHP." );
+			self::assertStringNotContainsString( 'aria-labelledby="' . $case . '_titre"', $html );
+			self::assertMatchesRegularExpression( '/<input type="checkbox" aria-describedby="' . $case . '_aide" name="' . $case . '" value="1"[^>]*>\s*' . preg_quote( $libelle, '/' ) . '\s*<\/label>/', $html, "« {$case} » : libellé court dans le label." );
+			self::assertMatchesRegularExpression( '/<p class="description" id="' . $case . '_aide">[^<]*' . preg_quote( $arret, '/' ) . '[^<]*<\/p>/', $html, "« {$case} » : aide grise qui dit comment l'arrêter." );
+		}
 
 		self::assertStringContainsString( '<div class="notice notice-info inline">', $html );
 		self::assertStringNotContainsString( 'notice-success', $html );

@@ -1,0 +1,6 @@
+Clé de service du service local épinglée sur le site du banc : identifiant 626555509413ba5d
+Clé de site du service reçue : version 2, empreinte e52e124c32362d092b2f155e50ce8f87
+B2 rejeu de la même clé : done, version 2, empreinte e52e124c32362d092b2f155e50ce8f87
+B2 rotation : done, version 3, empreinte 0c8cc6c30b3c5dfaaf9cbc3a53f02561
+B2 retour à la version 2 : refusée (site_key_version_downgrade), clé détenue inchangée (version 3, service 626555509413ba5d, reçue 2026-11-08T13:02:07+00:00)
+OK essai de clé rejeu-rotation-retour

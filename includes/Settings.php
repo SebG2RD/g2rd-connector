@@ -116,6 +116,12 @@ final class Settings {
 			// Lecture de la fin du journal PHP (1.16), seulement avec le relevé et seulement pour
 			// un journal rangé dans WordPress (cf. PhpErrors\LogTail). Désactivée par défaut.
 			'php_errors_log_tail'     => false,
+			// Sauvegardes chiffrées (phase 4) : décochée par défaut ; seul le site l'allume (case des
+			// réglages du connecteur). Décochée, les mises à jour se déroulent exactement comme avant.
+			'backup_enabled'          => false,
+			// IPv4 forcée vers l'hôte de stockage des sauvegardes (incident IPv6 du 25/09), pour la
+			// seule durée de l'envoi d'une partie. Dormant par défaut.
+			'force_ipv4_to_storage'   => false,
 		];
 	}
 
@@ -148,7 +154,7 @@ final class Settings {
 		}
 		// Toute case à cocher déclarée dans defaults() doit figurer ici : une clé absente
 		// est jetée à chaque enregistrement (défaut de la 1.12.0-rc.3 sur l'option IPv4).
-		foreach ( [ 'heartbeat_enabled', 'events_enabled', 'remote_commands_enabled', 'force_ipv4_to_manager', 'allow_direct_login', 'php_errors_enabled', 'php_errors_log_tail' ] as $flag ) {
+		foreach ( [ 'heartbeat_enabled', 'events_enabled', 'remote_commands_enabled', 'force_ipv4_to_manager', 'allow_direct_login', 'php_errors_enabled', 'php_errors_log_tail', 'backup_enabled', 'force_ipv4_to_storage' ] as $flag ) {
 			if ( isset( $value[ $flag ] ) ) {
 				$clean[ $flag ] = (bool) $value[ $flag ];
 			}

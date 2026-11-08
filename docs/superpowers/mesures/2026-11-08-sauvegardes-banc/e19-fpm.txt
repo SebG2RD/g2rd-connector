@@ -1,0 +1,16 @@
+# E19 fpm : constante G2RD_CONNECTOR_DISABLE_BACKUP
+
+### constante posée puis retirée  [e19-fpm.txt]
+# E19 : constante G2RD_CONNECTOR_DISABLE_BACKUP posee
+Success: Added the constant 'G2RD_CONNECTOR_DISABLE_BACKUP' to the 'wp-config.php' file with the raw value 'true'.
+capabilities: ['signed_commands', 'direct_login', 'php_errors', 'restore_points', 'async_commands']
+backup: {'enabled': False, 'available': False, 'disabled_by_constant': True}
+backup_start: HTTP 500 | {'command': 'backup_start', 'status': 'failed', 'error_code': 'backup_disabled'} |  | {}
+backup_set_key: HTTP 500 | {'command': 'backup_set_key', 'status': 'failed', 'error_code': 'backup_disabled'} |  | {}
+# constante retiree
+Success: Deleted the constant 'G2RD_CONNECTOR_DISABLE_BACKUP' from the 'wp-config.php' file.
+capabilities: ['signed_commands', 'direct_login', 'php_errors', 'restore_points', 'async_commands', 'encrypted_backup']
+backup: {'enabled': True, 'available': True, 'disabled_by_constant': False}
+HTTP 200 | {'command': 'backup_start', 'status': 'done'} |  | {'phase': 'db', 'segments_written': 0, 'slice_ms': 0}
+HTTP 200 | {'command': 'backup_abort', 'status': 'done'} |  | {}
+

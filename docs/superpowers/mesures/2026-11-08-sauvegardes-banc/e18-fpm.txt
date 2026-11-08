@@ -1,0 +1,81 @@
+# E18 fpm : IPv4 vers le stockage
+
+### pilote (périmètre files)  [e18-fpm.txt]
+# debut 2026-11-08T12:45:32+01:00
+Clé de site reçue : version 1, empreinte 60c9554e427c729b89ecf08266d461b6
+Sauvegarde 285f0d1ca54ea3eebeef3263c78b2fa6 : phase files, type full
+Tranche 1 : phase files, 2 segments écrits, 2 en attente, 8016 ms
+Tranche 2 : phase files, 2 segments écrits, 2 en attente, 1061 ms
+Segment 0 déposé : stored
+Segment 1 déposé : stored
+Tranche 3 : phase files, 4 segments écrits, 2 en attente, 2872 ms
+Tranche 4 : phase files, 4 segments écrits, 2 en attente, 972 ms
+Segment 2 déposé : stored
+Segment 3 déposé : stored
+Tranche 5 : phase files, 6 segments écrits, 2 en attente, 3228 ms
+Tranche 6 : phase files, 6 segments écrits, 2 en attente, 969 ms
+Segment 4 déposé : stored
+Segment 5 déposé : stored
+Tranche 7 : phase upload, 8 segments écrits, 2 en attente, 1588 ms
+Tranche 8 : phase upload, 8 segments écrits, 2 en attente, 326 ms
+Segment 6 déposé : stored
+Segment 7 déposé : stored
+Tranche 9 : phase finalize, 8 segments écrits, 0 en attente, 87 ms
+Dépôt de index.sig : stored
+Dépôt de index : stored
+Tranche 10 : phase idle, 0 segments écrits, 0 en attente, 0 ms
+OK sauvegarde 285f0d1ca54ea3eebeef3263c78b2fa6 : 8 segments, 10 tranches, 24 s
+Segment 0 relu et déchiffré
+Segment 1 relu et déchiffré
+Segment 2 relu et déchiffré
+Segment 3 relu et déchiffré
+Segment 4 relu et déchiffré
+Segment 5 relu et déchiffré
+Segment 6 relu et déchiffré
+Segment 7 relu et déchiffré
+OK relev� C:\Users\gerar\Downloads\DeveloppementWeb\G2RD-Projet\G2RD_manager_projet\.claude\worktrees\sauvegardes-module/tools/banc-sauvegardes/var/285f0d1ca54ea3eebeef3263c78b2fa6/releve.json : 4081 fichiers, 0 tables, 4616 lignes de manifeste, 0 illisibles
+# fin 2026-11-08T12:46:14+01:00 duree_s=41 code=0
+
+
+### connexions vers le stockage vues côté stockage  [e18-connexions.txt]
+      2 tcp 0100A8C0:A568
+      1 tcp 0100A8C0:A57A
+      1 tcp 0100A8C0:A580
+     13 tcp 0100A8C0:A582
+     12 tcp 0100A8C0:A586
+     13 tcp 0100A8C0:A594
+     18 tcp 0100A8C0:A598
+     14 tcp 0100A8C0:A59A
+     12 tcp 0100A8C0:A5A6
+      6 tcp 0100A8C0:A5AE
+      1 tcp 0100A8C0:B880
+      1 tcp 0100A8C0:B888
+      2 tcp 0100A8C0:B892
+      1 tcp 0100A8C0:B8A0
+      1 tcp 0100A8C0:E3D0
+      1 tcp 0100A8C0:E3E0
+      1 tcp 0100A8C0:E3F0
+      1 tcp 0100A8C0:E40C
+      1 tcp 0100A8C0:E414
+      3 tcp 0700A8C0:B4E0
+      1 tcp 0700A8C0:B4E8
+      1 tcp 0700A8C0:B4F6
+      3 tcp 0700A8C0:C05A
+      3 tcp 0700A8C0:C06A
+      1 tcp 0700A8C0:C072
+      3 tcp 0700A8C0:C080
+      2 tcp 0700A8C0:C08A
+      1 tcp 0700A8C0:C090
+      3 tcp 0700A8C0:ED38
+      2 tcp 0700A8C0:ED42
+      1 tcp 0700A8C0:ED4C
+      3 tcp 0700A8C0:ED58
+      2 tcp 0700A8C0:ED66
+      1 tcp 0700A8C0:ED68
+      2 tcp 0700A8C0:ED74
+      3 tcp 0700A8C0:ED84
+      1 tcp 0700A8C0:ED90
+      2 tcp 0700A8C0:ED92
+      3 tcp 0700A8C0:ED96
+      1 tcp 0700A8C0:EDA0
+

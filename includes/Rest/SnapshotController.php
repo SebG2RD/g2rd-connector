@@ -20,6 +20,8 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Rest;
 
+use G2RD\Connector\Backup\BackupSwitch;
+use G2RD\Connector\Backup\Snapshot\BackupBlock;
 use G2RD\Connector\CommandRuns\Capability;
 use G2RD\Connector\Cron\UpdatesDiscoveryJob;
 use G2RD\Connector\DirectLogin\SnapshotFields;
@@ -91,6 +93,9 @@ final class SnapshotController {
 			'capabilities'      => $this->capabilities(),
 			'restore_points'    => RestorePointInventory::describe(),
 			'pending_outcomes'  => PendingOutcomes::all(),
+			// Sauvegardes chiffrées (phase 4) : interrupteur, clés publiques, état, dernière issue ;
+			// jamais de clé secrète. Placé juste avant `environment`, que suivent les blocs de la 1.16.
+			'backup'            => BackupBlock::build( $now ),
 			// Ce que le serveur du site permet (extensions natives, limites, disque) et les volumes
 			// mesurés au plus une fois par jour en tâche de fond : jamais calculés ici.
 			'environment'       => SnapshotBlock::build( $now ),
@@ -254,6 +259,9 @@ final class SnapshotController {
 	 * plateforme garde le mode actuel (`/command`) pour ce site.
 	 * `php_errors` (1.16) : le site sait relever ses erreurs PHP (bloc `php_errors`), même
 	 * collecte coupée ; le manager lit la capacité, jamais un numéro de version.
+	 * `encrypted_backup` (phase 4 des sauvegardes) : annoncée seulement case des sauvegardes cochée,
+	 * sans constante d'arrêt, commandes à distance permises et AES-256-GCM disponible
+	 * (cf. Backup\BackupSwitch) ; case décochée, la liste reste celle d'avant.
 	 *
 	 * Publique pour les tests.
 	 *
@@ -268,6 +276,9 @@ final class SnapshotController {
 		}
 		if ( Capability::available( $has_finisher ) ) {
 			$capabilities[] = Capability::NAME;
+		}
+		if ( BackupSwitch::capability_available() ) {
+			$capabilities[] = BackupSwitch::CAPABILITY;
 		}
 		return $capabilities;
 	}

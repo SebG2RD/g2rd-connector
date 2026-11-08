@@ -42,6 +42,19 @@ g2rd-connector/
 │   ├── CommandRuns/            commandes en arrière-plan : stockage, créneau, cycle de vie, exécution après la réponse
 │   ├── Environment/            mesure de l'environnement (bloc environment du snapshot)
 │   ├── PhpErrors/              relevé des erreurs PHP (1.16) : arrêt de PHP, filtre, tampon, journal, commande, blocs php_errors et php_logging
+│   ├── Backup/                 sauvegardes chiffrées : bibliothèque (phase 2), lots 4-A (état, porte des mises à jour, parcours) et 4-B (contenu, segment, index), éteintes par défaut
+│   │   ├── Crypto/             AES-256-GCM, HKDF, X25519 et Ed25519 (sodium ou sodium_compat), autotest
+│   │   ├── Format/             format G2BK v1 : en-tête, HPKE, segments, index signé, certificat
+│   │   ├── Keys/               clé de signature du site (créée à la demande) et clé de site reçue du service de clés
+│   │   ├── Commands/           commandes backup_* : refus à code stable et délai (BackupRefused), exécution des tranches
+│   │   ├── Snapshot/           bloc backup du /snapshot (clé publique de signature, état, dernière issue ; jamais de clé secrète ni de nom de fichier)
+│   │   ├── State/              état de la sauvegarde (option du site principal, écritures conditionnelles)
+│   │   ├── Gate/               porte des mises à jour, témoin « mise à jour en cours », verrou des tranches, second filet
+│   │   ├── Files/              parcours reprenable de la racine du site (FileWalker)
+│   │   ├── Payload/            charge utile des segments, format G2P1 : écrivain et lecteur stricts, chemins relatifs, DEFLATE borné
+│   │   ├── Content/            contenu copié : dump SQL par lots bornés en octets, fichiers par morceaux de 1 Mio, journal du manifeste, état local des incrémentales
+│   │   └── Run/                dossier de travail privé, découpage en parties, un segment entier par tranche (autotest après chaque segment), index signé et vérifié par le site
+│   ├── Backup/Upload/          envoi d'une partie de sauvegarde vers une URL présignée ; non branché avant la phase 4
 │   ├── Security/
 │   │   ├── KeyDerivation       dérivation des clés du SiteToken (trois contextes)
 │   │   ├── RequestSignature    signature des requêtes du manager
@@ -911,6 +924,90 @@ chacun s'additionne.
     sert jamais.
 
   Les champs JSON sont inchangés.
+
+## Sauvegardes chiffrées (éteintes par défaut)
+
+`includes/Backup/` réalise les sauvegardes chiffrées de bout en bout : base et fichiers du site, chiffrés
+sur le serveur avant d'en sortir (AES-256-GCM, une clé neuve par segment, scellée pour le service de clés de
+G2RD), envoyés vers les URL de stockage que le manager fournit pour chaque sauvegarde. **Dormant par défaut** :
+tant que la case « Sauvegardes chiffrées » des réglages est décochée, rien n'est créé, rien n'est envoyé, les
+commandes `backup_*` sont refusées (`backup_disabled`) et le bloc `backup` du `/snapshot` reste au repos.
+La porte des mises à jour est alors transparente (case décochée : aucune attente, aucun témoin écrit).
+
+Le module compte `Backup/Keys/` (clé de signature du site, créée à la demande ; clé de site reçue du service de
+clés), `Backup/State/` (état de la sauvegarde), `Backup/Gate/` (porte des mises à jour, témoin, verrou, second
+filet), `Backup/Files/` (parcours reprenable), `Backup/Commands/` (commandes `backup_*`, refus à code stable) et
+`Backup/Snapshot/` (bloc `backup` du `/snapshot` : clé publique de signature, état, issue de la dernière
+sauvegarde ; jamais de clé secrète ni de nom de fichier). Seuls les fichiers de la liste fermée de
+`tests/Backup/NoWiringTest.php` le citent hors de `includes/Backup/` (dont `uninstall.php`, qui retire à la
+désinstallation les options `g2rd_backup_*` et les fichiers que le module a créés dans
+`wp-content/g2rd-backups`, sans jamais toucher un fichier étranger). Données envoyées : voir
+« External service » dans `readme.txt`.
+
+Le lot 4-B ajoute le contenu d'un segment, toujours sans appelant hors de `includes/Backup/` :
+`Backup/Payload/` (charge utile G2P1), `Backup/Content/` (dump de la base, archive des fichiers, journal du
+manifeste, état local des incrémentales) et `Backup/Run/` (dossier de travail, découpage, producteur de
+segment, finalisation de l'index). La clé de données d'un segment est tirée à neuf et n'est jamais écrite
+ailleurs que scellée dans son en-tête ; le producteur ne reçoit que la clé publique du site. Mesures du lot
+(débit, mémoire, dump de 100 000 lignes et de 300 lignes de 2 Mio sous 128 Mo) :
+`docs/superpowers/mesures/2026-11-08-sauvegardes-module/`.
+
+Multisite : une sauvegarde couvre toute l'installation (tables `base_prefix` de tous les blogs, fichiers
+d'`ABSPATH`, clés et état rangés sur le site principal). Seul un super-administrateur, depuis le site
+principal du réseau, peut donc les régler (`BackupSwitch::network_lock()`) : l'administrateur du site
+principal, qui n'est pas propriétaire des autres blogs, ne les allume pas. Sur un site secondaire
+(`BackupSwitch::secondary_site()`), même règle que la lecture du journal PHP partagé : les cases des
+sauvegardes ne sont enregistrées ni par le panneau ni par la page de réglages PHP, elles s'affichent
+décochées et désactivées avec une phrase qui dit quoi faire (`backup.lock`, `backup.lockMessage` dans
+`BootData`), la capacité `encrypted_backup` n'est pas annoncée, les quatre commandes `backup_*` sont refusées
+(`backup_disabled`) sans rien lire ni écrire, et le bloc `backup` du snapshot reste au repos (aucune
+clé créée, ni état ni issue du réseau).
+
+- `Backup/Crypto/` : les primitives. AES-256-GCM par OpenSSL (étiquette de 16 octets imposée),
+  HKDF-SHA256, X25519 et Ed25519 par l'extension sodium ou, sans elle, par la copie de
+  `sodium_compat` que livre WordPress (`wp-includes/sodium_compat`), choisie par
+  `extension_loaded( 'sodium' )`. La vérification Ed25519 est stricte : ses cinq contrôles sont
+  faits par le connecteur lui-même, avec le même code pour les deux moteurs. `SelfTest` est un
+  autotest à valeurs connues.
+- `Backup/Format/` : le format `G2BK v1`. En-tête de segment de 148 octets ; clé de données neuve
+  pour chaque segment, scellée par HPKE (RFC 9180 : X25519, HKDF-SHA256, AES-256-GCM) vers la clé
+  publique du site, jamais écrite ; écriture et lecture en flux, bloc par bloc (AES-256-GCM), sans
+  jamais tenir le segment entier en mémoire ; index signé Ed25519 ; certificat de la clé de site.
+  Les refus rendent des codes stables (`FormatError`) ; les phrases en français et en anglais
+  viendront avec les commandes (phase 4).
+
+Références, dans le dépôt de G2RD WP Manager : la spécification
+(`docs/superpowers/specs/2026-10-04-sauvegardes-chiffrees-design.md`) et le format, qui fait foi à
+l'octet (`docs/backup-format.md`). Les vecteurs partagés (`tests/fixtures/backup-format-vectors.json`)
+sont une copie à l'octet de ceux de la plateforme. Seul son générateur Python indépendant
+(`tools/backup-format-vectors/`) les produit : on les régénère par ce script, jamais à la main.
+
+### Relevé de `sodium_compat`
+
+Sans sodium natif, le connecteur calcule X25519 et Ed25519 avec la copie de `sodium_compat` que
+livre WordPress, défauts compris. Les tests du groupe `sodium-compat` doivent donc tourner contre
+cette copie-là. La dépendance de développement `paragonie/sodium_compat` est épinglée sur
+**1.24.0**, la copie de WordPress 6.9.10 à 7.1.3 (tout le parc au 24/10/2026), et non sur la
+dernière version publiée. L'avis PKSA-32g2-byr9-drtw qu'elle porte (contrôle du sous-groupe
+principal inopérant, que le connecteur fait lui-même) est ignoré par `composer audit`
+(`config.audit.ignore`) : en développement seulement, car `vendor/` n'est pas dans le ZIP.
+`tests/Backup/Crypto/SodiumCompatCopieTest.php` échoue si la copie chargée n'est pas celle-là.
+
+Dependabot ne prévient pas quand WordPress livre une autre copie au parc (1.24.1 ou plus, ou 2.x) :
+il suit Packagist, pas WordPress. Il n'ignore plus que les montées majeures du paquet
+(`.github/dependabot.yml`) : une PR de correctif (mineure, patch ou sécurité) fait échouer
+`SodiumCompatCopieTest`. Elle rappelle ce relevé et ne se fusionne pas telle quelle. À chaque
+nouvelle version majeure ou mineure de WordPress sur le parc :
+
+1. relever les versions de WordPress des sites (lecture seule) ;
+2. recalculer l'empreinte du `wp-includes/sodium_compat` du paquet officiel de WordPress (calcul
+   décrit dans le docblock de `tests/Backup/Crypto/SodiumCompatCopieTest.php`) ;
+3. si elle change, mettre à jour `EMPREINTE_PARC`, `EMPREINTES_CONNUES` et l'épinglage de
+   `composer.json` ;
+4. rejouer le groupe `sodium-compat` contre l'ancienne copie (variable `G2RD_SODIUM_COMPAT_COPIE`,
+   commande donnée dans le même docblock).
+
+La même règle est écrite dans le docblock de `SodiumCompatCopieTest`.
 
 ## Développement
 

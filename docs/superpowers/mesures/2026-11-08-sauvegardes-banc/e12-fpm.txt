@@ -1,0 +1,64 @@
+# E12 fpm : processus PHP tué en pleine tranche
+
+### processus tué  [e12-kill.txt]
+30 18
+kill -9 18 (php-fpm: pool www )
+
+
+### tranche tuée (réponse du serveur web)  [e12-tranche-tuee.txt]
+résumé : HTTP 502 {}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://fpm.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=502
+duree_s=4.644
+signature_check=non renvoyé
+corps :
+<html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>nginx/1.30.5</center>
+</body>
+</html>
+
+
+### reprise et relecture exacte  [e12-fpm-reprise.txt]
+# debut 2026-11-08T12:32:47+01:00
+Sauvegarde 433fe0af088da96036a7b0d4ea43c3ed : phase db, type full
+Tranche 1 : phase files, 2 segments écrits, 2 en attente, 13965 ms
+Tranche 2 : phase files, 2 segments écrits, 2 en attente, 627 ms
+Segment 0 déposé : stored
+Segment 1 déposé : stored
+Tranche 3 : phase files, 4 segments écrits, 2 en attente, 2778 ms
+Tranche 4 : phase files, 4 segments écrits, 2 en attente, 1077 ms
+Segment 2 déposé : stored
+Segment 3 déposé : stored
+Tranche 5 : phase files, 6 segments écrits, 2 en attente, 3363 ms
+Tranche 6 : phase files, 6 segments écrits, 2 en attente, 1001 ms
+Segment 4 déposé : stored
+Segment 5 déposé : stored
+Tranche 7 : phase files, 8 segments écrits, 2 en attente, 2782 ms
+Tranche 8 : phase files, 8 segments écrits, 2 en attente, 890 ms
+Segment 6 déposé : stored
+Segment 7 déposé : stored
+Tranche 9 : phase upload, 9 segments écrits, 1 en attente, 129 ms
+Tranche 10 : phase upload, 9 segments écrits, 1 en attente, 50 ms
+Segment 8 déposé : stored
+Tranche 11 : phase finalize, 9 segments écrits, 0 en attente, 109 ms
+Dépôt de index.sig : stored
+Dépôt de index : stored
+Tranche 12 : phase idle, 0 segments écrits, 0 en attente, 0 ms
+OK sauvegarde 433fe0af088da96036a7b0d4ea43c3ed : 9 segments, 12 tranches, 35 s
+Segment 0 relu et déchiffré
+Segment 1 relu et déchiffré
+Segment 2 relu et déchiffré
+Segment 3 relu et déchiffré
+Segment 4 relu et déchiffré
+Segment 5 relu et déchiffré
+Segment 6 relu et déchiffré
+Segment 7 relu et déchiffré
+Segment 8 relu et déchiffré
+OK relev� C:\Users\gerar\Downloads\DeveloppementWeb\G2RD-Projet\G2RD_manager_projet\.claude\worktrees\sauvegardes-module/tools/banc-sauvegardes/var/433fe0af088da96036a7b0d4ea43c3ed/releve.json : 4080 fichiers, 14 tables, 4629 lignes de manifeste, 0 illisibles
+OK arbre reconstruit identique au site : 4080 fichiers
+# fin 2026-11-08T12:33:50+01:00 duree_s=63 code=0
+

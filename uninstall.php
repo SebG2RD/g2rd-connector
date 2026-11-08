@@ -153,6 +153,18 @@ if ( class_exists( \G2RD\Connector\CommandRuns\RunStore::class ) ) {
 	}
 }
 
+// Sauvegardes chiffrées (phase 4) : état, témoin des mises à jour, clé de site reçue et clé de
+// signature du site (une réinstallation en génère une nouvelle, à faire réapprouver), puis les
+// fichiers que le module a créés dans wp-content/g2rd-backups (jamais un fichier étranger). Les
+// options vivent dans la table du site principal : WordPress désinstalle depuis lui.
+foreach ( [ 'g2rd_backup_state', 'g2rd_backup_updates', 'g2rd_backup_site_key', 'g2rd_backup_signing_key' ] as $g2rd_option ) {
+	delete_option( $g2rd_option );
+}
+unset( $g2rd_option );
+if ( class_exists( \G2RD\Connector\Backup\Run\WorkDir::class ) ) {
+	\G2RD\Connector\Backup\Run\WorkDir::remove_all();
+}
+
 // Dé-planification des crons si encore présents (dont un contrôle de reprise
 // ponctuel d'une mise à jour protégée, cf. Cron\RestorePointPurgeJob::RECOVERY_HOOK).
 foreach ( [ 'g2rd_connector_heartbeat', 'g2rd_connector_refresh_updates', 'g2rd_connector_restore_points_purge', 'g2rd_connector_update_recovery_check' ] as $g2rd_hook ) {

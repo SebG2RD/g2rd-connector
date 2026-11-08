@@ -17,6 +17,8 @@ declare(strict_types=1);
 
 namespace G2RD\Connector;
 
+use G2RD\Connector\Backup\BackupSwitch;
+use G2RD\Connector\Backup\Snapshot\BackupAdminView;
 use G2RD\Connector\Rollback\RestorePointInventory;
 use G2RD\Connector\Rollback\UnverifiedDownloads;
 use G2RD\Connector\Security\SignatureState;
@@ -34,6 +36,7 @@ final class BootData {
 		// prise depuis un écran d'administration. Sans elle, ces MAJ sont
 		// invisibles du manager (cf. PremiumUpdatesBridge). null = jamais faite.
 		$capture = PremiumUpdatesBridge::last_capture();
+		$backup  = BackupAdminView::data( time() );
 
 		return [
 			'managerUrl'            => (string) $s['manager_url'],
@@ -46,6 +49,12 @@ final class BootData {
 			'remoteCommandsEnabled' => (bool) $s['remote_commands_enabled'],
 			'forceIpv4ToManager'    => (bool) ( $s['force_ipv4_to_manager'] ?? false ),
 			'allowDirectLogin'      => (bool) ( $s['allow_direct_login'] ?? true ),
+			// Site secondaire d'un réseau : les sauvegardes n'y ont pas d'effet, la case s'affiche décochée.
+			'backupEnabled'         => BackupSwitch::LOCK_SECONDARY !== $backup['lock'] && (bool) ( $s['backup_enabled'] ?? false ),
+			'forceIpv4ToStorage'    => BackupSwitch::LOCK_SECONDARY !== $backup['lock'] && (bool) ( $s['force_ipv4_to_storage'] ?? false ),
+			// Sauvegardes chiffrées : empreinte de la clé de signature à comparer à la page
+			// d'approbation du service de clés G2RD (créée à la première lecture, case cochée).
+			'backup'                => $backup,
 			// Relevé des erreurs PHP (1.16) : décoché par défaut.
 			'phpErrorsEnabled'      => true === ( $s['php_errors_enabled'] ?? false ),
 			'signatureRequired'     => 'required' === ( $s['signature_policy'] ?? 'report' ),

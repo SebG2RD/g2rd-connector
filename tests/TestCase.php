@@ -32,6 +32,9 @@ abstract class TestCase extends PHPUnitTestCase {
 		Monkey\setUp();
 		Functions\stubTranslationFunctions();
 		Functions\stubEscapeFunctions();
+		// Site simple par défaut (BackupSwitch::network_lock() est lu par les écrans de réglages) :
+		// un test multisite le redéfinit, dans un processus séparé.
+		Functions\when( 'is_multisite' )->justReturn( false );
 
 		$this->options = [];
 

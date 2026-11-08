@@ -1,0 +1,37 @@
+# E2 fpm : dump rejoué dans une base vide, CHECKSUM TABLE table par table
+
+### restauration  [e02-fpm.txt]
+# tete du dump
+-- G2RD backup dump v1
+/*!40101 SET NAMES utf8mb4 */;
+/*!40103 SET TIME_ZONE='+00:00' */;
+SET FOREIGN_KEY_CHECKS=0;
+DROP TABLE IF EXISTS `wp_banc_gros`;
+# dump : 606080019 octets
+# import : code 0 en 31 s
+# tables restaurees :
+wp_banc_gros wp_banc_lignes wp_commentmeta wp_comments wp_links wp_options wp_postmeta wp_posts wp_term_relationships wp_term_taxonomy wp_termmeta wp_terms wp_usermeta wp_users 
+# lignes g2rd_backup_% dans restauration.wp_options :
+0
+# lignes g2rd_backup_% dans wordpress.wp_options (site, pour memoire) :
+3
+# tables wp_new_site_* dans restauration :
+0
+# wp_options : lignes qui changent toutes seules entre la copie et la comparaison (cron, transients, etat des signatures, reponses wporg) ou que le module n'emporte pas (g2rd_backup_%) retirees des DEUX cotes :
+lignes filtrees site	132
+lignes filtrees restauration	132
+egal  wp_banc_gros 1166818951
+egal  wp_banc_lignes 4256014611
+egal  wp_commentmeta 0
+egal  wp_comments 1916478007
+egal  wp_links 0
+egal  wp_options 3618694402
+egal  wp_postmeta 3832104402
+egal  wp_posts 3244060752
+egal  wp_term_relationships 3920485098
+egal  wp_term_taxonomy 300978185
+egal  wp_termmeta 0
+egal  wp_terms 132045132
+egal  wp_usermeta 749889033
+egal  wp_users 817263062
+

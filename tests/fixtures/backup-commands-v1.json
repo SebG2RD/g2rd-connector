@@ -1,0 +1,24 @@
+{
+  "description": "Commandes de sauvegarde du connecteur (plan de la phase 4, contrat « Commandes backup_* »), lues par l'orchestration de la plateforme (phase 5, lot 5-B). Exemples de charges et clés exactes du rapport ; toutes les commandes sont SIGNED_ONLY.",
+  "version": 1,
+  "commands": [ "backup_set_key", "backup_start", "backup_step", "backup_abort" ],
+  "limits": { "max_pending": 2, "max_parts_per_step": 12, "index_chunk_bytes": 16384, "report_max_bytes": 60000, "presigned_url_max_bytes": 1024 },
+  "payloads": {
+    "backup_set_key": { "tenant_ref": "4aee4529e217d9e1651b6e1e72592095", "site_ref": "a5249f70814246f98358a6f092664dcb", "version": 1, "public_key": "64c437564601bac0ab513c027a6b1a157d9f2f15d4797108be3c43a238e6d546", "certificate": "4edad36c4d832579575dca953f3b0b63e030043f0bb4ddd05811cd3b7b1655a829cdbcf0e734ef026e318ae528944ba5be63492ad66864799c94f37e9adb940a", "service_key_id": "5a8760c1cf4271a6" },
+    "backup_start": { "backup_id": "8985695e536befd8b249c869f62ee42b", "scope": "both", "type": "full", "parent_backup_id": null, "key_version": 1 },
+    "backup_step": { "backup_id": "8985695e536befd8b249c869f62ee42b", "completed": [ 0 ], "uploads": [ { "segment": 1, "parts": [ { "part_number": 1, "url": "https://s3.fr-par.scw.cloud/bucket/t/…/1?partNumber=1&uploadId=…&X-Amz-Signature=…", "host": "s3.fr-par.scw.cloud", "port": null } ] } ], "index_offset": 0, "finished": false },
+    "backup_abort": { "backup_id": "8985695e536befd8b249c869f62ee42b" }
+  },
+  "results": {
+    "backup_set_key": [ "key_version", "fingerprint", "received_at" ],
+    "report": [ "backup_id", "phase", "type", "scope", "parent_backup_id", "downgraded", "key_version", "signing_key_id", "segments_written", "pending", "part_failures", "progress", "index", "slice_ms" ],
+    "pending": [ "segment", "kind", "bytes", "blocks", "sha256", "header", "parts", "uploaded" ],
+    "progress": [ "db_tables_done", "db_tables_total", "db_rows", "files_done", "payload_bytes", "unreadable" ],
+    "index": [ "bytes", "sha256", "signature", "offset", "chunk" ],
+    "finished": [ "backup_id", "phase", "finished", "totals" ],
+    "backup_abort": [ "backup_id", "aborted", "reason" ]
+  },
+  "phases": [ "db", "files", "upload", "finalize", "idle" ],
+  "downgraded": [ "baseline_missing", "baseline_other_backup", "baseline_too_old", "baseline_unreadable" ],
+  "part_outcomes": [ "expired_url", "network", "too_slow", "refused", "bad_url", "read_failed", "not_attempted" ]
+}

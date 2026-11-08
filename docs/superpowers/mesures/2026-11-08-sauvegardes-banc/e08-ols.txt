@@ -1,0 +1,66 @@
+# E8 ols : mise à jour entre deux tranches (suite de E7)
+
+### tranche suivante et état  [e08-ols.txt]
+résumé : HTTP 500 {}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://ols.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=500
+duree_s=0.608
+signature_check=ok
+corps :
+{
+    "command": "backup_step",
+    "status": "failed",
+    "result": null,
+    "error": "La sauvegarde a été interrompue et ne sera pas terminée : une mise à jour a changé le site pendant la copie, et une sauvegarde mélangée ne serait pas restaurable. Ce qu’elle avait préparé sur le site est retiré ; elle n’est pas comptée comme réus
+    "at": "2026-11-08T12:09:44+00:00",
+    "error_code": "backup_interrupted",
+    "signature_check": {
+        "status": "ok"
+    }
+}
+enabled True state {'phase': 'idle', 'backup_id': None, 'type': None, 'scope': None, 'segments_written': 0, 'pending': 0, 'slice_started_at': None}
+last {'backup_id': '8300197219f0eafd2bd0c5be22f24ce9', 'outcome': 'aborted', 'code': 'interrupted_by_update', 'stage': None, 'at': '2026-11-08T12:09:44+00:00', 'totals': {'db_tables': 14, 'db_rows': 20503, 'files': 1342, 'payload_bytes': 72516588, 'unreadable'
+
+
+### nouvelle sauvegarde, nouvel identifiant  [e08-ols-nouvelle.txt]
+# debut 2026-11-08T13:09:55+01:00
+Clé de site reçue : version 1, empreinte 62cfeaa451873ad1c98d6616c3d1ee91
+Sauvegarde 2215c5f2c3bea2efdf576e0126ee9bdb : phase db, type full
+Tranche 1 : phase files, 2 segments écrits, 2 en attente, 13766 ms
+Tranche 2 : phase files, 2 segments écrits, 2 en attente, 643 ms
+Segment 0 déposé : stored
+Segment 1 déposé : stored
+Tranche 3 : phase files, 4 segments écrits, 2 en attente, 2926 ms
+Tranche 4 : phase files, 4 segments écrits, 2 en attente, 873 ms
+Segment 2 déposé : stored
+Segment 3 déposé : stored
+Tranche 5 : phase files, 6 segments écrits, 2 en attente, 3001 ms
+Tranche 6 : phase files, 6 segments écrits, 2 en attente, 892 ms
+Segment 4 déposé : stored
+Segment 5 déposé : stored
+Tranche 7 : phase files, 8 segments écrits, 2 en attente, 2768 ms
+Tranche 8 : phase files, 8 segments écrits, 2 en attente, 691 ms
+Segment 6 déposé : stored
+Segment 7 déposé : stored
+Tranche 9 : phase upload, 9 segments écrits, 1 en attente, 117 ms
+Tranche 10 : phase upload, 9 segments écrits, 1 en attente, 44 ms
+Segment 8 déposé : stored
+Tranche 11 : phase finalize, 9 segments écrits, 0 en attente, 101 ms
+Dépôt de index.sig : stored
+Dépôt de index : stored
+Tranche 12 : phase idle, 0 segments écrits, 0 en attente, 0 ms
+OK sauvegarde 2215c5f2c3bea2efdf576e0126ee9bdb : 9 segments, 12 tranches, 32 s
+Segment 0 relu et déchiffré
+Segment 1 relu et déchiffré
+Segment 2 relu et déchiffré
+Segment 3 relu et déchiffré
+Segment 4 relu et déchiffré
+Segment 5 relu et déchiffré
+Segment 6 relu et déchiffré
+Segment 7 relu et déchiffré
+Segment 8 relu et déchiffré
+OK relev� C:\Users\gerar\Downloads\DeveloppementWeb\G2RD-Projet\G2RD_manager_projet\.claude\worktrees\sauvegardes-module/tools/banc-sauvegardes/var/2215c5f2c3bea2efdf576e0126ee9bdb/releve.json : 4080 fichiers, 14 tables, 4629 lignes de manifeste, 0 illisibles
+OK arbre reconstruit identique au site : 4080 fichiers
+# fin 2026-11-08T13:10:51+01:00 duree_s=56 code=0
+

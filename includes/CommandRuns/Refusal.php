@@ -52,19 +52,27 @@ final class Refusal {
 	public const RUN_UNKNOWN = 'run_unknown';
 
 	/**
+	 * 409 : une tranche de sauvegarde tient le verrou du site sans tenir le créneau (tranche passée
+	 * par `/command`) ; refus de la porte des mises à jour (phase 4). Rien n'est enregistré.
+	 * Données : `status` et `retry_after` (1 à 60 s, si l'appelant le donne).
+	 */
+	public const BACKUP_SLICE_RUNNING = 'backup_slice_running';
+
+	/**
 	 * Statut HTTP de chaque refus.
 	 *
 	 * @var array<string, int>
 	 */
 	private const STATUSES = [
-		self::SITE_BUSY           => 409,
-		self::COMMAND_ID_CONFLICT => 409,
-		self::INVALID_COMMAND_ID  => 400,
-		self::COMMAND_NOT_ASYNC   => 400,
-		self::INVALID_PAYLOAD     => 400,
-		self::BODY_TOO_LARGE      => 413,
-		self::ASYNC_DISABLED      => 503,
-		self::RUN_UNKNOWN         => 404,
+		self::SITE_BUSY            => 409,
+		self::COMMAND_ID_CONFLICT  => 409,
+		self::INVALID_COMMAND_ID   => 400,
+		self::COMMAND_NOT_ASYNC    => 400,
+		self::INVALID_PAYLOAD      => 400,
+		self::BODY_TOO_LARGE       => 413,
+		self::ASYNC_DISABLED       => 503,
+		self::RUN_UNKNOWN          => 404,
+		self::BACKUP_SLICE_RUNNING => 409,
 	];
 
 	/**
@@ -73,12 +81,15 @@ final class Refusal {
 	 * Données rendues : `status`, et pour SITE_BUSY seulement `busy_with` (numéro de
 	 * l'exécution qui tient le créneau, nul pour une mise à jour protégée) et `busy_since`
 	 * (ISO 8601 UTC, comme les autres dates des routes ; nul si inconnue). Ces deux clés
-	 * sont toujours présentes dans un SITE_BUSY.
+	 * sont toujours présentes dans un SITE_BUSY. Pour BACKUP_SLICE_RUNNING seulement,
+	 * `retry_after`, s'il est donné et entre 1 et 60 s.
 	 *
 	 * @param string               $code Un des codes ci-dessus.
 	 * @param array<string, mixed> $data Pour SITE_BUSY : `busy_with` (chaîne) et
 	 *                                   `busy_since` (secondes Unix). Le refus
 	 *                                   d'ExecutionSlot::acquire() se passe tel quel.
+	 *                                   Pour BACKUP_SLICE_RUNNING : `retry_after`
+	 *                                   (entier, 1 à 60 s).
 	 *                                   Toute autre clé, d'un autre type, ou passée avec
 	 *                                   un autre code, est ignorée : rien d'interne ne
 	 *                                   sort par ici.
@@ -92,6 +103,13 @@ final class Refusal {
 		}
 
 		$public = [ 'status' => self::STATUSES[ $code ] ];
+		if ( self::BACKUP_SLICE_RUNNING === $code ) {
+			$retry = $data['retry_after'] ?? null;
+			if ( is_int( $retry ) && $retry >= 1 && $retry <= 60 ) {
+				$public['retry_after'] = $retry;
+			}
+			return new \WP_Error( 'g2rd_connector_' . $code, self::message( $code ), $public );
+		}
 		if ( self::SITE_BUSY !== $code ) {
 			return new \WP_Error( 'g2rd_connector_' . $code, self::message( $code ), $public );
 		}
@@ -137,6 +155,7 @@ final class Refusal {
 			self::BODY_TOO_LARGE => __( 'L’opération n’a pas été lancée : la demande reçue dépasse la taille admise (16 Ko). Rien n’a été modifié. Cause probable : paramètres anormalement volumineux, ou requête altérée en chemin. Action : relancer l’opération depuis la plateforme ; si le refus se répète, contacter le support G2RD.', 'g2rd-connector' ),
 			self::ASYNC_DISABLED => __( 'L’opération n’a pas été lancée : l’exécution en arrière-plan est désactivée sur ce site (constante G2RD_CONNECTOR_DISABLE_ASYNC_COMMANDS dans wp-config.php). Rien n’a été modifié. Action : aucune, la plateforme passe par l’exécution habituelle ; pour réactiver l’exécution en arrière-plan, retirer cette constante de wp-config.php.', 'g2rd-connector' ),
 			self::RUN_UNKNOWN => __( 'Opération inconnue du site : aucune exécution en arrière-plan n’y porte ce numéro. Cause probable : connecteur réinstallé, base de données restaurée, ou compte rendu déjà effacé (le site garde les 200 derniers, 7 jours au plus). Action : aucune, la plateforme vérifie l’état réel du site à la prochaine synchronisation.', 'g2rd-connector' ),
+			self::BACKUP_SLICE_RUNNING => __( 'L’opération n’a pas été lancée : une tranche de sauvegarde se termine sur ce site. Rien n’a été modifié. Cause probable : la sauvegarde copiait le site à cet instant. Action : aucune, la plateforme réessaie seule dans quelques secondes.', 'g2rd-connector' ),
 			default => throw new \InvalidArgumentException( 'Code de refus sans message : ' . esc_html( $code ) ),
 		};
 	}

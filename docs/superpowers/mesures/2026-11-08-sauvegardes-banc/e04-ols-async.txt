@@ -1,0 +1,37 @@
+# E4 ols avec --route=async (parent : la complète de E1 async)
+
+### modifications du site  [e04-ols-async-modifs.txt]
+f16e01d01551f2cc26b564d6012d600fe106df9ff011ba4066e15111df8be468  lot/d0/f0.bin
+10a32474452e654147eaee0c4850efa4f27de7a1df5f1a0e5969654348296147  lot/d3/f13.bin
+c55be7f9af9fda02924b493724f0bf5b13acda6da3fd157195a1b06383a3adea  lot/d5/f45.bin
+422e297737017e99ec53a6eb4463e531b303d9c6aa640aac96ada5f06b6f38c7  lot/d0/nouveau-e4.bin
+
+
+### pilote et vérifications  [e04-ols-async.txt]
+# debut 2026-11-08T13:02:57+01:00
+Clé de site reçue : version 1, empreinte 62cfeaa451873ad1c98d6616c3d1ee91
+Sauvegarde 8a9045d1731ecba068cbabdecf4527e1 : phase db, type incremental
+Tranche 1 : phase files, 2 segments écrits, 2 en attente, 8325 ms
+Tranche 2 : phase files, 2 segments écrits, 2 en attente, 280 ms
+Segment 0 déposé : stored
+Segment 1 déposé : stored
+Tranche 3 : phase upload, 3 segments écrits, 1 en attente, 88 ms
+Tranche 4 : phase upload, 3 segments écrits, 1 en attente, 52 ms
+Segment 2 déposé : stored
+Tranche 5 : phase finalize, 3 segments écrits, 0 en attente, 65 ms
+Dépôt de index.sig : stored
+Dépôt de index : stored
+Tranche 6 : phase idle, 0 segments écrits, 0 en attente, 0 ms
+OK sauvegarde 8a9045d1731ecba068cbabdecf4527e1 : 3 segments, 6 tranches, 17 s
+Segment 0 relu et déchiffré
+Segment 1 relu et déchiffré
+Segment 2 relu et déchiffré
+OK relev� C:\Users\gerar\Downloads\DeveloppementWeb\G2RD-Projet\G2RD_manager_projet\.claude\worktrees\sauvegardes-module/tools/banc-sauvegardes/var/8a9045d1731ecba068cbabdecf4527e1/releve.json : 4 fichiers, 14 tables, 4628 lignes de manifeste, 0 illisibles
+OK arbre reconstruit identique au site : 4080 fichiers
+# fin 2026-11-08T13:03:26+01:00 duree_s=29 code=0
+# verifications de E4 (script verif_e4.py)
+fichiers de la sauvegarde : 4 ['wp-content/uploads/banc/lot/d0/f0.bin', 'wp-content/uploads/banc/lot/d0/nouveau-e4.bin', 'wp-content/uploads/banc/lot/d3/f13.bin', 'wp-content/uploads/banc/lot/d5/f45.bin']
+sha256 egaux a ceux du site : OK
+deleted : ['wp-content/uploads/banc/lot/d1/f1.bin'] -> OK
+illisibles : []
+

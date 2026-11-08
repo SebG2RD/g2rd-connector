@@ -1,0 +1,33 @@
+# E10 ols : mise à jour lente (40 s) et backup_start
+
+### résumé  [e10-ols-resume.txt]
+##### E10 ols (a) update_plugin lente sur /command
+Préparation (wp-ols) : banc prêt (jeton du banc posé, banc-extension 1.0 active, réglages à zé
+Success: Updated 'g2rd_banc_lenteur' option.
+HTTP 500 | {'command': 'backup_start', 'status': 'failed', 'error_code': 'update_in_progress', 'retry_after': 60} |  | {}
+"error_code": "update_in_progress" "retry_after": 60 HTTP 200 | {'command': 'update_plugin', 'status': 'done'} |  | {}
+duree_s=41.229 "version_after": "1.1" 
+HTTP 200 | {'command': 'backup_start', 'status': 'done'} |  | {'phase': 'db', 'segments_written': 0, 'slice_ms': 0}
+HTTP 200 | {'command': 'backup_abort', 'status': 'done'} |  | {}
+##### E10 ols (b) update_plugin lente sur /command-runs
+Préparation (wp-ols) : banc prêt (jeton du banc posé, banc-extension 1.0 active, réglages à zé
+Success: Updated 'g2rd_banc_lenteur' option.
+HTTP 202 | {} |  | {}
+HTTP 500 | {'command': 'backup_start', 'status': 'failed', 'error_code': 'update_in_progress', 'retry_after': 60} |  | {}
+"error_code": "update_in_progress" "retry_after": 60 "state": "done" "version_after": "1.1" 
+HTTP 200 | {'command': 'backup_start', 'status': 'done'} |  | {'phase': 'db', 'segments_written': 0, 'slice_ms': 0}
+HTTP 200 | {'command': 'backup_abort', 'status': 'done'} |  | {}
+##### E10 ols (c) update_theme, update_core, update_translations sans lenteur, sauvegardes allumees
+Success: Updated 'g2rd_banc_lenteur' option.
+### {"command":"update_theme","payload":{"stylesheet":"twentytwentyfive"}}
+HTTP 200 | {'command': 'update_theme', 'status': 'done'} |  | {}
+"reason": "upgrade_failed"
+enabled True state {'phase': 'idle', 'backup_id': None, 'type': None, 'scope': None, 'segments_written': 0, 'pending': 0
+### {"command":"update_core","payload":{}}
+HTTP 200 | {'command': 'update_core', 'status': 'done'} |  | {}
+enabled True state {'phase': 'idle', 'backup_id': None, 'type': None, 'scope': None, 'segments_written': 0, 'pending': 0
+### {"command":"update_translations","payload":{}}
+HTTP 200 | {'command': 'update_translations', 'status': 'done'} |  | {}
+"reason": "no_updates_available"
+enabled True state {'phase': 'idle', 'backup_id': None, 'type': None, 'scope': None, 'segments_written': 0, 'pending': 0
+

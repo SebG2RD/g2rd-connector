@@ -1,0 +1,51 @@
+# E15 fpm : case décochée (journal général de MariaDB)
+
+### update_plugin  [e15-maj.txt]
+résumé : HTTP 200 {"command": "update_plugin", "status": "done", "result.updated": true, "result.version_before": "1.0", "result.version_after": "1.1", "result.reason": null}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://fpm.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=200
+duree_s=1.535
+signature_check=ok
+corps :
+{
+    "command": "update_plugin",
+    "status": "done",
+    "result": {
+        "updated": true,
+        "file": "banc-extension/banc-extension.php",
+        "version_before": "1.0",
+        "version_after": "1.1",
+        "was_active": true,
+        "reactivated": true,
+        "reason": null
+    },
+    "error": null,
+    "at": "2026-11-08T11:38:47+00:00",
+    "signature_check": {
+        "status": "ok"
+    }
+}
+
+
+### journal, capacités, commandes, case décochée en pleine sauvegarde  [e15-journal.txt]
+# journal general de MariaDB pendant l'update_plugin, case decochee
+requetes journalisees: 63
+GET_LOCK: 1
+RELEASE_LOCK: 1
+ecritures (INSERT/UPDATE/DELETE) mentionnant g2rd_backup_: 0
+lectures mentionnant g2rd_backup_: 2
+# lectures du temoin/etat (extraits):
+SELECT option_value FROM wp_options WHERE option_name = 'g2rd_backup_state' LIMIT 1
+SELECT option_value FROM wp_options WHERE option_name = 'g2rd_backup_state' LIMIT 1
+capabilities: ['signed_commands', 'direct_login', 'php_errors', 'restore_points', 'async_commands']
+backup.enabled: False
+backup_start: HTTP 500 | {'command': 'backup_start', 'status': 'failed', 'error_code': 'backup_disabled'} |  | {}
+backup_step: HTTP 500 | {'command': 'backup_step', 'status': 'failed', 'error_code': 'backup_unknown'} |  | {}
+backup_abort: HTTP 200 | {'command': 'backup_abort', 'status': 'done'} |  | {}
+backup_set_key: HTTP 500 | {'command': 'backup_set_key', 'status': 'failed', 'error_code': 'backup_disabled'} |  | {}
+# case decochee en pleine sauvegarde (1dc35c536dacb30b84362b1661954126), tranche suivante :
+HTTP 500 | {'command': 'backup_step', 'status': 'failed', 'error_code': 'backup_disabled'} |  | {}
+enabled False state {'phase': 'idle', 'backup_id': None, 'type': None, 'scope': None, 'segments_written': 0, 'pending': 0, 'slice_started_at': None}
+last {'backup_id': '1dc35c536dacb30b84362b1661954126', 'outcome': 'aborted', 'code': 'backup_disabled', 'stage': None, 'at': '2026-11-08T11:39:41+00:00', 'totals': {'db_tables': 14, 'db_rows': 20480, 'files': 1345, 'payload_bytes': 72500291, 'unreadable': 0}}
+

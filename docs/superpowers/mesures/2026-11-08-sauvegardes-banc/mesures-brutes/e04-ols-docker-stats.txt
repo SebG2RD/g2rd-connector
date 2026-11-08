@@ -1,0 +1,12 @@
+13:04:59
+g2rd-p4-wordpress-ols-1 cpu=6.00% mem=56.07MiB / 15.53GiB
+g2rd-p4-wordpress-ols-db-1 cpu=0.74% mem=235.9MiB / 15.53GiB
+13:05:06
+g2rd-p4-wordpress-ols-1 cpu=49.08% mem=83.37MiB / 15.53GiB
+g2rd-p4-wordpress-ols-db-1 cpu=12.51% mem=236.1MiB / 15.53GiB
+13:05:14
+g2rd-p4-wordpress-ols-1 cpu=5.07% mem=73.94MiB / 15.53GiB
+g2rd-p4-wordpress-ols-db-1 cpu=0.54% mem=235.5MiB / 15.53GiB
+13:05:20
+g2rd-p4-wordpress-ols-1 cpu=3.23% mem=74.26MiB / 15.53GiB
+g2rd-p4-wordpress-ols-db-1 cpu=0.02% mem=235.5MiB / 15.53GiB

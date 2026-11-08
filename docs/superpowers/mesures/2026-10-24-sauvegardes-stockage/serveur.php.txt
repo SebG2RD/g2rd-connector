@@ -1,0 +1,20 @@
+<?php
+/**
+ * Banc de mesure : faux point d'accès S3 (UploadPart) servi par `php -S`.
+ * Vérifie la méthode, la présence des paramètres signés et le Content-MD5 des
+ * octets reçus ; rend 200 et un ETag (MD5 hexadécimal entre guillemets), comme S3.
+ * Rien n'est écrit sur disque.
+ */
+$corps = file_get_contents( 'php://input' );
+$md5   = base64_encode( md5( $corps, true ) );
+$recu  = $_SERVER['HTTP_CONTENT_MD5'] ?? '';
+$ok    = 'PUT' === $_SERVER['REQUEST_METHOD'] && isset( $_GET['X-Amz-Signature'], $_GET['partNumber'], $_GET['uploadId'] );
+if ( ! $ok || ! hash_equals( $md5, $recu ) ) {
+	http_response_code( 400 );
+	header( 'Content-Type: application/xml' );
+	echo '<?xml version="1.0" encoding="UTF-8"?><Error><Code>BadDigest</Code></Error>';
+	return;
+}
+http_response_code( 200 );
+header( 'ETag: "' . md5( $corps ) . '"' );
+header( 'X-Banc-Octets-Recus: ' . strlen( $corps ) );

@@ -1,0 +1,80 @@
+# E7 fpm : update_plugin pendant une tranche
+
+### tranche et update_plugin simultanés  [e07-course.txt]
+requête 1 : HTTP 200 {"command": "backup_step", "status": "done", "result.phase": "files", "result.segments_written": 2, "result.slice_ms": 12924}
+requête 2 : HTTP 500 {"command": "update_plugin", "status": "failed", "error_code": "backup_slice_running", "retry_after": 24}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+--- requete 1
+Envoi 1/1 : POST http://fpm.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=200
+duree_s=13.034
+signature_check=ok
+corps :
+{
+    "command": "backup_step",
+    "status": "done",
+    "result": {
+        "backup_id": "39294a7f6e0ada882d784efbd66dd1e0",
+        "phase": "files",
+        "type": "full",
+        "scope": "both",
+        "parent_backup_id": null,
+        "downgraded": null,
+        "key_version": 1,
+        "signing_key_id": "bdb977808056774b",
+        "segments_written": 2,
+        "pending": [
+            {
+                "segment": 0,
+                "kind": "db",
+                "bytes": 5224309,
+                "blocks": 1,
+                "sha256": "…",
+                "header": "…",
+                "parts": [
+                    {
+                        "part_number": 1,
+                        "offset": 0,
+                        "length": 5224309
+                    }
+                ],
+                "uploaded": []
+            },
+            {
+                "segment": 1,
+                "kind": "files",
+                "bytes": 67275685,
+                "blocks": 9,
+                "sha256": "…",
+                "header": "…",
+                "parts": [
+                    {
+[…]
+
+### update_plugin rejoué après la tranche  [e07-rejeu.txt]
+résumé : HTTP 200 {"command": "update_plugin", "status": "done", "result.updated": true, "result.version_before": "1.0", "result.version_after": "1.1", "result.reason": null}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://fpm.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=200
+duree_s=1.509
+signature_check=ok
+corps :
+{
+    "command": "update_plugin",
+    "status": "done",
+    "result": {
+        "updated": true,
+        "file": "banc-extension/banc-extension.php",
+        "version_before": "1.0",
+        "version_after": "1.1",
+        "was_active": true,
+        "reactivated": true,
+        "reason": null
+    },
+    "error": null,
+    "at": "2026-11-08T11:18:39+00:00",
+    "signature_check": {
+        "status": "ok"
+    }
+}
+

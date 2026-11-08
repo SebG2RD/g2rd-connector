@@ -1,0 +1,73 @@
+# E23 ols : tranche partie par /command-runs
+
+### résumé  [e23-ols-resume.txt]
+##### E23 ols : la tranche part par /command-runs (execution apres reponse)
+Préparation (wp-ols) : banc prêt (jeton du banc posé, banc-extension 1.0 active, réglages à zé
+HTTP 200 | {'command': 'backup_start', 'status': 'done'} |  | {'phase': 'db', 'segments_written': 0, 'slice_ms': 0}
+requete 1 : HTTP 202 | {} |  | {}
+requete 2 : HTTP 409 | {} |  | {}
+requete 3 : HTTP 500 | {} |  | {}
+requete 4 : HTTP 409 | {} |  | {}
+requete 5 : HTTP 500 | {'command': 'update_plugin', 'status': 'failed', 'error_code': 'backup_slice_running', 'retry_after': 22} |  | {}
+"code": "g2rd_connector_site_busy" "retry_after": 23 "code": "g2rd_connector_site_busy" "retry_after": 22 
+-- compte rendu de la tranche partie en arriere-plan :
+"state": "done" "phase": "files" "segments_written": 2 "slice_ms": 11961 
+version banc-extension avant le rejeu: 1.0
+HTTP 200 | {'command': 'update_plugin', 'status': 'done'} |  | {}
+version apres le rejeu: 1.1
+etat: enabled True state {'phase': 'abort', 'backup_id': '97678165dbac0b69199d4ebddb0baa6f', 'type': 'full', 'scope': 'both', 'segments_written': 2, 'pending': 2, 'slice_started_at': None}
+
+
+### sorties brutes  [e23-ols-course.txt]
+requête 1 : HTTP 202 {"state": "accepted"}
+requête 2 : HTTP 409 {"code": "g2rd_connector_site_busy"}
+requête 3 : HTTP 500 {"command": "backup_step", "status": "failed", "error_code": "backup_slice_running", "retry_after": 23}
+requête 4 : HTTP 409 {"code": "g2rd_connector_site_busy"}
+requête 5 : HTTP 500 {"command": "update_plugin", "status": "failed", "error_code": "backup_slice_running", "retry_after": 22}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+--- requete 1
+Envoi 1/1 : POST http://ols.test/wp-json/g2rd/v1/command-runs (route signée /g2rd/v1/command-runs, jeton dans Authorization)
+statut=202
+duree_s=0.286
+signature_check=ok
+corps :
+{
+    "command_id": "d11f4397b1cd1a573d121632def75f53",
+    "state": "accepted",
+    "accepted_at": "2026-11-08T12:42:02+00:00",
+    "poll_after_seconds": 2,
+    "served_at": "2026-11-08T12:42:02+00:00"
+}
+--- requete 2
+Envoi 1/1 : POST http://ols.test/wp-json/g2rd/v1/command-runs (route signée /g2rd/v1/command-runs, jeton dans Authorization)
+statut=409
+duree_s=0.140
+signature_check=ok
+corps :
+{
+    "code": "g2rd_connector_site_busy",
+    "message": "L’opération n’a pas été lancée : une autre opération est en cours sur ce site depuis 2026-11-08 12:42:02 UTC. Rien n’a été modifié. Action : aucune, la plateforme réessaie seule.",
+    "data": {
+        "status": 409,
+        "busy_with": "d11f4397b1cd1a573d121632def75f53",
+        "busy_since": "2026-11-08T12:42:02+00:00"
+    }
+}
+--- requete 3
+Envoi 1/1 : POST http://ols.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=500
+duree_s=0.204
+signature_check=ok
+corps :
+{
+    "command": "backup_step",
+    "status": "failed",
+    "result": null,
+    "error": "L’opération n’a pas été lancée : une tranche de sauvegarde se termine sur ce site. Rien n’a été modifié. Cause probable : la sauvegarde copiait le site à cet instant. Action : aucune, la plateforme réessaie seule dans quelques secondes.",
+    "at": "2026-11-08T12:42:04+00:00",
+    "error_code": "backup_slice_running",
+    "retry_after": 23,
+    "signature_check": {
+        "status": "ok"
+    }
+[…]

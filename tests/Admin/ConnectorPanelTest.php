@@ -102,6 +102,8 @@ final class ConnectorPanelTest extends TestCase {
 				'Commandes à distance',
 				'IPv4 vers le manager',
 				'Connexion directe depuis G2RD',
+				'Sauvegardes chiffrées',
+				'IPv4 vers le stockage des sauvegardes',
 				'Relevé des erreurs PHP',
 				'Exiger des commandes signées',
 			],
@@ -203,7 +205,7 @@ final class ConnectorPanelTest extends TestCase {
 	 * actif, alors que seul « Enregistrer » (en haut, dans « Connexion au
 	 * manager ») l'applique, et que quitter l'onglet le perd : sous le dernier
 	 * réglage, un rappel annoncé (aria-live) le dit, avec un second bouton
-	 * « Enregistrer ». Le rappel compare les huit réglages envoyés par
+	 * « Enregistrer ». Le rappel compare les dix réglages envoyés par
 	 * l'enregistrement à leur valeur enregistrée.
 	 */
 	public function test_les_modifications_non_enregistrees_sont_signalees_sous_les_reglages(): void {
@@ -214,11 +216,11 @@ final class ConnectorPanelTest extends TestCase {
 		self::assertArrayHasKey( 1, $charge, 'settingsPayload introuvable dans le panneau.' );
 		preg_match_all( '/^\s*(\w+):/m', $charge[1], $cles );
 		self::assertSame(
-			[ 'manager_url', 'heartbeat_enabled', 'events_enabled', 'remote_commands_enabled', 'force_ipv4_to_manager', 'allow_direct_login', 'php_errors_enabled', 'signature_required' ],
+			[ 'manager_url', 'heartbeat_enabled', 'events_enabled', 'remote_commands_enabled', 'force_ipv4_to_manager', 'allow_direct_login', 'backup_enabled', 'force_ipv4_to_storage', 'php_errors_enabled', 'signature_required' ],
 			$cles[1],
-			'« Enregistrer » doit envoyer les huit réglages, relevé des erreurs PHP compris.'
+			'« Enregistrer » doit envoyer les dix réglages, relevé des erreurs PHP compris.'
 		);
-		self::assertStringContainsString( 'Mêmes huit réglages', $panneau );
+		self::assertStringContainsString( 'Mêmes dix réglages', $panneau );
 		self::assertStringContainsString( 'const pending = hasPendingChanges( state, saved );', $panneau );
 		self::assertMatchesRegularExpression(
 			'/aria-live="polite"\s*>\s*\{ pending && \(\s*<Status cx=\{ cx \} tone="warn">\s*Modifications non enregistrées\s*<\/Status>/',
@@ -537,6 +539,60 @@ final class ConnectorPanelTest extends TestCase {
 	public function test_les_avis_de_la_pile_n_ont_pas_de_marge_propre(): void {
 		$css = self::sans_commentaires( self::source( 'assets/admin/src/style.css' ) );
 		self::assertMatchesRegularExpression( '/\.g2rd-connector-panel \.g2rd-connector-stack > \.notice\s*\{\s*margin: 0;\s*\}/', $css );
+	}
+
+	/**
+	 * Décision n° 5 du point de contrôle n° 2 de la phase 4 : constante d'arrêt posée, la case
+	 * « Sauvegardes chiffrées » est grisée ET décochée (la valeur enregistrée, envoyée telle quelle
+	 * par settingsPayload(), est gardée), avec la phrase de la page de secours, qui dit pourquoi et
+	 * quoi faire ; l'empreinte n'est montrée que case cochée et réglable (même règle que la page).
+	 */
+	public function test_constante_d_arret_la_case_est_decochee_et_dit_pourquoi_comme_la_page(): void {
+		$panneau = self::panneau();
+
+		self::assertMatchesRegularExpression( '/checked=\{\s*state\.backupEnabled\s*&&\s*!\s*state\.backup\.disabledByConstant\s*\}/', $panneau, 'case décochée quand la constante coupe les sauvegardes' );
+		self::assertStringContainsString( 'backup_enabled: d.backupEnabled,', $panneau, 'valeur enregistrée envoyée telle quelle' );
+		preg_match( "/if \\( d\\.backup\\.disabledByConstant \\) \\{\\s*return '([^']*)';/", $panneau, $phrase );
+		self::assertArrayHasKey( 1, $phrase, 'Phrase de la constante introuvable dans backupDescription().' );
+		self::assertStringContainsString( ' Cause probable : ', $phrase[1], 'la phrase dit la cause probable' );
+		self::assertStringContainsString( ' Action : ', $phrase[1], 'la phrase dit quoi faire' );
+		self::assertStringContainsString( 'les sauvegardes reprendront si elles étaient activées.', $phrase[1], 'la phrase dit ce que devient la valeur enregistrée' );
+		self::assertStringNotContainsString( 'peut sauvegarder', $phrase[1], 'constante posée : rien ne dit que le manager peut sauvegarder' );
+		// Courte : 35 mots au plus, rien de technique au-delà du nom de la constante et de wp-config.php.
+		self::assertLessThanOrEqual( 35, preg_match_all( '/[\p{L}\p{N}_]+(?:[’\'.\-][\p{L}\p{N}_]+)*/u', $phrase[1] ), 'phrase de la constante trop longue' );
+		preg_match_all( '/\b[A-Z0-9]+(?:_[A-Z0-9]+)+\b|[\w-]+\.php\b/u', $phrase[1], $techniques );
+		self::assertSame( [ 'G2RD_CONNECTOR_DISABLE_BACKUP', 'wp-config.php' ], array_values( array_unique( $techniques[0] ) ), 'seuls termes techniques : la constante et wp-config.php' );
+		self::assertStringContainsString( "esc_html__( '" . $phrase[1] . "', 'g2rd-connector' )", self::source( 'includes/Admin/Page.php' ), 'même phrase dans la page de secours' );
+		self::assertSame( 1, substr_count( $panneau, 'd.backup.fingerprint' ), 'empreinte dans une seule branche' );
+		self::assertMatchesRegularExpression( '/if \( d\.backup\.disabledByConstant \).*if \( d\.backup\.lockMessage \).*if \( d\.backupEnabled \) \{\s*return `[^`]*d\.backup\.fingerprint/s', $panneau, 'empreinte seulement case cochée, sans constante ni verrou' );
+		// Clé pas encore créée : « créée à l'enregistrement », même règle dans la page de secours.
+		self::assertStringContainsString( "d.backup.fingerprint ?? 'créée à l’enregistrement'", $panneau );
+		self::assertStringContainsString( 'G2RD : créée à l’enregistrement.', self::source( 'includes/Admin/Page.php' ) );
+	}
+
+	/**
+	 * Sauvegardes chiffrées et IPv4 vers le stockage, au modèle du relevé des erreurs PHP de la
+	 * 1.16.0-rc.2 : titre court, aide qui dit aussi comment l'arrêter (interrupteur allumé).
+	 */
+	public function test_les_lignes_des_sauvegardes_disent_comment_les_arreter(): void {
+		$panneau = self::panneau();
+
+		self::assertMatchesRegularExpression( '/if \( d\.backupEnabled \) \{\s*return `[^`]*Pour les arrêter, coupez l’interrupteur puis enregistrez\.`;/', $panneau );
+		self::assertMatchesRegularExpression( '/title="IPv4 vers le stockage des sauvegardes"\s*description=\{ ipv4StorageDescription\( state \) \}/', $panneau );
+		self::assertMatchesRegularExpression( '/function ipv4StorageDescription\( d: ConnectorBootData \): string \{.*?return `\$\{ base \} Pour l’arrêter, coupez l’interrupteur puis enregistrez\.`;/s', $panneau );
+	}
+
+	/**
+	 * Verrou du réseau (interrupteur grisé) : l'aide IPv4 ne dit plus de couper l'interrupteur,
+	 * action impossible ; la phrase du verrou (quoi, cause, action) en tient lieu.
+	 */
+	public function test_verrou_du_reseau_l_aide_ipv4_ne_dit_pas_de_couper_l_interrupteur(): void {
+		$panneau = self::panneau();
+
+		preg_match( '/function ipv4StorageDescription\( d: ConnectorBootData \): string \{(.*?)\n\}/s', $panneau, $fonction );
+		self::assertArrayHasKey( 1, $fonction, 'ipv4StorageDescription() introuvable.' );
+		self::assertMatchesRegularExpression( '/if \( d\.backup\.lock !== null \) \{\s*return d\.backup\.lockMessage\s*\?\s*`\$\{ base \} \$\{ d\.backup\.lockMessage \}`\s*:\s*base;\s*\}/', $fonction[1], 'verrou : phrase du verrou à la place de la manière de l\'arrêter' );
+		self::assertSame( 1, substr_count( $fonction[1], 'coupez l’interrupteur' ), 'la manière de l\'arrêter n\'est dite qu\'hors verrou' );
 	}
 
 	public function test_la_feuille_garde_le_correctif_des_cases_cochees(): void {

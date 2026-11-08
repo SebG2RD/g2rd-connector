@@ -24,6 +24,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Rest;
 
+use G2RD\Connector\Backup\BackupSwitch;
 use G2RD\Connector\BootData;
 use G2RD\Connector\Cron\HeartbeatJob;
 use G2RD\Connector\Outbound\ManagerClient;
@@ -65,6 +66,17 @@ final class AdminController {
 			// Relevé des erreurs PHP (1.16) : décoché par défaut. La lecture du journal
 			// n'a pas de case : elle ne se règle que par le manager (commande signée).
 			'php_errors_enabled'      => [
+				'required' => false,
+				'type'     => 'boolean',
+			],
+			// Sauvegardes chiffrées (phase 4) : décochée par défaut ; ignorée, comme la suivante, sur
+			// un site secondaire d'un réseau (cf. collect_settings()).
+			'backup_enabled'          => [
+				'required' => false,
+				'type'     => 'boolean',
+			],
+			// IPv4 forcée vers l'hôte de stockage des sauvegardes : décochée par défaut.
+			'force_ipv4_to_storage'   => [
 				'required' => false,
 				'type'     => 'boolean',
 			],
@@ -205,12 +217,15 @@ final class AdminController {
 	public function collect_settings( WP_REST_Request $request ): array {
 		$settings = [ 'manager_url' => (string) $request->get_param( 'manager_url' ) ];
 
-		foreach ( [ 'heartbeat_enabled', 'events_enabled', 'remote_commands_enabled', 'force_ipv4_to_manager', 'allow_direct_login', 'php_errors_enabled' ] as $flag ) {
+		foreach ( [ 'heartbeat_enabled', 'events_enabled', 'remote_commands_enabled', 'force_ipv4_to_manager', 'allow_direct_login', 'php_errors_enabled', 'backup_enabled', 'force_ipv4_to_storage' ] as $flag ) {
 			$value = $request->get_param( $flag );
 			if ( null !== $value ) {
 				$settings[ $flag ] = (bool) $value;
 			}
 		}
+		// Sauvegardes : une sauvegarde couvre tout le réseau, seul un super-administrateur, depuis le
+		// site principal, les règle (BackupSwitch::network_lock()) ; sinon la valeur enregistrée reste.
+		$settings = BackupSwitch::without_locked_settings( $settings );
 		// Relevé décoché : la lecture du journal suit (cf. Settings::sanitize()).
 		if ( false === ( $settings['php_errors_enabled'] ?? null ) ) {
 			$settings['php_errors_log_tail'] = false;

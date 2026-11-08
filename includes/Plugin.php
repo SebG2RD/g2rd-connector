@@ -10,6 +10,7 @@ declare(strict_types=1);
 namespace G2RD\Connector;
 
 use G2RD\Connector\Admin\Page;
+use G2RD\Connector\Backup\Gate\UpdateWatcher;
 use G2RD\Connector\CommandRuns\AfterResponseRunner;
 use G2RD\Connector\CommandRuns\RunStore;
 use G2RD\Connector\Cron\HeartbeatJob;
@@ -94,6 +95,16 @@ final class Plugin {
 		// au-delà des 7 jours annoncés par le readme. Ne fait rien sans tampon : aucune écriture
 		// sur un site jamais enrôlé (cf. PhpErrors\Buffer::purge()).
 		add_action( RestorePointPurgeJob::HOOK, [ Buffer::class, 'purge_now' ] );
+
+		// Sauvegardes (phase 4) : second filet de la porte des mises à jour, pour toute mise à jour
+		// (plateforme, administration, mises à jour automatiques). Sauvegardes éteintes : une lecture
+		// d'état au début, une à la fin, rien d'autre. AVANT le gate d'enrôlement et hors du bloc des
+		// commandes à distance : une copie laissée en cours par une déconnexion du manager ou par la
+		// coupure des commandes est interrompue par une mise à jour faite dans l'administration, et
+		// jamais reprise ensuite sur un mélange d'avant et d'après. Aucune écriture sur un site jamais
+		// enrôlé (sauvegardes éteintes, aucun état : cf. Backup\Gate\UpdateWatcher).
+		add_filter( 'upgrader_pre_download', [ UpdateWatcher::class, 'on_upgrade_start' ], 1, 1 );
+		add_action( 'upgrader_process_complete', [ UpdateWatcher::class, 'on_upgrade_complete' ], 10, 2 );
 
 		// ── Gate "site enrôlé" : RIEN n'est exposé / envoyé tant que l'utilisateur
 		// n'a pas explicitement enrôlé le site via la page admin. Conforme

@@ -1,0 +1,5 @@
+# Relevé du 08/11/2026 AVANT le correctif du premier lot (DatabaseDumper à 617c452), mêmes bancs, MariaDB 10.11.19.
+# Table aux grosses valeurs (300 lignes de 2 Mio), taille moyenne exacte annoncée (2 116 430) : premier lot de 3 lignes.
+{"mode":"grosses","memory_limit":"128M","segments":3,"lignes":300,"segments_mio":133.3,"duree_s":7.82,"base_mio":6,"pic_mio":52.4,"ajoute_mio":46.4,"limit_par_appel":[3,3,"fin"]}
+# Même table, statistiques périmées (taille moyenne annoncée : 54 octets) : premier lot de 200 lignes, soit 400 Mio.
+{"mode":"perimees","memory_limit":"128M","issue":"erreur_fatale","erreur":"Allowed memory size of 134217728 bytes exhausted (tried to allocate 2097184 bytes)","pic_au_arret":132366336}

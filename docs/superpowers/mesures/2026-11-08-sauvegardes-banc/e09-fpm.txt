@@ -1,0 +1,56 @@
+# E9 fpm : mise à jour en phase upload
+
+### update_plugin  [e09-maj.txt]
+résumé : HTTP 200 {"command": "update_plugin", "status": "done", "result.updated": true, "result.version_before": "1.0", "result.version_after": "1.1", "result.reason": null}
+--- début de la sortie brute (réponses du site, sans clé ni URL signée) ---
+Envoi 1/1 : POST http://fpm.test/wp-json/g2rd/v1/command (route signée /g2rd/v1/command, jeton dans Authorization)
+statut=200
+duree_s=1.400
+signature_check=ok
+corps :
+{
+    "command": "update_plugin",
+    "status": "done",
+    "result": {
+        "updated": true,
+        "file": "banc-extension/banc-extension.php",
+        "version_before": "1.0",
+        "version_after": "1.1",
+        "was_active": true,
+        "reactivated": true,
+        "reason": null
+    },
+    "error": null,
+    "at": "2026-11-08T11:24:59+00:00",
+    "signature_check": {
+        "status": "ok"
+    }
+}
+
+
+### fin de la sauvegarde, écart avec le site  [e09-fpm-fin.txt]
+# debut 2026-11-08T12:25:11+01:00
+Sauvegarde c923463e6f879c70f906be510e03bc32 : phase upload, type full
+Tranche 1 : phase upload, 9 segments écrits, 1 en attente, 70 ms
+Segment 8 déposé : stored
+Tranche 2 : phase finalize, 9 segments écrits, 0 en attente, 89 ms
+Dépôt de index.sig : stored
+Dépôt de index : stored
+Tranche 3 : phase idle, 0 segments écrits, 0 en attente, 0 ms
+OK sauvegarde c923463e6f879c70f906be510e03bc32 : 9 segments, 3 tranches, 2 s
+Segment 0 relu et déchiffré
+Segment 1 relu et déchiffré
+Segment 2 relu et déchiffré
+Segment 3 relu et déchiffré
+Segment 4 relu et déchiffré
+Segment 5 relu et déchiffré
+Segment 6 relu et déchiffré
+Segment 7 relu et déchiffré
+Segment 8 relu et déchiffré
+OK relev� C:\Users\gerar\Downloads\DeveloppementWeb\G2RD-Projet\G2RD_manager_projet\.claude\worktrees\sauvegardes-module/tools/banc-sauvegardes/var/c923463e6f879c70f906be510e03bc32/releve.json : 4080 fichiers, 14 tables, 4629 lignes de manifeste, 0 illisibles
+REFUS arbre reconstruit diff�rent du site : 2 �carts, dont [('wp-content/plugins/banc-extension/banc-extension.php', '5d6b523ebde2a6b35f9f42af4276723b2c907cb783fe8e89c552b337731432b2'), ('wp-content/plugins/banc-extension/banc-extension.php', '6d5001b3612e31b1
+# fin 2026-11-08T12:25:39+01:00 duree_s=28 code=1
+chemins differents entre la sauvegarde et le site actuel : 1
+   wp-content/plugins/banc-extension/banc-extension.php | sauvegarde | site
+tous sous wp-content/plugins/banc-extension/ : True
+
