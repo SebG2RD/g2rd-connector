@@ -39,9 +39,15 @@ use G2RD\Connector\Backup\Crypto\Aead;
 use G2RD\Connector\Backup\Crypto\SelfTest;
 use G2RD\Connector\Backup\Crypto\Sodium;
 use G2RD\Connector\Backup\Format\BackupIndex;
+use G2RD\Connector\Backup\Format\Hpke;
+use G2RD\Connector\Backup\Format\SegmentHeader;
+use G2RD\Connector\Backup\Gate\UpdateWitness;
 use G2RD\Connector\Backup\Keys\SigningKey;
 use G2RD\Connector\Backup\Keys\SiteKeyStore;
+use G2RD\Connector\Backup\Payload\PayloadFormat;
+use G2RD\Connector\Backup\Payload\PayloadWriter;
 use G2RD\Connector\Backup\State\BackupState;
+use G2RD\Connector\Backup\State\MainSite;
 use G2RD\Connector\Backup\Upload\PartUploader;
 use G2RD\Connector\Backup\Upload\PartUploadResult;
 use G2RD\Connector\Settings;
@@ -76,6 +82,11 @@ final class BackupJob {
 	private const SCOPES = [ 'db', 'files', 'both' ];
 
 	private const TYPES = [ 'full', 'incremental' ];
+
+	private const MAX_CONTENT_SEGMENTS = 4095;
+
+	/** Lignes de la table des options du site principal jamais copiées dans le dump. */
+	private const EXCLUDED_OPTIONS = [ BackupState::OPTION, UpdateWitness::OPTION, SiteKeyStore::OPTION, SigningKey::OPTION ];
 
 	private Sodium $sodium;
 
@@ -250,7 +261,8 @@ final class BackupJob {
 	}
 
 	/**
-	 * Tranche (première version : sans production ; remplacée en entier aux tâches 29-A et 29-C).
+	 * Tranche (deuxième version : production des segments de la base ; remplacée en entier à la
+	 * tâche 29-C).
 	 *
 	 * @param array<mixed> $payload
 	 * @return array<string, mixed> Rapport.
@@ -267,11 +279,43 @@ final class BackupJob {
 		$completed        = array_values( array_filter( (array) ( $payload['completed'] ?? [] ), 'is_int' ) );
 		$state['pending'] = $this->release( (array) $state['pending'], $completed, $job );
 		[ $state['pending'], $failures ] = $this->upload_parts( (array) $state['pending'], (array) ( $payload['uploads'] ?? [] ), $opened['deadline'], $job );
+		$state = $this->produce_or_keep( $raw, $state, $job, $opened['deadline'], $now );
 
 		$state['slice'] = null;
 		$this->save_end( $raw, $state, $now );
 
 		return $this->report( $state, $failures, null, ( $this->ms )() - $started );
+	}
+
+	/**
+	 * Production de la tranche. Base indisponible (lecture du dump, écriture de l'état) : rien de ce
+	 * qui a été produit dans la tranche n'est compté — l'état d'avant la production (envois de la
+	 * tranche compris) est enregistré et les journaux sont ramenés à sa longueur validée ; les
+	 * segments produits seront refaits, sous une clé neuve. Autre refus : sauvegarde close (failed),
+	 * autotest en échec dit avec son étape.
+	 *
+	 * @param array<string, mixed> $state
+	 * @return array<string, mixed>
+	 * @throws BackupRefused Voir le contrat.
+	 */
+	private function produce_or_keep( string $raw, array $state, string $job, int $deadline, int $now ): array {
+		$committed = $state;
+		try {
+			try {
+				return $this->produce( $state, $job, $deadline, $now );
+			} catch ( BackupRefused $refusal ) {
+				throw $refusal->with_stage( 'segment' );
+			}
+		} catch ( BackupRefused $refusal ) {
+			if ( in_array( $refusal->reason_code(), [ BackupRefused::DB_READ_FAILED, BackupRefused::STORE_UNAVAILABLE ], true ) ) {
+				WorkDir::truncate_journals( $job, (array) ( $committed['journals'] ?? [] ) );
+				$committed['slice'] = null;
+				BackupState::save( $raw, $committed );
+			} else {
+				$this->close( $raw, $committed, 'failed', $refusal->reason_code(), $now, $refusal->stage() );
+			}
+			throw $refusal;
+		}
 	}
 
 	/**
@@ -523,6 +567,161 @@ final class BackupJob {
 			'http_status' => $status,
 			'retryable'   => $retryable,
 		];
+	}
+
+	/**
+	 * Produit des segments tant que la tranche dure (première version : base seule ; remplacée en
+	 * entier aux tâches 29-B et 29-C).
+	 *
+	 * @param array<string, mixed> $state
+	 * @return array<string, mixed>
+	 * @throws BackupRefused Voir le contrat.
+	 */
+	private function produce( array $state, string $job, int $deadline, int $now ): array {
+		unset( $now );
+		if ( BackupState::DB !== $state['phase'] ) {
+			return $state;
+		}
+		$producer = $this->producer( $state, $job );
+		while ( BackupState::DB === $state['phase'] && ! $state['manifest_due'] && count( (array) $state['pending'] ) < self::MAX_PENDING && ( $this->ms )() < $deadline ) {
+			$n = (int) $state['segments'];
+			if ( $n >= self::MAX_CONTENT_SEGMENTS ) {
+				throw new BackupRefused( BackupRefused::TOO_MANY_SEGMENTS ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+			}
+			$this->assert_disk( $job );
+			$state = $this->db_segment( $producer, $state, $job, $n, $deadline );
+		}
+
+		return $state;
+	}
+
+	/**
+	 * @param array<string, mixed> $state
+	 * @throws BackupRefused NO_SITE_KEY.
+	 */
+	private function producer( array $state, string $job ): SegmentProducer {
+		$key = SiteKeyStore::current();
+		if ( null === $key ) {
+			throw new BackupRefused( BackupRefused::NO_SITE_KEY ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+		}
+
+		return new SegmentProducer( new Hpke( $this->sodium ), $this->sodium, $job, (string) $state['backup_id'], (int) $state['key_version'], (string) hex2bin( $key['public_key'] ), self::block_size(), $this->self_test );
+	}
+
+	/**
+	 * Un segment de la base. Ligne `table` du manifeste à la fin de chaque table, avec le segment où
+	 * elle COMMENCE (`db.table_segment` garde celui de la table en cours d'un segment à l'autre) ;
+	 * nom écrit par ManifestJournal::name_field() (`name_b64` s'il n'est pas de l'UTF-8 valide,
+	 * docs/backup-payload.md § 5). Tables relues de `db.tables_hex` (§ 4, « Curseur du dump »).
+	 *
+	 * @param array<string, mixed> $state
+	 * @return array<string, mixed>
+	 * @throws BackupRefused Voir le contrat.
+	 */
+	private function db_segment( SegmentProducer $producer, array $state, string $job, int $n, int $deadline ): array {
+		$options = (string) MainSite::run( fn (): string => (string) $this->wpdb->options );
+		$dumper  = new DatabaseDumper( $this->wpdb, [ $options => array_fill_keys( self::EXCLUDED_OPTIONS, true ) ] );
+		$db      = (array) $state['db'];
+		$tables  = DatabaseDumper::tables_from_hex( $db['tables_hex'] ?? null );
+		$target  = self::segment_target();
+		$carried = is_array( $db['cursor'] ?? null ) && true === ( $db['cursor']['started'] ?? false ) && is_int( $db['table_segment'] ?? null ) ? $db['table_segment'] : null;
+		$result  = null;
+		$entry   = $producer->produce(
+			$n,
+			SegmentHeader::KIND_DB,
+			function ( PayloadWriter $writer ) use ( $dumper, $tables, &$db, &$result, $target, $deadline ): void {
+				$emit   = static function ( string $sql ) use ( $writer, &$db ): void {
+					if ( '' === $sql ) {
+						return;
+					}
+					foreach ( str_split( $sql, PayloadFormat::MAX_RAW_BYTES ) as $chunk ) {
+						$writer->sql( (int) $db['sql_offset'], $chunk );
+						$db['sql_offset'] = (int) $db['sql_offset'] + strlen( $chunk );
+					}
+				};
+				$stop   = fn (): bool => $writer->written() >= $target || ( $this->ms )() >= $deadline;
+				$result = $dumper->advance( $tables, is_array( $db['cursor'] ) ? $db['cursor'] : null, $emit, $stop );
+			}
+		);
+		if ( null === $result ) {
+			return $state;
+		}
+		$db['cursor'] = $result['cursor'];
+		$db['done']   = null === $result['cursor'];
+		$journal      = new ManifestJournal( $job . '/manifest.jsonl' );
+		foreach ( $result['tables_done'] as $i => $table ) {
+			$journal->append(
+				[
+					't'             => 'table',
+					...ManifestJournal::name_field( $table['name'] ),
+					'rows'          => $table['rows'],
+					'create_sha256' => $table['create_sha256'],
+					'segment'       => 0 === $i && null !== $carried ? $carried : $n,
+				]
+			);
+		}
+		$open                          = null !== $result['cursor'] && $result['cursor']['started'];
+		$db['table_segment']           = $open ? ( [] === $result['tables_done'] && null !== $carried ? $carried : $n ) : null;
+		$state['totals']['db_tables'] += count( $result['tables_done'] );
+		$state['totals']['db_rows']   += $result['rows'];
+		$state['db']                   = $db;
+		if ( $db['done'] ) {
+			if ( 'both' === $state['scope'] ) {
+				$state['phase'] = BackupState::FILES;
+			} else {
+				$state['manifest_due'] = true;
+			}
+		}
+
+		return $this->record_segment( $state, $entry, $job );
+	}
+
+	/**
+	 * Segment inscrit : liste des segments, parties annoncées, longueurs validées des journaux (elles
+	 * deviennent celles de l'état à son écriture de fin de tranche).
+	 *
+	 * @param array<string, mixed>                                                                         $state
+	 * @param array{segment: int, kind: string, bytes: int, blocks: int, sha256: string, header: string, file: string} $entry
+	 * @return array<string, mixed>
+	 * @throws BackupRefused WORK_DIR_UNAVAILABLE.
+	 */
+	private function record_segment( array $state, array $entry, string $job ): array {
+		$line = [
+			'index'  => $entry['segment'],
+			'kind'   => $entry['kind'],
+			'blocks' => $entry['blocks'],
+			'bytes'  => $entry['bytes'],
+			'sha256' => $entry['sha256'],
+		];
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents, WordPress.WP.AlternativeFunctions.json_encode_json_encode -- liste des segments de la sauvegarde, dans son dossier de travail.
+		if ( false === file_put_contents( $job . '/segments.jsonl', (string) json_encode( $line ) . "\n", FILE_APPEND ) ) {
+			throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+		}
+		$limit                             = self::memory_limit();
+		$state['pending'][]                = [
+			'segment'  => $entry['segment'],
+			'kind'     => $entry['kind'],
+			'bytes'    => $entry['bytes'],
+			'blocks'   => $entry['blocks'],
+			'sha256'   => $entry['sha256'],
+			'header'   => $entry['header'],
+			'parts'    => PartPlanner::plan( $entry['bytes'], PartPlanner::part_size( $limit, memory_get_usage( true ) ) ),
+			'uploaded' => [],
+		];
+		$state['segments']                 = $entry['segment'] + 1;
+		$state['totals']['payload_bytes'] += $entry['bytes'];
+		$state['journals']                 = WorkDir::journal_sizes( $job );
+
+		return $state;
+	}
+
+	private static function block_size(): int {
+		return self::bounded( apply_filters( 'g2rd_connector_backup_block_kib', 8192 ), 8192, 64, 65536 ) * 1024;
+	}
+
+	private static function memory_limit(): ?int {
+		$limit = function_exists( 'wp_convert_hr_to_bytes' ) ? wp_convert_hr_to_bytes( (string) ini_get( 'memory_limit' ) ) : -1;
+		return $limit > 0 ? $limit : null;
 	}
 
 	/**

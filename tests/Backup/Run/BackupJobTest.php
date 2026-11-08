@@ -358,4 +358,100 @@ final class BackupJobTest extends BackupTestCase {
 		}
 		self::assertSame( [ 'failed', 'backup_work_dir_unavailable' ], [ BackupState::load()['state']['last']['outcome'], BackupState::load()['state']['last']['code'] ] );
 	}
+
+	/**
+	 * Joue des tranches sans envoi jusqu'à la fin de la copie (phase sortie de db et files, ou
+	 * segment du manifeste dû) ; chaque segment est copié avant d'être libéré.
+	 *
+	 * @return array<int, string> Segments produits (numéro → octets chiffrés).
+	 */
+	private function copier( BackupJob $job, string $id ): array {
+		$segments = [];
+		$lire     = function () use ( &$segments, $id ): array {
+			$numeros = [];
+			foreach ( (array) BackupState::load()['state']['pending'] as $p ) {
+				$segments[ $p['segment'] ] = (string) file_get_contents( $this->dossier( $id ) . '/seg-' . $p['segment'] . '.seg' );
+				$numeros[]                 = $p['segment'];
+			}
+			return $numeros;
+		};
+		for ( $tour = 0; $tour < 50; $tour++ ) {
+			$etat = BackupState::load()['state'];
+			if ( ! BackupState::is_capturing( $etat ) || true === ( $etat['manifest_due'] ?? false ) ) {
+				break;
+			}
+			$job->step( [ 'backup_id' => $id, 'completed' => $lire() ] );
+		}
+		$lire();
+
+		return $segments;
+	}
+
+	/**
+	 * Base du test : `wp_a` de lignes de 2,3 Mio aléatoires (une table qui remplit un segment de
+	 * 16 Mio), `wp_b` petite, et la table des options vide de base_du_site() (filet `<préfixe>options`
+	 * de DatabaseDumper::tables()), copiée après elles (tri octet par octet).
+	 */
+	private static function base_lourde( int $lignes_a ): FakeDumpWpdb {
+		$base = self::base_du_site();
+		$rows = [];
+		for ( $i = 1; $i <= $lignes_a; $i++ ) {
+			$rows[] = [ 'id' => (string) $i, 'v' => random_bytes( 2411724 ) ];
+		}
+		$base->tables['wp_a'] = [ 'columns' => [ 'id' => 'bigint(20)', 'v' => 'longtext' ], 'pk' => [ 'id' ], 'rows' => $rows ];
+		$base->tables['wp_b'] = [ 'columns' => [ 'id' => 'bigint(20)', 'n' => 'varchar(20)' ], 'pk' => [ 'id' ], 'rows' => [ [ 'id' => '1', 'n' => 'petite' ] ] ];
+
+		return $base;
+	}
+
+	/**
+	 * @return list<array<string, mixed>> Lignes `table` du journal du manifeste.
+	 */
+	private function lignes_table( string $id ): array {
+		$lignes = array_map( static fn ( string $l ): array => (array) json_decode( $l, true ), (array) file( $this->dossier( $id ) . '/manifest.jsonl', FILE_IGNORE_NEW_LINES ) );
+
+		return array_values( array_filter( $lignes, static fn ( array $l ): bool => 'table' === ( $l['t'] ?? null ) ) );
+	}
+
+	public function test_table_repartie_le_manifeste_dit_le_segment_ou_elle_commence(): void {
+		$base = self::base_lourde( 9 );
+		$job  = $this->job( $base );
+		$job->start( self::depart( self::B1, 'db' ) );
+
+		$segments = $this->copier( $job, self::B1 );
+
+		self::assertGreaterThanOrEqual( 2, count( $segments ) );
+		self::assertSame( [ [ 'wp_a', 0 ], [ 'wp_b', 1 ], [ 'wp_options', 1 ] ], array_map( static fn ( array $l ): array => [ $l['name'], $l['segment'] ], $this->lignes_table( self::B1 ) ), 'wp_a commence au segment 0 et finit au 1' );
+		$etat = BackupState::load()['state'];
+		self::assertTrue( true === $etat['manifest_due'] || BackupState::UPLOAD === $etat['phase'], 'copie de la base finie' );
+	}
+
+	public function test_base_indisponible_en_cours_de_tranche_aucune_ligne_en_double(): void {
+		$base = self::base_lourde( 7 );
+		// Petite table copiée avant wp_a (tri octet par octet) : sa ligne `table` est écrite au
+		// segment 0 de la tranche refusée ; wp_a, ouverte à la fin du segment 0, ne se termine
+		// qu'au segment 1, où wp_b est illisible.
+		$base->tables['wp_0'] = [ 'columns' => [ 'id' => 'bigint(20)' ], 'pk' => [ 'id' ], 'rows' => [ [ 'id' => '1' ] ] ];
+		$base->fails_on       = 'wp_b';
+		$job                  = $this->job( $base );
+		$job->start( self::depart( self::B1, 'db' ) );
+
+		try {
+			$job->step( [ 'backup_id' => self::B1 ] );
+			self::fail( 'Refus attendu : wp_b illisible après un premier segment produit dans la tranche.' );
+		} catch ( BackupRefused $refus ) {
+			self::assertSame( BackupRefused::DB_READ_FAILED, $refus->reason_code() );
+		}
+		$etat = BackupState::load()['state'];
+		self::assertSame( [ 0, [] ], [ $etat['segments'], $etat['pending'] ], 'rien de la production de la tranche n\'est compté' );
+		self::assertSame( [], $this->lignes_table( self::B1 ), 'journal ramené à sa longueur validée' );
+		self::assertSame( '', (string) file_get_contents( $this->dossier( self::B1 ) . '/segments.jsonl' ), 'segment 0 de la tranche refusée retiré de la liste des segments' );
+
+		$base->fails_on = null;
+		$this->copier( $job, self::B1 );
+
+		self::assertSame( [ 'wp_0', 'wp_a', 'wp_b', 'wp_options' ], array_column( $this->lignes_table( self::B1 ), 'name' ), 'une ligne par table, jamais deux' );
+		self::assertSame( [ 0, 0, 1, 1 ], array_column( $this->lignes_table( self::B1 ), 'segment' ), 'wp_a commence au segment 0 refait' );
+		self::assertSame( 4, BackupState::load()['state']['totals']['db_tables'] );
+	}
 }
