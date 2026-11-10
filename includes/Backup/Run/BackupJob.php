@@ -1365,7 +1365,9 @@ final class BackupJob {
 	 * au décalage de reprise gardé dans l'état. Disparu, changé de taille ou de date, remplacé par un
 	 * autre fichier, ou décalage au-delà de sa fin : la sauvegarde s'arrête. Une incrémentale sans son
 	 * état local oublierait les suppressions (une restauration ressusciterait un fichier supprimé) :
-	 * jamais dite réussie.
+	 * jamais dite réussie. Phrase du refus : celle d'un lien s'il en est la cause, sinon
+	 * DETAIL_BASELINE_LOST (liste disparue ou changée) ou DETAIL_BASELINE_STATE (avancement gardé
+	 * dans l'état incomplet ou incohérent).
 	 *
 	 * @param array<string, mixed> $files État `files` de la sauvegarde.
 	 * @throws BackupRefused WORK_DIR_UNAVAILABLE (phrase du lien si un lien en est la cause).
@@ -1377,12 +1379,17 @@ final class BackupJob {
 		$size   = $files['baseline_size'] ?? null;
 		$mtime  = $files['baseline_mtime'] ?? null;
 		$ino    = $files['baseline_ino'] ?? null;
-		$same   = false !== $stat && is_int( $size ) && $size === $stat['size'] && $mtime === $stat['mtime'] && $ino === $stat['ino'];
-		if ( null === $handle || ! $same || ! is_int( $offset ) || $offset < 0 || $offset > $size || 0 !== fseek( $handle, $offset ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions -- reprise de l'état local à son décalage.
+		$known  = is_int( $size ) && is_int( $mtime ) && is_int( $ino ) && is_int( $offset );
+		$same   = false !== $stat && $size === $stat['size'] && $mtime === $stat['mtime'] && $ino === $stat['ino'];
+		if ( null === $handle || ! $known || ! $same || $offset < 0 || $offset > $size || 0 !== fseek( $handle, $offset ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions -- reprise de l'état local à son décalage.
 			if ( null !== $handle ) {
 				fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- état local refusé, fermé sans être lu.
 			}
-			throw WorkDir::unavailable( $file ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+			if ( WorkDir::foreign( $file ) ) {
+				throw WorkDir::unavailable( $file ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+			}
+			$detail = $known && ( null === $handle || ! $same ) ? BackupRefused::DETAIL_BASELINE_LOST : BackupRefused::DETAIL_BASELINE_STATE;
+			throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE, null, $detail ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
 		}
 
 		return new BaselineReader( $handle );

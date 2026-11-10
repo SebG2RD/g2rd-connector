@@ -1171,7 +1171,7 @@ final class BackupJobTest extends BackupTestCase {
 		self::assertSame( 'incremental', BackupState::load()['state']['type'] );
 		unlink( WorkDir::baseline_dir() . '/' . self::B1 . '.jsonl' );
 
-		$this->assert_incrementale_arretee_sans_son_etat_local( $job );
+		$this->assert_incrementale_arretee_sans_son_etat_local( $job, 'perdu' );
 	}
 
 	/** Même arrêt quand l'état local a changé de taille depuis le départ (tronqué, réécrit). */
@@ -1181,7 +1181,7 @@ final class BackupJobTest extends BackupTestCase {
 		$job->start( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
 		file_put_contents( WorkDir::baseline_dir() . '/' . self::B1 . '.jsonl', IncrementalBaseline::line( [ 'path' => 'zz.txt', 'type' => 'file', 'size' => 1, 'mtime' => 1 ], null ), FILE_APPEND );
 
-		$this->assert_incrementale_arretee_sans_son_etat_local( $job );
+		$this->assert_incrementale_arretee_sans_son_etat_local( $job, 'perdu' );
 	}
 
 	/**
@@ -1209,6 +1209,7 @@ final class BackupJobTest extends BackupTestCase {
 				self::fail( $cas . ' : refus attendu' );
 			} catch ( BackupRefused $refus ) {
 				self::assert_arretee_en_cours( $refus, BackupRefused::WORK_DIR_UNAVAILABLE );
+				self::assertStringContainsString( 'la liste des fichiers de la dernière sauvegarde complète, gardée sur le site pour préparer les sauvegardes incrémentales, a disparu ou changé pendant la sauvegarde', $refus->getMessage(), $cas );
 			}
 			self::assert_close_en_echec( 'backup_work_dir_unavailable' );
 		}
@@ -1223,18 +1224,81 @@ final class BackupJobTest extends BackupTestCase {
 		$files['baseline_offset'] = 1000000000;
 		$this->poser_etat( [ 'files' => $files ] );
 
-		$this->assert_incrementale_arretee_sans_son_etat_local( $job );
+		$this->assert_incrementale_arretee_sans_son_etat_local( $job, 'état' );
 	}
 
-	/** Tranche suivante refusée (phrase vraie, sans lien), sauvegarde close en échec, jamais finie. */
-	private function assert_incrementale_arretee_sans_son_etat_local( BackupJob $job ): void {
+	/**
+	 * Incrémentale commencée par une version précédente du connecteur (état sans la taille, la date
+	 * ni l'inode de l'état local, ni le départ de la complète) : arrêtée avec la phrase de l'état ;
+	 * l'état local, intact, sert encore : l'incrémentale suivante sur la même complète reste une
+	 * incrémentale, comme l'annonce la phrase (« repartira du début »).
+	 */
+	public function test_incrementale_d_une_version_precedente_arretee_puis_reprise_du_debut(): void {
+		$this->etat_local_de_l_arbre();
+		$job = $this->job();
+		$job->start( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
+		$files = (array) BackupState::load()['state']['files'];
+		unset( $files['baseline_size'], $files['baseline_mtime'], $files['baseline_ino'], $files['parent_created_at'] );
+		$this->poser_etat( [ 'files' => $files ] );
+
+		$this->assert_incrementale_arretee_sans_son_etat_local( $job, 'état' );
+
+		$r3 = $this->jouer( self::depart( str_repeat( '3', 32 ), 'files', 'incremental', self::B1 ) );
+		self::assertSame( 'incremental', $this->assert_index_valide( $r3 )['type'] );
+		self::assertNull( $r3['rapports'][0]['downgraded'] );
+	}
+
+	/**
+	 * Ce qu'annonce la phrase de l'état local perdu (« la prochaine sauvegarde revérifiera cette
+	 * liste et sera complète si elle n'est plus intacte ») : disparu ou changé de contenu, la
+	 * suivante, demandée incrémentale sur la même complète, est une complète et le dit, puis une
+	 * incrémentale repart d'elle ; seulement touché (date changée, contenu intact), la suivante
+	 * reste une incrémentale.
+	 */
+	public function test_apres_un_etat_local_perdu_la_suivante_repart_d_une_base_verifiee(): void {
+		$b3 = str_repeat( '3', 32 );
+		$b4 = str_repeat( '4', 32 );
+		$this->etat_local_de_l_arbre();
+		$job = $this->job();
+		$job->start( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
+		unlink( WorkDir::baseline_dir() . '/' . self::B1 . '.jsonl' );
+		$this->assert_incrementale_arretee_sans_son_etat_local( $job, 'perdu' );
+
+		$r3 = $this->jouer( self::depart( $b3, 'files', 'incremental', self::B1 ) );
+		self::assertSame( 'full', $this->assert_index_valide( $r3 )['type'], 'disparu : complète' );
+		self::assertSame( 'baseline_unreadable', $r3['rapports'][0]['downgraded'], 'et le dit' );
+		$r4 = $this->jouer( self::depart( $b4, 'files', 'incremental', $b3 ) );
+		self::assertSame( 'incremental', $this->assert_index_valide( $r4 )['type'], 'puis incrémentale sur la nouvelle complète' );
+
+		$b5 = str_repeat( '5', 32 );
+		$this->job()->start( self::depart( $b5, 'files', 'incremental', $b3 ) );
+		$etat_local = WorkDir::baseline_dir() . '/' . $b3 . '.jsonl';
+		clearstatcache();
+		touch( $etat_local, (int) filemtime( $etat_local ) - 100 );
 		try {
-			$job->step( [ 'backup_id' => self::B2 ] );
+			$this->job()->step( [ 'backup_id' => $b5 ] );
+			self::fail( 'Refus attendu : état local touché.' );
+		} catch ( BackupRefused $refus ) {
+			self::assertStringContainsString( 'la liste des fichiers de la dernière sauvegarde complète, gardée sur le site pour préparer les sauvegardes incrémentales, a disparu ou changé pendant la sauvegarde', $refus->getMessage() );
+		}
+		$r6 = $this->jouer( self::depart( str_repeat( '6', 32 ), 'files', 'incremental', $b3 ) );
+		self::assertSame( 'incremental', $this->assert_index_valide( $r6 )['type'], 'touché, contenu intact : incrémentale' );
+	}
+
+	/**
+	 * Tranche suivante refusée avec la phrase vraie (« perdu » : liste de la dernière complète
+	 * disparue ou changée ; « état » : avancement incomplet ou incohérent), jamais celle d'un lien ni
+	 * celle des droits du dossier ; sauvegarde close en échec, jamais finie.
+	 */
+	private function assert_incrementale_arretee_sans_son_etat_local( BackupJob $job, string $cause ): void {
+		try {
+			$job->step( [ 'backup_id' => (string) BackupState::load()['state']['backup_id'] ] );
 			self::fail( 'Refus attendu : une incrémentale sans son état local oublierait les suppressions.' );
 		} catch ( BackupRefused $refus ) {
 			self::assert_arretee_en_cours( $refus, BackupRefused::WORK_DIR_UNAVAILABLE );
+			self::assertStringContainsString( 'perdu' === $cause ? 'la liste des fichiers de la dernière sauvegarde complète, gardée sur le site pour préparer les sauvegardes incrémentales, a disparu ou changé pendant la sauvegarde' : 'l’avancement de sa comparaison avec la dernière sauvegarde complète, gardé sur le site entre deux étapes, est incomplet ou incohérent', $refus->getMessage() );
 			self::assertStringNotContainsString( 'raccourci', $refus->getMessage(), 'cause qui n’est pas un lien : la phrase n’en parle pas' );
-			self::assertStringContainsString( 'retirés par une extension de nettoyage', $refus->getMessage() );
+			self::assertStringNotContainsString( 'droits du dossier', $refus->getMessage(), 'jamais la cause des droits' );
 		}
 		self::assert_close_en_echec( 'backup_work_dir_unavailable' );
 	}

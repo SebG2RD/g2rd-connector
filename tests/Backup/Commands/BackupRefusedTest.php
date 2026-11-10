@@ -130,6 +130,33 @@ final class BackupRefusedTest extends TestCase {
 	}
 
 	/**
+	 * Arrêts de l'état local d'une incrémentale (liste de la dernière complète perdue ; avancement
+	 * incohérent) : leurs propres phrases, toujours « en cours », même code stable, et jamais la
+	 * cause des droits du dossier ni celle d'un lien.
+	 */
+	public function test_les_arrets_de_l_etat_local_ont_leurs_propres_phrases(): void {
+		foreach (
+			[
+				BackupRefused::DETAIL_BASELINE_LOST  => 'a disparu ou changé pendant la sauvegarde',
+				BackupRefused::DETAIL_BASELINE_STATE => 'est incomplet ou incohérent',
+			] as $detail => $quoi
+		) {
+			$refus = new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE, null, $detail );
+			self::assertSame( $refus->getMessage(), $refus->in_progress()->getMessage(), $detail . ' : déjà une phrase « en cours »' );
+			$message = $refus->in_progress()->getMessage();
+			self::assertSame( 'backup_work_dir_unavailable', $refus->outcome()['error_code'], $detail );
+			self::assertStringStartsWith( 'La sauvegarde en cours a été arrêtée et ne sera pas terminée : ', $message, $detail );
+			self::assertStringContainsString( $quoi, $message, $detail );
+			self::assertStringContainsString( 'ce qu’elle avait déjà envoyé au stockage ne compte pas comme une sauvegarde', $message, $detail );
+			self::assertStringContainsString( ' Cause probable : ', $message, $detail );
+			self::assertStringContainsString( ' Action : aucune ; la prochaine sauvegarde ', $message, $detail );
+			self::assertStringNotContainsString( 'droits du dossier', $message, $detail );
+			self::assertStringNotContainsString( 'raccourci', $message, $detail );
+			self::assertStringEndsWith( '.', $message, $detail );
+		}
+	}
+
+	/**
 	 * Le lien est le dossier de travail lui-même : la phrase dit « ou à sa place », et que le
 	 * connecteur recréera un vrai dossier une fois le lien retiré ; au départ comme en cours, même
 	 * code stable.

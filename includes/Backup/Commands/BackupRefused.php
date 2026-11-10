@@ -136,6 +136,26 @@ final class BackupRefused extends \RuntimeException {
 	/** DETAIL_WORK_DIR_LINK pour une sauvegarde déjà commencée (in_progress()). */
 	private const DETAIL_WORK_DIR_LINK_IN_PROGRESS = 'work_dir_link_in_progress';
 
+	/**
+	 * Détail de WORK_DIR_UNAVAILABLE quand une incrémentale s'arrête parce que l'état local de la
+	 * complète parente (la liste de ses fichiers, gardée sur le site) a disparu ou changé pendant la
+	 * sauvegarde (Run\BackupJob::baseline_reader()). Toujours une sauvegarde en cours : la phrase
+	 * l'est d'emblée. La prochaine sauvegarde revérifie cette liste par son empreinte
+	 * (IncrementalBaseline::usable_for()) et devient une complète si elle n'est plus intacte. Seule
+	 * la phrase change.
+	 */
+	public const DETAIL_BASELINE_LOST = 'baseline_lost';
+
+	/**
+	 * Détail de WORK_DIR_UNAVAILABLE quand l'avancement de la comparaison avec l'état local, gardé
+	 * dans l'état de la sauvegarde, est incomplet (incrémentale commencée par une version précédente)
+	 * ou incohérent (décalage au-delà de la fin). La prochaine sauvegarde repart d'un état neuf.
+	 */
+	public const DETAIL_BASELINE_STATE = 'baseline_state';
+
+	/** Détails dont la phrase est déjà celle d'une sauvegarde en cours (in_progress() les garde). */
+	private const ALREADY_IN_PROGRESS = [ self::DETAIL_BASELINE_LOST, self::DETAIL_BASELINE_STATE ];
+
 	/** Détail « en cours » de chaque détail de lien (in_progress()). */
 	private const LINK_IN_PROGRESS = [
 		self::DETAIL_LINK          => self::DETAIL_LINK_IN_PROGRESS,
@@ -243,7 +263,7 @@ final class BackupRefused extends \RuntimeException {
 	 * pour un autre code ou s'il l'est déjà.
 	 */
 	public function in_progress(): self {
-		if ( in_array( $this->detail, [ self::DETAIL_IN_PROGRESS, ...array_values( self::LINK_IN_PROGRESS ) ], true ) || ! in_array( $this->reason_code, self::IN_PROGRESS_CODES, true ) ) {
+		if ( in_array( $this->detail, [ self::DETAIL_IN_PROGRESS, ...array_values( self::LINK_IN_PROGRESS ), ...self::ALREADY_IN_PROGRESS ], true ) || ! in_array( $this->reason_code, self::IN_PROGRESS_CODES, true ) ) {
 			return $this;
 		}
 		$detail = self::WORK_DIR_UNAVAILABLE === $this->reason_code && isset( self::LINK_IN_PROGRESS[ $this->detail ] ) ? self::LINK_IN_PROGRESS[ $this->detail ] : self::DETAIL_IN_PROGRESS;
@@ -333,6 +353,8 @@ final class BackupRefused extends \RuntimeException {
 				'' === $detail ? '?' : $detail
 			),
 			self::WORK_DIR_UNAVAILABLE => match ( $detail ) {
+				self::DETAIL_BASELINE_LOST => __( 'La sauvegarde en cours a été arrêtée et ne sera pas terminée : la liste des fichiers de la dernière sauvegarde complète, gardée sur le site pour préparer les sauvegardes incrémentales, a disparu ou changé pendant la sauvegarde ; sans elle, les fichiers supprimés depuis cette complète ne seraient pas notés, et une restauration les ferait revenir. Elle n’est pas comptée comme réussie, et ce qu’elle avait déjà envoyé au stockage ne compte pas comme une sauvegarde. Cause probable : une extension de nettoyage ou un outil de l’hébergeur. Action : aucune ; la prochaine sauvegarde revérifiera cette liste et sera complète si elle n’est plus intacte.', 'g2rd-connector' ),
+				self::DETAIL_BASELINE_STATE => __( 'La sauvegarde en cours a été arrêtée et ne sera pas terminée : l’avancement de sa comparaison avec la dernière sauvegarde complète, gardé sur le site entre deux étapes, est incomplet ou incohérent. Elle n’est pas comptée comme réussie, et ce qu’elle avait déjà envoyé au stockage ne compte pas comme une sauvegarde. Cause probable : sauvegarde commencée par une version précédente du connecteur, ou réglage g2rd_backup_state modifié hors du connecteur. Action : aucune ; la prochaine sauvegarde repartira du début.', 'g2rd-connector' ),
 				self::DETAIL_WORK_DIR_LINK_IN_PROGRESS => sprintf(
 					/* translators: %1$s: dossier de travail des sauvegardes, relatif au dossier du site (par exemple « wp-content/g2rd-backups »), jamais un chemin complet. */
 					__( 'La sauvegarde en cours a été arrêtée et ne sera pas terminée : un raccourci vers un autre fichier ou dossier (un lien) a été trouvé dans le dossier de travail des sauvegardes (%1$s), ou à sa place, et le connecteur n’écrit, ne lit et ne supprime jamais rien à travers un tel raccourci. Elle n’est pas comptée comme réussie, et ce qu’elle avait déjà envoyé au stockage ne compte pas comme une sauvegarde. Tant que ce raccourci reste en place, la sauvegarde sera refusée de la même façon à chaque nouvelle tentative. Cause probable : raccourci créé pendant la sauvegarde par une extension, par un outil de l’hébergeur ou lors d’une migration du site ; si personne ne l’a créé volontairement, faites vérifier la sécurité du site. Action : faire retirer ce raccourci %1$s par l’hébergeur ou par le développeur du site (le raccourci seulement, jamais le dossier vers lequel il mène) : le connecteur recréera alors un vrai dossier à sa place ; puis relancer la sauvegarde depuis la plateforme.', 'g2rd-connector' ),
