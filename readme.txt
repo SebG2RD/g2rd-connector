@@ -92,9 +92,10 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 
 * **Performance: the site inventory no longer invalidates the connector's OPcache files on every
   sync.** With `opcache.validate_timestamps` on, OPcache already notices modified files, so nothing
-  is invalidated any more (it left about 1 MB of wasted OPcache memory per sync, shared by every
-  site on the server, and a recompilation on the next request). With it off, the files are
-  invalidated, all together, only when they changed since the last invalidation.
+  is invalidated any more (it left about 1 MB of wasted OPcache memory per sync, memory that is
+  shared with the other sites served by the same PHP/OPcache instance, and a recompilation on the
+  next request). With it off, the files are invalidated, all together, only when they changed since
+  the last invalidation on that server (tracked per server, once per network on a multisite).
 
 = 1.16.0-rc.2 =
 
