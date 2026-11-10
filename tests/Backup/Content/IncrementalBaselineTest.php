@@ -200,6 +200,21 @@ final class IncrementalBaselineTest extends TestCase {
 		}
 	}
 
+	/**
+	 * `current.json` est un lien physique (un autre nom d'un fichier rangé hors de l'état local) :
+	 * jamais lu, et l'état local est dit illisible, pas absent.
+	 */
+	public function test_une_description_en_lien_physique_est_illisible(): void {
+		$this->promouvoir();
+		$copie = $this->dehors . '/description.json';
+		rename( $this->dossier . '/current.json', $copie );
+		if ( ! @link( $copie, $this->dossier . '/current.json' ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+			self::markTestSkipped( 'Le système refuse de créer un lien physique.' );
+		}
+
+		self::assertSame( 'baseline_unreadable', ( new IncrementalBaseline( $this->dossier ) )->usable_for( self::COMPLETE, self::T0 )['reason'] );
+	}
+
 	/** Un ancien état local qui est un lien n'est pas retiré par la promotion ; sa cible non plus. */
 	public function test_un_ancien_etat_local_qui_est_un_lien_reste_avec_sa_cible(): void {
 		$cible = $this->dehors . '/ancien.jsonl';

@@ -320,9 +320,17 @@ final class WorkDir {
 	 * ou dans le dossier de travail ; sinon la phrase des droits du dossier.
 	 */
 	public static function unavailable( string $path ): BackupRefused {
-		$link = ! self::within_private( $path ) || self::hard_linked( $path ) || self::link_in_work_dir();
+		$link = self::foreign( $path ) || self::link_in_work_dir();
 
 		return new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE, null, $link ? BackupRefused::DETAIL_LINK : '' );
+	}
+
+	/**
+	 * $path est-il un lien, un lien physique, ou rangé derrière un lien (hors du dossier privé, ou
+	 * atteint à travers un lien) ? Un fichier absent ne l'est pas.
+	 */
+	public static function foreign( string $path ): bool {
+		return ! self::within_private( $path ) || self::hard_linked( $path );
 	}
 
 	/** Retire les fichiers que le module a créés pour $backup_id, puis le dossier s'il est vide. */

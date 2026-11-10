@@ -66,8 +66,9 @@ final class IncrementalBaseline {
 	 *         l'état local utilisable, gardée par la sauvegarde pour le revérifier à chaque tranche.
 	 */
 	public function usable_for( string $parent_id, int $now ): array {
-		// Description qui est un lien, ou rangée derrière un lien : jamais lue, illisible.
-		if ( ! WorkDir::within_private( $this->dir . '/' . self::CURRENT ) ) {
+		// Description qui est un lien (lien physique compris), ou rangée derrière un lien : jamais
+		// lue, et dite illisible, pas absente.
+		if ( WorkDir::foreign( $this->dir . '/' . self::CURRENT ) ) {
 			return self::refused( 'baseline_unreadable' );
 		}
 		$current = $this->current();
