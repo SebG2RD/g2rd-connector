@@ -1369,11 +1369,11 @@ final class BackupJob {
 	}
 
 	/**
-	 * Refus WORK_DIR_UNAVAILABLE quand job() rend null : avec la phrase du lien (DETAIL_LINK) si un
-	 * lien dans le dossier de travail en est la cause, sinon la phrase des droits du dossier.
+	 * Refus WORK_DIR_UNAVAILABLE quand job() rend null : avec la phrase du lien si un lien en est la
+	 * cause (dossier de travail lui-même compris), sinon la phrase des droits du dossier.
 	 */
 	private static function work_dir_refusal( string $backup_id ): BackupRefused {
-		return new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE, null, WorkDir::blocked_by_link( $backup_id ) ? BackupRefused::DETAIL_LINK : '' );
+		return WorkDir::job_unavailable( $backup_id );
 	}
 
 	/**

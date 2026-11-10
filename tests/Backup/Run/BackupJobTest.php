@@ -459,7 +459,10 @@ final class BackupJobTest extends BackupTestCase {
 		$medias = $this->racine . '/wp-content/uploads';
 		try {
 			self::lien_vers_un_dossier_ou_ignorer( $medias, $this->travail );
-			self::assert_refus_pour_un_lien( $this->refus_au_depart( self::B1 ), 'La sauvegarde n’a pas été lancée : ' );
+			$refus = $this->refus_au_depart( self::B1 );
+			self::assert_refus_pour_un_lien( $refus, 'La sauvegarde n’a pas été lancée : ' );
+			self::assertStringContainsString( 'a été trouvé dans le dossier de travail des sauvegardes (' . WorkDir::display_name() . '), ou à sa place,', $refus->getMessage(), 'le lien est le dossier lui-même' );
+			self::assertStringContainsString( 'le connecteur recréera alors un vrai dossier', $refus->getMessage() );
 			self::assertSame( [ 'b.jpg' ], self::contenu( $medias ), 'rien écrit dans les médias' );
 			self::assertSame( BackupState::IDLE, BackupState::load()['state']['phase'] );
 		} finally {

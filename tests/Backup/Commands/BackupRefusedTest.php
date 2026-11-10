@@ -130,6 +130,30 @@ final class BackupRefusedTest extends TestCase {
 	}
 
 	/**
+	 * Le lien est le dossier de travail lui-même : la phrase dit « ou à sa place », et que le
+	 * connecteur recréera un vrai dossier une fois le lien retiré ; au départ comme en cours, même
+	 * code stable.
+	 */
+	public function test_un_dossier_de_travail_qui_est_un_lien_a_sa_propre_phrase(): void {
+		$depart   = new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE, null, BackupRefused::DETAIL_WORK_DIR_LINK );
+		$en_cours = $depart->in_progress();
+
+		foreach ( [ 'départ' => $depart, 'en cours' => $en_cours ] as $cas => $refus ) {
+			$message = $refus->getMessage();
+			self::assertSame( 'backup_work_dir_unavailable', $refus->outcome()['error_code'], $cas );
+			self::assertStringContainsString( 'un raccourci vers un autre fichier ou dossier (un lien) a été trouvé dans le dossier de travail des sauvegardes (' . WorkDir::display_name() . '), ou à sa place,', $message, $cas );
+			self::assertStringContainsString( 'Tant que ce raccourci reste en place, la sauvegarde sera refusée de la même façon à chaque nouvelle tentative.', $message, $cas );
+			self::assertStringContainsString( 'si personne ne l’a créé volontairement, faites vérifier la sécurité du site', $message, $cas );
+			self::assertStringContainsString( 'le connecteur recréera alors un vrai dossier', $message, $cas );
+			self::assertStringEndsWith( '.', $message, $cas );
+		}
+		self::assertStringStartsWith( 'La sauvegarde n’a pas été lancée : ', $depart->getMessage() );
+		self::assertStringStartsWith( 'La sauvegarde en cours a été arrêtée et ne sera pas terminée : ', $en_cours->getMessage() );
+		self::assertSame( $en_cours->getMessage(), $en_cours->in_progress()->getMessage(), 'sans effet la seconde fois' );
+		self::assertStringNotContainsString( 'ou à sa place', ( new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE, null, BackupRefused::DETAIL_LINK ) )->getMessage(), 'lien dans le dossier : phrase du lien dans le dossier' );
+	}
+
+	/**
 	 * Le dossier nommé par la phrase du lien est le vrai dossier de travail (filtre
 	 * g2rd_connector_backup_dir), sans jamais de chemin complet du serveur.
 	 */

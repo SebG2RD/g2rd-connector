@@ -320,9 +320,29 @@ final class WorkDir {
 	 * ou dans le dossier de travail ; sinon la phrase des droits du dossier.
 	 */
 	public static function unavailable( string $path ): BackupRefused {
-		$link = self::foreign( $path ) || self::link_in_work_dir();
+		return new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE, null, self::link_detail( self::foreign( $path ) || self::link_in_work_dir() ) );
+	}
 
-		return new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE, null, $link ? BackupRefused::DETAIL_LINK : '' );
+	/**
+	 * Refus WORK_DIR_UNAVAILABLE quand job() rend null pour $backup_id : avec la phrase du lien si
+	 * un lien en est la cause (blocked_by_link()), sinon la phrase des droits du dossier.
+	 *
+	 * @throws \InvalidArgumentException Identifiant qui n'est pas 32 hex minuscules.
+	 */
+	public static function job_unavailable( string $backup_id ): BackupRefused {
+		return new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE, null, self::link_detail( self::blocked_by_link( $backup_id ) ) );
+	}
+
+	/**
+	 * Détail du refus : le dossier de travail lui-même est un lien (DETAIL_WORK_DIR_LINK, « ou à sa
+	 * place »), un autre lien est en cause (DETAIL_LINK), ou aucun.
+	 */
+	private static function link_detail( bool $link ): string {
+		if ( self::work_dir_is_link() ) {
+			return BackupRefused::DETAIL_WORK_DIR_LINK;
+		}
+
+		return $link ? BackupRefused::DETAIL_LINK : '';
 	}
 
 	/**

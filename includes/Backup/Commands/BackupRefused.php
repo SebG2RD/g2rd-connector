@@ -126,6 +126,22 @@ final class BackupRefused extends \RuntimeException {
 	/** DETAIL_LINK pour une sauvegarde déjà commencée (in_progress()). */
 	private const DETAIL_LINK_IN_PROGRESS = 'link_in_progress';
 
+	/**
+	 * Détail de WORK_DIR_UNAVAILABLE quand le lien est le dossier de travail lui-même
+	 * (Run\WorkDir::work_dir_is_link()) : la phrase dit « ou à sa place », et que le connecteur
+	 * recréera un vrai dossier une fois le lien retiré. Seule la phrase change.
+	 */
+	public const DETAIL_WORK_DIR_LINK = 'work_dir_link';
+
+	/** DETAIL_WORK_DIR_LINK pour une sauvegarde déjà commencée (in_progress()). */
+	private const DETAIL_WORK_DIR_LINK_IN_PROGRESS = 'work_dir_link_in_progress';
+
+	/** Détail « en cours » de chaque détail de lien (in_progress()). */
+	private const LINK_IN_PROGRESS = [
+		self::DETAIL_LINK          => self::DETAIL_LINK_IN_PROGRESS,
+		self::DETAIL_WORK_DIR_LINK => self::DETAIL_WORK_DIR_LINK_IN_PROGRESS,
+	];
+
 	/** Codes dont la phrase change pour une sauvegarde déjà commencée (DETAIL_IN_PROGRESS). */
 	private const IN_PROGRESS_CODES = [ self::CRYPTO_UNAVAILABLE, self::WORK_DIR_UNAVAILABLE ];
 
@@ -187,7 +203,7 @@ final class BackupRefused extends \RuntimeException {
 	 * @param string      $reason_code Un des codes de CODES.
 	 * @param int|null    $retry_after Délai conseillé ; ignoré pour un refus non réessayable.
 	 * @param string      $detail      Raison d'une interruption, nom de table, taille, DETAIL_KEY,
-	 *                                 DETAIL_SECONDARY_SITE, DETAIL_IN_PROGRESS ou DETAIL_LINK
+	 *                                 DETAIL_SECONDARY_SITE, DETAIL_IN_PROGRESS, DETAIL_LINK ou DETAIL_WORK_DIR_LINK
 	 *                                 (marqueurs fixes) : jamais la valeur d'une clé.
 	 * @param string|null $stage       Étape d'un autotest en échec (STAGES) ; ignorée pour un autre code.
 	 * @throws \InvalidArgumentException Code inconnu : erreur de programmation.
@@ -227,10 +243,10 @@ final class BackupRefused extends \RuntimeException {
 	 * pour un autre code ou s'il l'est déjà.
 	 */
 	public function in_progress(): self {
-		if ( in_array( $this->detail, [ self::DETAIL_IN_PROGRESS, self::DETAIL_LINK_IN_PROGRESS ], true ) || ! in_array( $this->reason_code, self::IN_PROGRESS_CODES, true ) ) {
+		if ( in_array( $this->detail, [ self::DETAIL_IN_PROGRESS, ...array_values( self::LINK_IN_PROGRESS ) ], true ) || ! in_array( $this->reason_code, self::IN_PROGRESS_CODES, true ) ) {
 			return $this;
 		}
-		$detail = self::WORK_DIR_UNAVAILABLE === $this->reason_code && self::DETAIL_LINK === $this->detail ? self::DETAIL_LINK_IN_PROGRESS : self::DETAIL_IN_PROGRESS;
+		$detail = self::WORK_DIR_UNAVAILABLE === $this->reason_code && isset( self::LINK_IN_PROGRESS[ $this->detail ] ) ? self::LINK_IN_PROGRESS[ $this->detail ] : self::DETAIL_IN_PROGRESS;
 
 		return new self( $this->reason_code, $this->retry, $detail, $this->stage );
 	}
@@ -317,6 +333,16 @@ final class BackupRefused extends \RuntimeException {
 				'' === $detail ? '?' : $detail
 			),
 			self::WORK_DIR_UNAVAILABLE => match ( $detail ) {
+				self::DETAIL_WORK_DIR_LINK_IN_PROGRESS => sprintf(
+					/* translators: %1$s: dossier de travail des sauvegardes, relatif au dossier du site (par exemple « wp-content/g2rd-backups »), jamais un chemin complet. */
+					__( 'La sauvegarde en cours a été arrêtée et ne sera pas terminée : un raccourci vers un autre fichier ou dossier (un lien) a été trouvé dans le dossier de travail des sauvegardes (%1$s), ou à sa place, et le connecteur n’écrit, ne lit et ne supprime jamais rien à travers un tel raccourci. Elle n’est pas comptée comme réussie, et ce qu’elle avait déjà envoyé au stockage ne compte pas comme une sauvegarde. Tant que ce raccourci reste en place, la sauvegarde sera refusée de la même façon à chaque nouvelle tentative. Cause probable : raccourci créé pendant la sauvegarde par une extension, par un outil de l’hébergeur ou lors d’une migration du site ; si personne ne l’a créé volontairement, faites vérifier la sécurité du site. Action : faire retirer ce raccourci %1$s par l’hébergeur ou par le développeur du site (le raccourci seulement, jamais le dossier vers lequel il mène) : le connecteur recréera alors un vrai dossier à sa place ; puis relancer la sauvegarde depuis la plateforme.', 'g2rd-connector' ),
+					self::work_dir_label()
+				),
+				self::DETAIL_WORK_DIR_LINK => sprintf(
+					/* translators: %1$s: dossier de travail des sauvegardes, relatif au dossier du site (par exemple « wp-content/g2rd-backups »), jamais un chemin complet. */
+					__( 'La sauvegarde n’a pas été lancée : un raccourci vers un autre fichier ou dossier (un lien) a été trouvé dans le dossier de travail des sauvegardes (%1$s), ou à sa place, et le connecteur n’écrit, ne lit et ne supprime jamais rien à travers un tel raccourci. Rien n’a été modifié. Tant que ce raccourci reste en place, la sauvegarde sera refusée de la même façon à chaque nouvelle tentative. Cause probable : raccourci créé par une extension, par un outil de l’hébergeur ou lors d’une migration du site ; si personne ne l’a créé volontairement, faites vérifier la sécurité du site. Action : faire retirer ce raccourci %1$s par l’hébergeur ou par le développeur du site (le raccourci seulement, jamais le dossier vers lequel il mène) : le connecteur recréera alors un vrai dossier à sa place ; puis relancer la sauvegarde.', 'g2rd-connector' ),
+					self::work_dir_label()
+				),
 				self::DETAIL_LINK_IN_PROGRESS => sprintf(
 					/* translators: %1$s: dossier de travail des sauvegardes, relatif au dossier du site (par exemple « wp-content/g2rd-backups »), jamais un chemin complet. */
 					__( 'La sauvegarde en cours a été arrêtée et ne sera pas terminée : un raccourci vers un autre fichier ou dossier (un lien) a été trouvé dans le dossier de travail des sauvegardes (%1$s), et le connecteur n’écrit, ne lit et ne supprime jamais rien à travers un tel raccourci. Elle n’est pas comptée comme réussie, et ce qu’elle avait déjà envoyé au stockage ne compte pas comme une sauvegarde. Tant que ce raccourci reste en place, la sauvegarde sera refusée de la même façon à chaque nouvelle tentative. Cause probable : raccourci créé pendant la sauvegarde par une extension, par un outil de l’hébergeur ou lors d’une migration du site ; si personne ne l’a créé volontairement, faites vérifier la sécurité du site. Action : faire retirer ce raccourci du dossier %1$s par l’hébergeur ou par le développeur du site (le raccourci seulement, jamais ce vers quoi il mène), puis relancer la sauvegarde depuis la plateforme.', 'g2rd-connector' ),
