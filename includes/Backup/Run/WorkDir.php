@@ -63,7 +63,8 @@ final class WorkDir {
 	/**
 	 * Crée le dossier, le dossier privé, leurs protections et `baseline/` ; vide un ancien dossier
 	 * privé (sels changés) de ses seuls fichiers du module ; faux si impossible, ou si un lien est
-	 * à la place du dossier privé (rien n'est alors créé ni écrit à travers lui). Idempotent.
+	 * à la place du dossier privé ou de `baseline/` (rien n'est alors créé ni écrit à travers lui).
+	 * Idempotent.
 	 */
 	public static function ensure(): bool {
 		$dir     = self::path();
@@ -264,10 +265,13 @@ final class WorkDir {
 				self::clear_job_dir( $private_path . '/' . $name );
 			}
 		}
+		// `baseline/` qui est un lien (ou une jonction) : jamais parcouru, rien n'est retiré dans sa
+		// cible ; un fichier de l'état local qui est un lien reste.
 		$baseline = $private_path . '/baseline';
-		if ( is_dir( $baseline ) ) {
+		if ( ! self::link_between( $private_path, $baseline ) && is_dir( $baseline ) ) {
 			foreach ( (array) scandir( $baseline ) as $name ) {
-				if ( 'current.json' === $name || 1 === preg_match( '/\A[0-9a-f]{32}\.jsonl\z/', (string) $name ) ) {
+				$name = (string) $name;
+				if ( ( 'current.json' === $name || 1 === preg_match( '/\A[0-9a-f]{32}\.jsonl\z/', $name ) ) && ! self::link_between( $baseline, $baseline . '/' . $name ) ) {
 					wp_delete_file( $baseline . '/' . $name );
 				}
 			}
@@ -333,10 +337,11 @@ final class WorkDir {
 
 	/**
 	 * Un lien est-il là où le module écrit hors des dossiers des sauvegardes : à la place du dossier
-	 * privé, ou entre lui et le dossier de travail ?
+	 * privé (ou entre lui et le dossier de travail), ou de `baseline/` (état local des incrémentales,
+	 * lu, promu et retiré par IncrementalBaseline) ?
 	 */
 	private static function link_in_work_dir(): bool {
-		return ! self::within_private( self::private_dir() );
+		return ! self::within_private( self::baseline_dir() );
 	}
 
 	/**

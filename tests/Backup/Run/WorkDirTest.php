@@ -371,6 +371,85 @@ final class WorkDirTest extends TestCase {
 		}
 	}
 
+	// ── `baseline/` qui est un lien : jamais suivi ──────────────────────────────
+
+	/**
+	 * Dossier extérieur qui porte un état local aux noms du module (`current.json`, `<32 hex>.jsonl`).
+	 */
+	private function etat_local_dehors( string $nom ): string {
+		$dehors = $this->dossier . '/' . $nom;
+		mkdir( $dehors, 0777, true );
+		file_put_contents( $dehors . '/current.json', '{}' );
+		file_put_contents( $dehors . '/' . str_repeat( 'e', 32 ) . '.jsonl', 'état local' );
+		return $dehors;
+	}
+
+	/** L'état local extérieur de etat_local_dehors() n'a rien perdu. */
+	private static function assert_etat_local_intact( string $dehors ): void {
+		clearstatcache( true );
+		self::assertSame( [ 'current.json', str_repeat( 'e', 32 ) . '.jsonl' ], self::contenu( $dehors ), 'état local extérieur gardé' );
+		self::assertSame( 'état local', file_get_contents( $dehors . '/' . str_repeat( 'e', 32 ) . '.jsonl' ) );
+	}
+
+	/**
+	 * Un ancien dossier privé (sels changés), vrai dossier, dont `baseline/` est un lien vers un
+	 * dossier extérieur : le nettoyage de ensure() vide l'ancien dossier sans suivre le lien. Rien
+	 * n'est retiré dehors, aucun avertissement (rmdir() sur le lien), le lien reste.
+	 */
+	public function test_le_nettoyage_ne_suit_jamais_un_etat_local_qui_est_un_lien(): void {
+		$dehors = $this->etat_local_dehors( 'dehors-etat-ancien' );
+		$ancien = $this->dossier . '/' . str_repeat( 'f', 32 );
+		mkdir( $ancien );
+		$lien = $ancien . '/baseline';
+		self::lien_vers_un_dossier_ou_ignorer( $dehors, $lien );
+		try {
+			self::assertTrue( WorkDir::ensure() );
+			self::assertTrue( WorkDir::ensure(), 'tranche suivante : rien de plus' );
+			self::assert_etat_local_intact( $dehors );
+			clearstatcache( true );
+			self::assertTrue( is_link( $lien ) || file_exists( $lien ), 'le lien reste' );
+		} finally {
+			self::retirer_lien( $lien );
+		}
+	}
+
+	/** Désinstallation : `baseline/` du dossier privé actuel est un lien ; rien n'est retiré dehors. */
+	public function test_la_desinstallation_ne_suit_jamais_un_etat_local_qui_est_un_lien(): void {
+		self::assertTrue( WorkDir::ensure() );
+		$dehors = $this->etat_local_dehors( 'dehors-etat-actuel' );
+		$lien   = WorkDir::baseline_dir();
+		rmdir( $lien );
+		self::lien_vers_un_dossier_ou_ignorer( $dehors, $lien );
+		try {
+			WorkDir::remove_all();
+			self::assert_etat_local_intact( $dehors );
+			clearstatcache( true );
+			self::assertTrue( is_link( $lien ) || file_exists( $lien ), 'le lien reste' );
+		} finally {
+			self::retirer_lien( $lien );
+		}
+	}
+
+	/**
+	 * `baseline/` du dossier privé actuel est un lien vers un dossier extérieur vide : ensure() et
+	 * job() refusent (l'état local serait lu, promu et retiré dans la cible), rien n'est écrit dehors.
+	 */
+	public function test_un_etat_local_qui_est_un_lien_est_refuse_sans_rien_ecrire_dehors(): void {
+		self::assertTrue( WorkDir::ensure() );
+		$dehors = $this->dossier . '/dehors-etat-vide';
+		mkdir( $dehors );
+		$lien = WorkDir::baseline_dir();
+		rmdir( $lien );
+		self::lien_vers_un_dossier_ou_ignorer( $dehors, $lien );
+		try {
+			self::assertFalse( WorkDir::ensure() );
+			self::assertNull( WorkDir::job( str_repeat( '9', 32 ) ) );
+			self::assertSame( [], self::contenu( $dehors ), 'rien écrit à travers le lien' );
+		} finally {
+			self::retirer_lien( $lien );
+		}
+	}
+
 	// ── Outils ────────────────────────────────────────────────────────────────
 
 	/**

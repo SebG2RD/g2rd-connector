@@ -24,12 +24,15 @@ use G2RD\Connector\Backup\Upload\PartUploadResult;
 use G2RD\Connector\Support\DiskSpace;
 use G2RD\Connector\Tests\Backup\BackupTestCase;
 use G2RD\Connector\Tests\Backup\Content\FakeDumpWpdb;
+use G2RD\Connector\Tests\Backup\Support\LiensSurDisque;
 
 /**
  * La machine à états, la plateforme jouée par le test. Tâche 28 : départ, arrêt, tranche sans
  * production. Les tâches 29-A à 29-C ajoutent leurs tests à ce fichier.
  */
 final class BackupJobTest extends BackupTestCase {
+
+	use LiensSurDisque;
 
 	private const NOW = 1792843200;
 	private const B1  = '11111111111111111111111111111111';
@@ -765,6 +768,33 @@ final class BackupJobTest extends BackupTestCase {
 		self::assertSame( 'unchanged', $lignes['wp-content/uploads/b.jpg']['state'] );
 		self::assertSame( 'deleted', $lignes['index.php']['state'] );
 		self::assertSame( [ 'index.php' ], array_keys( array_filter( $lignes, static fn ( array $l ): bool => 'deleted' === $l['state'] ) ), 'un seul « deleted » : le fichier supprimé' );
+	}
+
+	/**
+	 * Incrémentale en cours : l'état local de la complète parente est remplacé, entre deux tranches,
+	 * par un lien vers une copie extérieure identique. Il n'est jamais lu à travers le lien : la
+	 * sauvegarde est arrêtée et le dit, close en échec.
+	 */
+	public function test_etat_local_remplace_par_un_lien_en_cours_d_incrementale_l_arrete_sans_le_lire(): void {
+		$this->etat_local_de_l_arbre();
+		$job = $this->job();
+		$job->start( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
+		self::assertSame( 'incremental', BackupState::load()['state']['type'], 'état local utilisable au départ' );
+		$etat_local = WorkDir::baseline_dir() . '/' . self::B1 . '.jsonl';
+		$copie      = dirname( $this->racine ) . '/etat-local-dehors.jsonl';
+		rename( $etat_local, $copie );
+		try {
+			self::lien_vers_un_fichier_ou_ignorer( $copie, $etat_local );
+			$job->step( [ 'backup_id' => self::B2 ] );
+			self::fail( 'Refus attendu : état local lu à travers un lien.' );
+		} catch ( BackupRefused $refus ) {
+			self::assert_arretee_en_cours( $refus, BackupRefused::WORK_DIR_UNAVAILABLE );
+		} finally {
+			if ( is_link( $etat_local ) ) {
+				unlink( $etat_local );
+			}
+		}
+		self::assert_close_en_echec( 'backup_work_dir_unavailable' );
 	}
 
 	/** Dossier `wp-content/prive` (deux fichiers et un sous-dossier) des essais de droits retirés. */

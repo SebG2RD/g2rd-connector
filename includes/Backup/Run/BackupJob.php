@@ -783,7 +783,13 @@ final class BackupJob {
 		$files    = (array) $state['files'];
 		$totals   = (array) $state['totals'];
 		$baseline = 'full' === $state['type'] ? $job . '/baseline-new.jsonl' : null;
-		$reader   = 'incremental' === $state['type'] ? new BaselineReader( WorkDir::baseline_dir() . '/' . $state['parent'] . '.jsonl', (int) $files['baseline_offset'] ) : null;
+		$parent   = 'incremental' === $state['type'] ? WorkDir::baseline_dir() . '/' . $state['parent'] . '.jsonl' : null;
+		// État local de la complète parente remplacé par un lien depuis le départ : jamais lu à travers
+		// lui (une copie extérieure ferait dire inchangés des fichiers qui ne le sont pas) ; arrêtée.
+		if ( null !== $parent && ! WorkDir::within_private( $parent ) ) {
+			throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+		}
+		$reader   = null === $parent ? null : new BaselineReader( $parent, (int) $files['baseline_offset'] );
 		$target   = self::segment_target();
 		$verify   = (bool) apply_filters( 'g2rd_connector_backup_verify_unchanged_hash', false );
 		$cursor   = self::cursor_of( $files );

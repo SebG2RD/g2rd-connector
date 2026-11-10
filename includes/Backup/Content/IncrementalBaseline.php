@@ -9,12 +9,19 @@
  * mesurée : 80 à 200 octets par ligne selon le chemin et l'empreinte, soit 2 à 5 Mo pour les 24 116
  * entrées comptées sur g2rd.fr le 23/10 (compte partiel, donc un minimum).
  *
+ * Jamais à travers un lien (WorkDir::link_between()) : un dossier de l'état local, un `current.json`
+ * ou un `<backup_id>.jsonl` qui est un lien (même cassé) ou une jonction n'est ni lu, ni écrit, ni
+ * retiré. L'état local est alors dit illisible (l'incrémentale devient une complète, et le dit), et
+ * la promotion est refusée (la prochaine incrémentale deviendra une complète).
+ *
  * @package G2RD\Connector
  */
 
 declare(strict_types=1);
 
 namespace G2RD\Connector\Backup\Content;
+
+use G2RD\Connector\Backup\Run\WorkDir;
 
 final class IncrementalBaseline {
 
@@ -33,6 +40,9 @@ final class IncrementalBaseline {
 	 * @return array{backup_id: string, created_at: int, entries: int, sha256: string}|null
 	 */
 	public function current(): ?array {
+		if ( $this->link_at( self::CURRENT ) ) {
+			return null;
+		}
 		$raw  = @file_get_contents( $this->dir . '/' . self::CURRENT ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- description de l'état local, absente au premier passage.
 		$data = is_string( $raw ) ? json_decode( $raw, true ) : null;
 		if ( ! is_array( $data ) || ! is_string( $data['backup_id'] ?? null ) || 1 !== preg_match( '/\A[0-9a-f]{32}\z/', $data['backup_id'] )
@@ -55,6 +65,9 @@ final class IncrementalBaseline {
 	 *         baseline_other_backup, baseline_too_old, baseline_unreadable.
 	 */
 	public function usable_for( string $parent_id, int $now ): array {
+		if ( $this->link_at( self::CURRENT ) ) {
+			return self::refused( 'baseline_unreadable' );
+		}
 		$current = $this->current();
 		if ( null === $current ) {
 			return self::refused( 'baseline_missing' );
@@ -66,7 +79,7 @@ final class IncrementalBaseline {
 			return self::refused( 'baseline_too_old' );
 		}
 		$file = $this->dir . '/' . $current['backup_id'] . '.jsonl';
-		$hash = is_readable( $file ) ? hash_file( 'sha256', $file ) : false;
+		$hash = ! $this->link_at( $current['backup_id'] . '.jsonl' ) && is_readable( $file ) ? hash_file( 'sha256', $file ) : false;
 		if ( false === $hash || ! hash_equals( $current['sha256'], $hash ) ) {
 			return self::refused( 'baseline_unreadable' );
 		}
@@ -128,11 +141,16 @@ final class IncrementalBaseline {
 
 	/**
 	 * Fait de $source l'état local de la complète $backup_id ; retire les états locaux précédents
-	 * (fichiers `<32 hex>.jsonl` du module). Faux si impossible (la sauvegarde reste réussie ; la
-	 * prochaine incrémentale deviendra une complète, et le dira).
+	 * (fichiers `<32 hex>.jsonl` du module, jamais un lien). Faux si impossible, ou si $source, le
+	 * dossier de l'état local, sa description ou le fichier visé est un lien : rien n'est alors
+	 * déplacé ni écrit (la sauvegarde reste réussie ; la prochaine incrémentale deviendra une
+	 * complète, et le dira).
 	 */
 	public function promote( string $source, string $backup_id, int $created_at ): bool {
 		$target = $this->dir . '/' . $backup_id . '.jsonl';
+		if ( WorkDir::link_between( dirname( $source ), $source ) || $this->link_at( $backup_id . '.jsonl' ) || $this->link_at( self::CURRENT ) ) {
+			return false;
+		}
 		if ( ! @rename( $source, $target ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.rename_rename -- fichier du module déplacé du dossier de la sauvegarde vers baseline/, dans le même dossier privé protégé ; échec rendu par la valeur de retour.
 			return false;
 		}
@@ -156,12 +174,20 @@ final class IncrementalBaseline {
 		$written = file_put_contents( $this->dir . '/' . self::CURRENT, (string) json_encode( $description ) );
 		foreach ( (array) glob( $this->dir . '/*.jsonl' ) as $old ) {
 			$name = basename( (string) $old );
-			if ( 1 === preg_match( '/\A[0-9a-f]{32}\.jsonl\z/', $name ) && $backup_id . '.jsonl' !== $name ) {
+			if ( 1 === preg_match( '/\A[0-9a-f]{32}\.jsonl\z/', $name ) && $backup_id . '.jsonl' !== $name && ! $this->link_at( $name ) ) {
 				wp_delete_file( (string) $old );
 			}
 		}
 
 		return false !== $written;
+	}
+
+	/**
+	 * Un lien (même cassé) ou une jonction est-il à la place du dossier de l'état local, ou de $name
+	 * dans ce dossier ?
+	 */
+	private function link_at( string $name ): bool {
+		return WorkDir::link_between( dirname( $this->dir ), $this->dir . '/' . $name );
 	}
 
 	/**
