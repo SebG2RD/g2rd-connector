@@ -6,9 +6,12 @@ namespace G2RD\Connector\Tests\Backup\Run;
 
 use Brain\Monkey\Functions;
 use G2RD\Connector\Backup\Run\WorkDir;
+use G2RD\Connector\Tests\Backup\Support\LiensSurDisque;
 use G2RD\Connector\Tests\TestCase;
 
 final class WorkDirTest extends TestCase {
+
+	use LiensSurDisque;
 
 	private string $dossier;
 
@@ -292,30 +295,110 @@ final class WorkDirTest extends TestCase {
 		self::assertSame( WorkDir::private_dir() . '/job-' . str_repeat( '8', 32 ), WorkDir::job( str_repeat( '8', 32 ) ), 'dossier neuf' );
 	}
 
+	// ── Dossier privé qui est un lien : jamais suivi ────────────────────────────
+
+	/**
+	 * Un ancien dossier privé (sels changés) qui est un lien vers un dossier extérieur rempli de
+	 * fichiers aux noms du module : le nettoyage de ensure(), à chaque tranche, ne le suit pas. Rien
+	 * n'est retiré dehors (protections, dossier d'une sauvegarde, état local), aucun avertissement
+	 * (rmdir() sur le lien), le lien reste.
+	 */
+	public function test_un_ancien_dossier_prive_qui_est_un_lien_n_est_jamais_suivi(): void {
+		$dehors = $this->dossier_aux_noms_du_module( 'dehors-ancien' );
+		$lien   = $this->dossier . '/' . str_repeat( 'f', 32 );
+		self::lien_vers_un_dossier_ou_ignorer( $dehors, $lien );
+		try {
+			self::assertTrue( WorkDir::ensure(), 'le dossier privé actuel reste utilisable' );
+			self::assertTrue( WorkDir::ensure(), 'tranche suivante : rien de plus' );
+			self::assert_intact( $dehors );
+			clearstatcache( true );
+			self::assertTrue( is_link( $lien ) || file_exists( $lien ), 'le lien reste' );
+		} finally {
+			self::retirer_lien( $lien );
+		}
+	}
+
+	/**
+	 * Désinstallation : le dossier privé actuel est un lien vers un dossier extérieur. remove_all()
+	 * ne le suit pas : rien n'est retiré dehors, aucun avertissement, le lien reste.
+	 */
+	public function test_la_desinstallation_ne_suit_jamais_un_dossier_prive_qui_est_un_lien(): void {
+		$dehors = $this->dossier_aux_noms_du_module( 'dehors-actuel' );
+		$lien   = WorkDir::private_dir();
+		self::lien_vers_un_dossier_ou_ignorer( $dehors, $lien );
+		try {
+			WorkDir::remove_all();
+			self::assert_intact( $dehors );
+			clearstatcache( true );
+			self::assertTrue( is_link( $lien ) || file_exists( $lien ), 'le lien reste' );
+		} finally {
+			self::retirer_lien( $lien );
+		}
+	}
+
+	/**
+	 * Le dossier privé est un lien vers un dossier extérieur vide : ensure() et job() refusent, et
+	 * rien n'est écrit dehors (ni protections, ni `baseline/`, ni dossier de sauvegarde).
+	 */
+	public function test_un_dossier_prive_qui_est_un_lien_est_refuse_sans_rien_ecrire_dehors(): void {
+		$dehors = $this->dossier . '/dehors-vide';
+		mkdir( $dehors, 0777, true );
+		$lien = WorkDir::private_dir();
+		self::lien_vers_un_dossier_ou_ignorer( $dehors, $lien );
+		try {
+			self::assertFalse( WorkDir::ensure() );
+			self::assertNull( WorkDir::job( str_repeat( '9', 32 ) ) );
+			self::assertSame( [], self::contenu( $dehors ), 'rien écrit à travers le lien' );
+		} finally {
+			self::retirer_lien( $lien );
+		}
+	}
+
+	/**
+	 * Départ d'une sauvegarde (clear_job) et retrait d'un départ refusé (discard_new_job) quand le
+	 * dossier privé est un lien : le dossier `job-<id>` vu à travers lui n'est pas touché.
+	 */
+	public function test_nettoyage_et_retrait_ne_suivent_jamais_un_dossier_prive_qui_est_un_lien(): void {
+		$dehors = $this->dossier_aux_noms_du_module( 'dehors-depart' );
+		$lien   = WorkDir::private_dir();
+		self::lien_vers_un_dossier_ou_ignorer( $dehors, $lien );
+		try {
+			WorkDir::clear_job( str_repeat( 'e', 32 ) );
+			self::assertFalse( WorkDir::discard_new_job( str_repeat( 'e', 32 ) ) );
+			self::assert_intact( $dehors );
+		} finally {
+			self::retirer_lien( $lien );
+		}
+	}
+
 	// ── Outils ────────────────────────────────────────────────────────────────
 
 	/**
-	 * Lien symbolique de `$link` vers le dossier `$target` (qui peut ne pas exister) ; sous Windows
-	 * sans le droit de créer des liens, une jonction (`mklink /J`, sans droit particulier, comme
-	 * dans ProtectedUpdateTest) en tient lieu. Faux si le système refuse les deux.
+	 * Dossier hors du dossier privé, rempli de fichiers aux noms de ceux du module : protections,
+	 * dossier d'une sauvegarde (`job-<e…e>`), état local (`baseline/`).
 	 */
-	private static function lien_vers_un_dossier( string $target, string $link ): bool {
-		if ( function_exists( 'symlink' ) && @symlink( $target, $link ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- refus attendu sous Windows sans droit.
-			return true;
+	private function dossier_aux_noms_du_module( string $nom ): string {
+		$dehors = $this->dossier . '/' . $nom;
+		$job    = $dehors . '/job-' . str_repeat( 'e', 32 );
+		mkdir( $job, 0777, true );
+		mkdir( $dehors . '/baseline' );
+		foreach ( [ 'index.php', '.htaccess', 'web.config' ] as $garde ) {
+			file_put_contents( $dehors . '/' . $garde, 'à garder' );
 		}
-		if ( '\\' !== DIRECTORY_SEPARATOR || ! function_exists( 'exec' ) ) {
-			return false;
-		}
-		$to_windows = static fn ( string $path ): string => '"' . str_replace( '/', '\\', $path ) . '"';
-		exec( 'cmd /c mklink /J ' . $to_windows( $link ) . ' ' . $to_windows( $target ) . ' 2>&1', $output, $code );
-		clearstatcache();
-		return 0 === $code && ( is_link( $link ) || file_exists( $link ) );
+		file_put_contents( $job . '/manifest.jsonl', "{\"t\":\"head\"}\n" );
+		file_put_contents( $job . '/seg-0.seg', 'segment' );
+		file_put_contents( $dehors . '/baseline/current.json', '{}' );
+		file_put_contents( $dehors . '/baseline/' . str_repeat( 'e', 32 ) . '.jsonl', 'état local' );
+		return $dehors;
 	}
 
-	/** Retire le lien lui-même, jamais sa cible : rmdir() pour une jonction ou un lien de dossier sous Windows, unlink() ailleurs. */
-	private static function retirer_lien( string $link ): void {
-		if ( ! ( '\\' === DIRECTORY_SEPARATOR ? @rmdir( $link ) : @unlink( $link ) ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
-			@unlink( $link ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
-		}
+	/** Le dossier extérieur de dossier_aux_noms_du_module() n'a rien perdu. */
+	private static function assert_intact( string $dehors ): void {
+		clearstatcache( true );
+		self::assertSame( [ '.htaccess', 'baseline', 'index.php', 'job-' . str_repeat( 'e', 32 ), 'web.config' ], self::contenu( $dehors ), 'protections et dossiers gardés' );
+		self::assertSame( [ 'manifest.jsonl', 'seg-0.seg' ], self::contenu( $dehors . '/job-' . str_repeat( 'e', 32 ) ), 'fichiers de la sauvegarde gardés' );
+		self::assertSame( [ 'current.json', str_repeat( 'e', 32 ) . '.jsonl' ], self::contenu( $dehors . '/baseline' ), 'état local gardé' );
+		self::assertSame( 'à garder', file_get_contents( $dehors . '/.htaccess' ) );
+		self::assertSame( 'état local', file_get_contents( $dehors . '/baseline/' . str_repeat( 'e', 32 ) . '.jsonl' ) );
 	}
 }

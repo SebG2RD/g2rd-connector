@@ -10,12 +10,19 @@
  * Exclu des sauvegardes. Le nettoyage ne retire que les fichiers que le module crée ; un fichier
  * étranger n'est jamais touché.
  *
+ * Jamais à travers un lien (within_private(), link_between()) : un lien symbolique, même cassé, ou
+ * une jonction Windows placé dans le dossier privé ou à sa place ne fait jamais écrire, lire ni
+ * supprimer quoi que ce soit hors de lui. Le départ ou la tranche est refusé, le nettoyage passe
+ * son chemin, et le lien reste.
+ *
  * @package G2RD\Connector
  */
 
 declare(strict_types=1);
 
 namespace G2RD\Connector\Backup\Run;
+
+use G2RD\Connector\Support\PathRules;
 
 final class WorkDir {
 
@@ -55,11 +62,18 @@ final class WorkDir {
 
 	/**
 	 * Crée le dossier, le dossier privé, leurs protections et `baseline/` ; vide un ancien dossier
-	 * privé (sels changés) de ses seuls fichiers du module ; faux si impossible. Idempotent.
+	 * privé (sels changés) de ses seuls fichiers du module ; faux si impossible, ou si un lien est
+	 * à la place du dossier privé (rien n'est alors créé ni écrit à travers lui). Idempotent.
 	 */
 	public static function ensure(): bool {
 		$dir     = self::path();
 		$private = self::private_dir();
+		if ( ! is_dir( $dir ) && ! wp_mkdir_p( $dir ) ) {
+			return false;
+		}
+		if ( self::link_in_work_dir() ) {
+			return false;
+		}
 		foreach ( [ $dir, $private ] as $folder ) {
 			if ( ! is_dir( $folder ) && ! wp_mkdir_p( $folder ) ) {
 				return false;
@@ -143,21 +157,14 @@ final class WorkDir {
 		if ( ! self::ensure() ) {
 			return null;
 		}
-		$private = self::private_dir();
-		$dir     = $private . '/job-' . $backup_id;
-		clearstatcache( true );
-		// Jamais à travers un lien. Un lien au chemin du dossier (même vers un dossier), un dossier dont
-		// le chemin réel n'est pas directement sous le dossier privé (jonction Windows), ou un fichier du
+		$dir = self::private_dir() . '/job-' . $backup_id;
+		// Jamais à travers un lien. Un lien au chemin du dossier (même vers un dossier, même cassé), une
+		// jonction Windows, un dossier privé qui est un lien (refusé par ensure()), ou un fichier du
 		// module qui est un lien (reste d'un départ précédent, que le nettoyage ne touche pas) : null,
 		// le départ ou la tranche est refusé. Sinon le journal, les segments ou l'index seraient écrits
 		// dans la cible du lien (wp-config.php, par exemple). Vérifié à chaque appel, donc à chaque tranche.
-		if ( is_link( $dir ) || ( ! is_dir( $dir ) && ! wp_mkdir_p( $dir ) ) || ! self::directly_under( $dir, $private ) ) {
+		if ( self::link_in_job( $dir ) || ( ! is_dir( $dir ) && ! wp_mkdir_p( $dir ) ) ) {
 			return null;
-		}
-		foreach ( (array) @scandir( $dir ) as $name ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- dossier illisible : aucun lien lu, l'écriture qui suit échoue d'elle-même.
-			if ( self::is_job_file( (string) $name ) && is_link( $dir . '/' . $name ) ) {
-				return null;
-			}
 		}
 		return $dir;
 	}
@@ -184,17 +191,15 @@ final class WorkDir {
 	 * Retire le dossier de $backup_id qu'un départ vient de créer, quand ce départ est refusé
 	 * ensuite : les seuls fichiers du module qui y sont (jamais un lien, jamais un fichier
 	 * étranger), puis le dossier s'il est vide. Rien hors du dossier privé : un dossier qui est un
-	 * lien, ou dont le chemin réel n'est pas directement sous le dossier privé, n'est pas touché.
-	 * Ne lève jamais et n'avertit jamais ; faux si le dossier reste (l'appelant rend son refus
-	 * d'origine tel quel).
+	 * lien, ou que l'on n'atteint qu'à travers un lien (dossier privé qui en est un, jonction
+	 * Windows), n'est pas touché. Ne lève jamais et n'avertit jamais ; faux si le dossier reste
+	 * (l'appelant rend son refus d'origine tel quel).
 	 */
 	public static function discard_new_job( string $backup_id ): bool {
 		try {
 			self::assert_id( $backup_id );
-			$private = self::private_dir();
-			$dir     = $private . '/job-' . $backup_id;
-			clearstatcache( true );
-			if ( is_link( $dir ) || ! is_dir( $dir ) || ! self::directly_under( $dir, $private ) ) {
+			$dir = self::private_dir() . '/job-' . $backup_id;
+			if ( ! self::within_private( $dir ) || ! is_dir( $dir ) ) {
 				return false;
 			}
 			foreach ( (array) @scandir( $dir ) as $name ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- retrait au mieux : un dossier illisible reste, sans avertissement.
@@ -218,7 +223,7 @@ final class WorkDir {
 	/**
 	 * Désinstallation : vide chaque dossier privé (l'actuel et ceux d'anciens sels) de ses fichiers
 	 * du module, puis retire les protections et le dossier s'il ne reste rien d'autre. Un fichier
-	 * étranger n'est jamais touché.
+	 * étranger n'est jamais touché, ni un dossier privé qui est un lien (clear_private()).
 	 */
 	public static function remove_all(): void {
 		$dir = self::path();
@@ -245,8 +250,15 @@ final class WorkDir {
 		}
 	}
 
-	/** Retire les fichiers du module d'un dossier privé, puis le dossier s'il ne garde que ses protections. */
+	/**
+	 * Retire les fichiers du module d'un dossier privé, puis le dossier s'il ne garde que ses
+	 * protections. Jamais à travers un lien : un dossier privé qui est un lien (même vers un dossier)
+	 * ou une jonction n'est pas parcouru ; rien n'est retiré dans sa cible, et le lien reste.
+	 */
 	private static function clear_private( string $private_path ): void {
+		if ( self::link_between( self::path(), $private_path ) || ! is_dir( $private_path ) ) {
+			return;
+		}
 		foreach ( (array) scandir( $private_path ) as $name ) {
 			if ( 1 === preg_match( '/\Ajob-[0-9a-f]{32}\z/', (string) $name ) ) {
 				self::clear_job_dir( $private_path . '/' . $name );
@@ -273,24 +285,88 @@ final class WorkDir {
 	}
 
 	/**
-	 * Le chemin réel de $path est-il directement sous le chemin réel de $base ? Faux pour un lien
-	 * ou une jonction qui mène ailleurs, et pour un chemin qui n'existe pas. Un dossier wp-content
-	 * placé derrière un lien par l'hébergeur reste accepté : les deux chemins réels le traversent.
+	 * $path, le dossier privé ou un chemin qui en part, s'atteint-il depuis le dossier de travail
+	 * sans traverser aucun lien (link_between()) ? Règle commune du module avant d'écrire, de lire
+	 * ou de retirer quoi que ce soit dans le dossier privé : faux pour un chemin hors de lui, pour un
+	 * dossier privé qui est un lien, et pour un lien (même cassé) ou une jonction entre lui et $path.
+	 * Un élément absent n'a rien à suivre : vrai pour un fichier pas encore créé.
 	 */
-	private static function directly_under( string $path, string $base ): bool {
-		$real_base = realpath( $base );
-		$real_path = realpath( $path );
-		return false !== $real_base && false !== $real_path && dirname( $real_path ) === $real_base;
+	public static function within_private( string $path ): bool {
+		$private = PathRules::normalize( self::private_dir() );
+		$path    = PathRules::normalize( $path );
+		return ( $path === $private || PathRules::is_inside( $path, $private ) ) && ! self::link_between( self::path(), $path );
+	}
+
+	/**
+	 * Un lien sépare-t-il $path de $base ? Chaque élément entre $base (exclu) et $path (compris) est
+	 * examiné par PathRules::crosses_link() : un lien symbolique, même cassé, ou une jonction
+	 * Windows (chemin réel ailleurs que là où il est rangé) rend vrai. Un élément absent n'a rien à
+	 * suivre. Vrai aussi pour un $path qui n'est pas sous $base, qui contient `.` ou `..`, ou que
+	 * PHP refuse (octet nul) : rien n'y est alors lu, écrit ni retiré. Un dossier wp-content placé
+	 * derrière un lien par l'hébergeur reste accepté : $base est exclu, et les chemins réels de ses
+	 * éléments le traversent tous. Cache des chemins réels vidé d'abord (un dossier remplacé par un
+	 * lien y resterait résolu à son ancien chemin).
+	 */
+	public static function link_between( string $base, string $path ): bool {
+		$base = PathRules::normalize( $base );
+		$path = PathRules::normalize( $path );
+		if ( $path === $base ) {
+			return false;
+		}
+		if ( ! PathRules::is_inside( $path, $base ) ) {
+			return true;
+		}
+		clearstatcache( true );
+		try {
+			foreach ( explode( '/', substr( $path, strlen( $base ) + 1 ) ) as $name ) {
+				if ( in_array( $name, [ '', '.', '..' ], true ) || PathRules::crosses_link( $base, $name ) ) {
+					return true;
+				}
+				$base .= '/' . $name;
+			}
+		} catch ( \ValueError ) {
+			return true;
+		}
+
+		return false;
+	}
+
+	/**
+	 * Un lien est-il là où le module écrit hors des dossiers des sauvegardes : à la place du dossier
+	 * privé, ou entre lui et le dossier de travail ?
+	 */
+	private static function link_in_work_dir(): bool {
+		return ! self::within_private( self::private_dir() );
+	}
+
+	/**
+	 * Un lien est-il au chemin du dossier `job-<id>` (ou avant lui, depuis le dossier de travail), ou
+	 * à la place d'un fichier que le module y écrit ? Dossier absent : rien à suivre.
+	 */
+	private static function link_in_job( string $dir ): bool {
+		if ( ! self::within_private( $dir ) ) {
+			return true;
+		}
+		if ( ! is_dir( $dir ) ) {
+			return false;
+		}
+		foreach ( (array) @scandir( $dir ) as $name ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- dossier illisible : aucun lien lu, l'écriture qui suit échoue d'elle-même.
+			$name = (string) $name;
+			if ( self::is_job_file( $name ) && self::link_between( $dir, $dir . '/' . $name ) ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**
 	 * Retire les fichiers du module d'un dossier `job-<id>`, puis le dossier s'il est vide. Jamais à
-	 * travers un lien : un dossier qui est un lien, ou dont le chemin réel n'est pas directement sous
-	 * son dossier parent (jonction Windows), n'est pas touché, et un fichier qui est un lien reste.
+	 * travers un lien : un dossier qui est un lien, qui est une jonction, ou que l'on n'atteint qu'à
+	 * travers un dossier privé qui est un lien, n'est pas touché, et un fichier qui est un lien reste.
 	 */
 	private static function clear_job_dir( string $dir ): void {
-		clearstatcache( true );
-		if ( is_link( $dir ) || ! is_dir( $dir ) || ! self::directly_under( $dir, dirname( $dir ) ) ) {
+		if ( self::link_between( self::path(), $dir ) || ! is_dir( $dir ) ) {
 			return;
 		}
 		foreach ( (array) scandir( $dir ) as $name ) {
