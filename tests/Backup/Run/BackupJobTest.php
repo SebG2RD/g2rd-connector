@@ -733,6 +733,34 @@ final class BackupJobTest extends BackupTestCase {
 	}
 
 	/**
+	 * Le journal du manifeste est remplacé par un lien juste après le contrôle de job() (doublure de
+	 * job(), qui rend le dossier comme s'il avait été vérifié avant la pose) : la troncature des
+	 * journaux échoue, et le refus le dit avec la phrase du lien, jamais « droits de wp-content ».
+	 */
+	public function test_journal_remplace_par_un_lien_avant_la_troncature_le_dit(): void {
+		$job = $this->job();
+		$job->start( self::depart( self::B1 ) );
+		$cible = dirname( $this->racine ) . '/wp-config.php';
+		file_put_contents( $cible, "<?php // réglages\n" );
+		$dossier = $this->dossier( self::B1 );
+		$lien    = $dossier . '/manifest.jsonl';
+		unlink( $lien );
+		try {
+			self::lien_vers_un_fichier_ou_ignorer( $cible, $lien );
+			\Patchwork\redefine( [ WorkDir::class, 'job' ], static fn (): string => $dossier );
+			$job->step( [ 'backup_id' => self::B1 ] );
+			self::fail( 'Refus attendu : journal remplacé par un lien.' );
+		} catch ( BackupRefused $refus ) {
+			self::assert_arretee_en_cours( $refus, BackupRefused::WORK_DIR_UNAVAILABLE );
+			self::assert_refus_pour_un_lien( $refus, 'La sauvegarde en cours a été arrêtée et ne sera pas terminée : ' );
+		} finally {
+			self::retirer_lien( $lien );
+		}
+		self::assertSame( "<?php // réglages\n", file_get_contents( $cible ), 'rien écrit dans la cible' );
+		self::assert_close_en_echec( 'backup_work_dir_unavailable' );
+	}
+
+	/**
 	 * Course à la signature de l'index : `index.bin` et `index.sig` sont posés comme liens vers
 	 * wp-config.php après le contrôle du début de la tranche qui signe. Chacun est écrit dans un
 	 * fichier neuf mis à sa place par rename(), qui remplace le lien sans le suivre : wp-config.php

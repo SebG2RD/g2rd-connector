@@ -460,8 +460,10 @@ final class BackupJob {
 		// ici, avant toute production (sous le verrou des tranches).
 		$journals = is_array( $state['journals'] ?? null ) ? $state['journals'] : WorkDir::journal_sizes( $job );
 		if ( ! WorkDir::truncate_journals( $job, $journals ) ) {
+			// Journal perdu, abîmé, ou remplacé par un lien : la phrase du lien quand c'est la cause.
+			$refusal = self::work_dir_refusal( $backup_id );
 			$this->close( $loaded['raw'], $state, 'failed', BackupRefused::WORK_DIR_UNAVAILABLE, $now );
-			throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+			throw $refusal; // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
 		}
 
 		$budget         = self::slice_seconds();
