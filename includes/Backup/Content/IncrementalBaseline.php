@@ -31,6 +31,12 @@ final class IncrementalBaseline {
 	/** Au-delà, l'incrémentale devient une complète (40 jours : la cadence par défaut est hebdomadaire). */
 	public const MAX_AGE_SECONDS = 3456000;
 
+	/**
+	 * Marge (secondes) sous le départ de la complète parente en deçà de laquelle une date de l'état
+	 * local vaut « antérieure à la lecture » (same()) : dates à la seconde, horloges grossières, NFS.
+	 */
+	public const SAME_SECOND_MARGIN = 2;
+
 	private const CURRENT = 'current.json';
 
 	private string $dir;
@@ -61,9 +67,10 @@ final class IncrementalBaseline {
 	/**
 	 * L'état local peut-il servir à une incrémentale de parent $parent_id ?
 	 *
-	 * @return array{file: string|null, reason: string|null, bytes: int|null} `reason` : baseline_missing,
-	 *         baseline_other_backup, baseline_too_old, baseline_unreadable ; `bytes` : taille de
-	 *         l'état local utilisable, gardée par la sauvegarde pour le revérifier à chaque tranche.
+	 * @return array{file: string|null, reason: string|null, bytes: int|null, created_at: int|null} `reason` :
+	 *         baseline_missing, baseline_other_backup, baseline_too_old, baseline_unreadable ;
+	 *         `bytes` : taille de l'état local utilisable, gardée par la sauvegarde pour le revérifier
+	 *         à chaque tranche ; `created_at` : départ de la complète parente (same()).
 	 */
 	public function usable_for( string $parent_id, int $now ): array {
 		// Description qui est un lien (lien physique compris), ou rangée derrière un lien : jamais
@@ -88,9 +95,10 @@ final class IncrementalBaseline {
 		}
 
 		return [
-			'file'   => $file,
-			'reason' => null,
-			'bytes'  => $read['bytes'],
+			'file'       => $file,
+			'reason'     => null,
+			'bytes'      => $read['bytes'],
+			'created_at' => $current['created_at'],
 		];
 	}
 
@@ -134,13 +142,29 @@ final class IncrementalBaseline {
 	}
 
 	/**
-	 * Même entrée que dans l'état local : même nature, même taille, même date.
+	 * L'entrée vaut-elle « inchangée » depuis la complète parente ? Même nature, même taille, même
+	 * date que dans l'état local, ET cette date strictement antérieure au départ de la complète moins
+	 * SAME_SECOND_MARGIN secondes.
+	 *
+	 * Raisonnement : la complète lit chaque entrée après son départ. Une date antérieure à ce départ
+	 * (marge comprise : dates à la seconde, horloges grossières, NFS) précède donc forcément la
+	 * seconde de lecture, et toute réécriture ultérieure, même à taille égale, donne une autre date.
+	 * Une entrée dont la date tombe pendant la complète, ou juste avant son départ, a pu être
+	 * réécrite à taille égale dans la même seconde que sa lecture sans que sa date change : jamais
+	 * dite inchangée, elle est recopiée (sans dépendre du filtre de vérification des empreintes). Le
+	 * même raisonnement couvre un fichier modifié pendant sa lecture par la complète (limite de
+	 * FileArchiver) : l'incrémentale suivante le recopie. Coût : ces entrées-là, modifiées pendant ou
+	 * juste avant la complète, sont recopiées par chaque incrémentale fondée sur elle. Départ
+	 * inconnu (null) : jamais inchangée (prudence).
 	 *
 	 * @param array{path: string, type: string, size: int, mtime: int, mode: int, target: string|null} $entry
 	 * @param array{path: string, type: string, size: int, mtime: int, sha256: string|null}          $base
+	 * @param int|null                                                                                $parent_started_at Départ de la complète parente (secondes Unix).
 	 */
-	public static function same( array $entry, array $base ): bool {
-		return $entry['type'] === $base['type'] && $entry['size'] === $base['size'] && $entry['mtime'] === $base['mtime'];
+	public static function same( array $entry, array $base, ?int $parent_started_at ): bool {
+		return null !== $parent_started_at
+			&& $base['mtime'] < $parent_started_at - self::SAME_SECOND_MARGIN
+			&& $entry['type'] === $base['type'] && $entry['size'] === $base['size'] && $entry['mtime'] === $base['mtime'];
 	}
 
 	/**
@@ -220,13 +244,14 @@ final class IncrementalBaseline {
 	}
 
 	/**
-	 * @return array{file: null, reason: string, bytes: null}
+	 * @return array{file: null, reason: string, bytes: null, created_at: null}
 	 */
 	private static function refused( string $reason ): array {
 		return [
-			'file'   => null,
-			'reason' => $reason,
-			'bytes'  => null,
+			'file'       => null,
+			'reason'     => $reason,
+			'bytes'      => null,
+			'created_at' => null,
 		];
 	}
 }

@@ -66,6 +66,11 @@ final class BackupJobTest extends BackupTestCase {
 		file_put_contents( $this->racine . '/index.php', "<?php // accueil\n" );
 		file_put_contents( $this->racine . '/wp-content/a.txt', 'bonjour' );
 		file_put_contents( $this->racine . '/wp-content/uploads/b.jpg', random_bytes( 3000 ) );
+		// Fichiers du site d'avant la complète : dates antérieures au départ figé des sauvegardes
+		// (NOW), comme sur un vrai site ; un fichier écrit par un test, lui, porte la date du jour.
+		foreach ( [ '/index.php', '/wp-content/a.txt', '/wp-content/uploads/b.jpg' ] as $fichier ) {
+			touch( $this->racine . $fichier, self::NOW - 3600 );
+		}
 		$this->secrete       = random_bytes( 32 );
 		$this->envois         = [];
 		$this->autotest_faux  = false;
@@ -1122,6 +1127,37 @@ final class BackupJobTest extends BackupTestCase {
 	}
 
 	/**
+	 * Angle mort de la « même seconde » : la complète a lu `a.txt` (« bonjour », 7 octets) à la
+	 * seconde M, juste avant son départ, puis le fichier a été réécrit (« BONJOUR », même taille)
+	 * dans la même seconde : sa date reste M. État local construit comme la complète l'aurait écrit
+	 * (taille 7, date M, empreinte de « bonjour »). La date de l'état local n'est pas antérieure au
+	 * départ de la complète moins la marge : l'incrémentale recopie le fichier (stored), sans
+	 * dépendre du filtre de vérification des empreintes. Un fichier ancien, lui, reste inchangé.
+	 */
+	public function test_fichier_reecrit_dans_la_meme_seconde_que_sa_lecture_est_recopie(): void {
+		$fichier = $this->racine . '/wp-content/a.txt';
+		file_put_contents( $fichier, 'BONJOUR' );
+		touch( $fichier, self::NOW - 1 );
+		clearstatcache();
+		WorkDir::ensure();
+		$source = WorkDir::baseline_dir() . '/source.jsonl';
+		$lignes = '';
+		foreach ( ( new FileWalker( $this->racine, [] ) )->walk( null ) as $entree ) {
+			$contenu = 'wp-content/a.txt' === $entree['path'] ? 'bonjour' : null;
+			$lignes .= IncrementalBaseline::line( $entree, 'file' === $entree['type'] ? hash( 'sha256', $contenu ?? (string) file_get_contents( $this->racine . '/' . $entree['path'] ) ) : null );
+		}
+		file_put_contents( $source, $lignes );
+		self::assertTrue( ( new IncrementalBaseline( WorkDir::baseline_dir() ) )->promote( $source, self::B1, self::NOW ) );
+
+		$r2     = $this->jouer( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
+		$lignes = array_column( array_filter( $this->manifeste( $r2['segments'] ), static fn ( array $l ): bool => 'file' === $l['t'] ), null, 'path' );
+
+		self::assertSame( 'stored', $lignes['wp-content/a.txt']['state'], 'même taille, même date, autre contenu : recopié' );
+		self::assertSame( hash( 'sha256', 'BONJOUR' ), $lignes['wp-content/a.txt']['sha256'], 'empreinte du contenu réel' );
+		self::assertSame( 'unchanged', $lignes['wp-content/uploads/b.jpg']['state'], 'fichier ancien : inchangé' );
+	}
+
+	/**
 	 * Incrémentale en cours : l'état local de la complète parente disparaît entre deux tranches
 	 * (extension de nettoyage, par exemple). Sans lui, l'incrémentale oublierait les suppressions
 	 * (une restauration ressusciterait un fichier supprimé) : elle est arrêtée en échec, avec une
@@ -1560,9 +1596,10 @@ final class BackupJobTest extends BackupTestCase {
 				'cursor_hex'      => null,
 				'offset'          => 0,
 				'current'         => null,
-				'baseline_offset' => null,
-				'baseline_size'   => null,
-				'done'            => false,
+				'baseline_offset'   => null,
+				'baseline_size'     => null,
+				'parent_created_at' => null,
+				'done'              => false,
 			],
 			$etat['files']
 		);
@@ -1889,6 +1926,8 @@ final class BackupJobTest extends BackupTestCase {
 	 * ligne fantôme, état local promu, incrémentale possible.
 	 */
 	public function test_tranche_tuee_puis_reprise_jusqu_a_la_fin_puis_incrementale(): void {
+		// Écrit juste avant la complète : lu par elle dans la même seconde, ou presque.
+		file_put_contents( $this->racine . '/wp-content/a.txt', 'bonjour' );
 		$job = $this->job();
 		$job->start( self::depart( self::B1 ) );
 		$d = $this->dossier( self::B1 );
@@ -1913,10 +1952,9 @@ final class BackupJobTest extends BackupTestCase {
 		$courant = (array) json_decode( (string) file_get_contents( WorkDir::baseline_dir() . '/current.json' ), true );
 		self::assertSame( [ self::B1, substr_count( $etat_local, "\n" ), hash( 'sha256', $etat_local ) ], [ $courant['backup_id'], $courant['entries'], $courant['sha256'] ] );
 
-		// Taille et date changées : « bonjour » et « changé » font 7 octets chacun, et la même
-		// seconde garde la même date (comparaison par nature, taille et date).
-		file_put_contents( $this->racine . '/wp-content/a.txt', 'contenu changé' );
-		touch( $this->racine . '/wp-content/a.txt', time() + 60 );
+		// Même taille (« bonjour » et « changé » font 7 octets), souvent même seconde, donc même
+		// date : recopié quand même, sa date n'étant pas antérieure au départ de la complète.
+		file_put_contents( $this->racine . '/wp-content/a.txt', 'changé' );
 		$r2 = $this->jouer( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
 		$c2 = $this->assert_index_valide( $r2 );
 		self::assertSame( 'incremental', $c2['type'] );

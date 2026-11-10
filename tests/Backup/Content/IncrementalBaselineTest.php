@@ -104,9 +104,16 @@ final class IncrementalBaselineTest extends TestCase {
 
 	public function test_meme_fichier_par_nature_taille_et_date(): void {
 		$base = [ 'path' => 'a', 'type' => 'file', 'size' => 3, 'mtime' => 5, 'sha256' => null ];
-		self::assertTrue( IncrementalBaseline::same( [ 'path' => 'a', 'type' => 'file', 'size' => 3, 'mtime' => 5, 'mode' => 0644, 'target' => null ], $base ) );
-		self::assertFalse( IncrementalBaseline::same( [ 'path' => 'a', 'type' => 'file', 'size' => 3, 'mtime' => 6, 'mode' => 0644, 'target' => null ], $base ) );
-		self::assertFalse( IncrementalBaseline::same( [ 'path' => 'a', 'type' => 'link', 'size' => 0, 'mtime' => 5, 'mode' => 0777, 'target' => 'x' ], $base ) );
+		$fichier = [ 'path' => 'a', 'type' => 'file', 'size' => 3, 'mtime' => 5, 'mode' => 0644, 'target' => null ];
+		self::assertTrue( IncrementalBaseline::same( $fichier, $base, 100 ) );
+		self::assertFalse( IncrementalBaseline::same( [ 'mtime' => 6 ] + $fichier, $base, 100 ) );
+		self::assertFalse( IncrementalBaseline::same( [ 'path' => 'a', 'type' => 'link', 'size' => 0, 'mtime' => 5, 'mode' => 0777, 'target' => 'x' ], $base, 100 ) );
+		// Date de l'état local pas strictement antérieure au départ de la complète moins 2 s : jamais
+		// inchangé (réécriture possible dans la même seconde que la lecture, à taille égale).
+		self::assertTrue( IncrementalBaseline::same( $fichier, $base, 8 ), '5 < 8 - 2' );
+		self::assertFalse( IncrementalBaseline::same( $fichier, $base, 7 ), '5 = 7 - 2 : dans la marge' );
+		self::assertFalse( IncrementalBaseline::same( $fichier, $base, 5 ), 'même seconde que le départ' );
+		self::assertFalse( IncrementalBaseline::same( $fichier, $base, null ), 'départ inconnu : prudence' );
 	}
 
 	// ── Jamais à travers un lien ──────────────────────────────────────────────

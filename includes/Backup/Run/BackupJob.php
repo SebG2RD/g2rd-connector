@@ -226,8 +226,9 @@ final class BackupJob {
 			self::refuse_after_create( $refusal, $backup_id, $created );
 		}
 
-		$downgraded    = null;
-		$baseline_size = null;
+		$downgraded        = null;
+		$baseline_size     = null;
+		$parent_created_at = null;
 		if ( 'incremental' === $type ) {
 			$usable = ( new IncrementalBaseline( WorkDir::baseline_dir() ) )->usable_for( (string) $parent, $now );
 			if ( null !== $usable['reason'] ) {
@@ -235,8 +236,10 @@ final class BackupJob {
 				$type       = 'full';
 				$parent     = null;
 			} else {
-				// Taille de l'état local vérifié au départ, revérifiée à chaque tranche (baseline_reader()).
-				$baseline_size = $usable['bytes'];
+				// Taille de l'état local vérifié au départ, revérifiée à chaque tranche (baseline_reader()) ;
+				// départ de la complète parente, pour dire « inchangé » (IncrementalBaseline::same()).
+				$baseline_size     = $usable['bytes'];
+				$parent_created_at = $usable['created_at'];
 			}
 		}
 
@@ -263,8 +266,9 @@ final class BackupJob {
 				'offset'          => 0,
 				'current'         => null,
 				'baseline_offset' => 'incremental' === $type ? 0 : null,
-				'baseline_size'   => $baseline_size,
-				'done'            => false,
+				'baseline_size'     => $baseline_size,
+				'parent_created_at' => $parent_created_at,
+				'done'              => false,
 			],
 			'journals'     => [
 				'manifest' => 0,
@@ -860,7 +864,11 @@ final class BackupJob {
 						$this->file_line( $journal, null, $item, null, 'unreadable', null, $totals );
 						continue;
 					}
-					if ( null !== $base && 'dir' !== $item['type'] && IncrementalBaseline::same( $item, $base ) && ! self::hash_changed( $this->root, $item, $base, $verify ) ) {
+					// Départ de la complète parente absent (état d'une version antérieure) : jamais
+					// « inchangé », tout est recopié (prudence ; un tel état est d'ailleurs arrêté par
+					// baseline_reader(), faute de la taille de l'état local).
+					$started = is_int( $files['parent_created_at'] ?? null ) ? $files['parent_created_at'] : null;
+					if ( null !== $base && 'dir' !== $item['type'] && IncrementalBaseline::same( $item, $base, $started ) && ! self::hash_changed( $this->root, $item, $base, $verify ) ) {
 						$this->file_line( $journal, null, $item, $base['sha256'], 'unchanged', null, $totals );
 						if ( $stop() ) {
 							return;
