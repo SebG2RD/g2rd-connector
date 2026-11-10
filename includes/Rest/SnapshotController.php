@@ -38,9 +38,11 @@ final class SnapshotController {
 
 	/**
 	 * Empreintes des fichiers du connecteur à la dernière invalidation d'OPcache, une par
-	 * serveur PHP (`identité => empreinte`, la plus ancienne en tête). Option NON autochargée
-	 * (lue seulement sur un serveur à `opcache.validate_timestamps=0`, jamais à chaque page) ;
-	 * retirée à la désinstallation.
+	 * serveur PHP (`identité => empreinte`, la plus ancienne en tête). Option de RÉSEAU
+	 * (get_site_option) : les fichiers et l'OPcache sont communs à tous les blogs d'un
+	 * multisite, une invalidation par blog serait inutile ; sur un site simple, c'est une
+	 * option non autochargée (lue seulement sur un serveur à `opcache.validate_timestamps=0`,
+	 * jamais à chaque page). Retirée à la désinstallation.
 	 */
 	public const OPCACHE_OPTION = 'g2rd_connector_opcache_files';
 
@@ -167,7 +169,7 @@ final class SnapshotController {
 		// une empreinte par serveur, sinon le premier enregistrerait la sienne et les autres
 		// ne verraient plus jamais de changement.
 		$server ??= self::opcache_server_id();
-		$stored   = get_option( self::OPCACHE_OPTION, [] );
+		$stored   = get_site_option( self::OPCACHE_OPTION, [] );
 		$stored   = is_array( $stored ) ? $stored : []; // Valeur absente, abîmée ou d'un ancien format : lue comme vide.
 
 		$files       = $files ?? self::opcache_files();
@@ -187,7 +189,7 @@ final class SnapshotController {
 			unset( $stored[ $server ] );
 			$stored[ $server ] = $fingerprint;
 			$stored            = array_slice( $stored, -self::OPCACHE_MAX_SERVERS, null, true );
-			update_option( self::OPCACHE_OPTION, $stored, false );
+			update_site_option( self::OPCACHE_OPTION, $stored );
 		}
 	}
 

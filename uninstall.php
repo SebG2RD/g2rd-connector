@@ -28,7 +28,10 @@ delete_option( 'g2rd_connector_db_health' );
 // Erreurs PHP relevées et décalage de lecture du journal (1.16, cf. PhpErrors\Buffer et PhpErrors\LogTail).
 delete_option( 'g2rd_php_errors' );
 delete_option( 'g2rd_php_errors_log_cursor' );
-// Empreinte des fichiers du connecteur à la dernière invalidation d'OPcache (cf. Rest\SnapshotController).
+// Empreintes des fichiers du connecteur à la dernière invalidation d'OPcache (cf. Rest\SnapshotController) :
+// option de réseau, une seule ligne même en multisite (les fichiers sont communs au réseau). La même
+// clé est aussi retirée comme option de blog (ci-dessous) : une version intermédiaire l'y rangeait.
+delete_site_option( 'g2rd_connector_opcache_files' );
 delete_option( 'g2rd_connector_opcache_files' );
 
 // Si multisite, suppression sur chaque blog. 'number' => 0 : tous les blogs

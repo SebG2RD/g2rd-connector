@@ -29,7 +29,7 @@ final class SnapshotOpcacheTest extends TestCase {
 	/** @var array<string, mixed> */
 	private array $stored = [];
 
-	/** @var list<array{string, mixed, mixed}> Écritures d'option : nom, valeur, autoload. */
+	/** @var list<array{string, mixed}> Écritures d'option de réseau : nom, valeur. */
 	private array $writes = [];
 
 	protected function setUp(): void {
@@ -46,12 +46,24 @@ final class SnapshotOpcacheTest extends TestCase {
 			$this->files[] = $this->dir . '/' . $name;
 		}
 
+		// Les fichiers et l'OPcache sont communs à tout le réseau : l'empreinte est une option
+		// de réseau, jamais une option de blog (elle serait invalidée une fois par blog).
 		Functions\when( 'get_option' )->alias(
-			fn ( string $name, $default = false ) => $this->stored[ $name ] ?? $default
+			static function ( string $name ): void {
+				throw new \LogicException( 'get_option( ' . $name . ' ) : empreinte = option de réseau.' );
+			}
 		);
 		Functions\when( 'update_option' )->alias(
-			function ( string $name, $value, $autoload = null ): bool {
-				$this->writes[]       = [ $name, $value, $autoload ];
+			static function ( string $name ): void {
+				throw new \LogicException( 'update_option( ' . $name . ' ) : empreinte = option de réseau.' );
+			}
+		);
+		Functions\when( 'get_site_option' )->alias(
+			fn ( string $name, $default = false ) => $this->stored[ $name ] ?? $default
+		);
+		Functions\when( 'update_site_option' )->alias(
+			function ( string $name, $value ): bool {
+				$this->writes[]        = [ $name, $value ];
 				$this->stored[ $name ] = $value;
 				return true;
 			}
@@ -96,11 +108,10 @@ final class SnapshotOpcacheTest extends TestCase {
 		self::assertCount( 1, $this->writes );
 	}
 
-	public function test_l_empreinte_est_gardee_dans_une_option_non_autochargee(): void {
+	public function test_l_empreinte_est_gardee_dans_une_option_de_reseau(): void {
 		$this->sync( false );
 
 		self::assertSame( SnapshotController::OPCACHE_OPTION, $this->writes[0][0] );
-		self::assertFalse( $this->writes[0][2], 'Option non autochargée.' );
 		self::assertIsArray( $this->writes[0][1], 'Une empreinte par serveur.' );
 	}
 

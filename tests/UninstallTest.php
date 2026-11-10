@@ -312,7 +312,22 @@ final class UninstallTest extends TestCase {
 		}
 	}
 
-	/** Empreinte des fichiers à la dernière invalidation d'OPcache (cf. Rest\SnapshotController), sur chaque blog. */
+	/** Empreintes d'OPcache (cf. Rest\SnapshotController) : option de réseau, comme la mesure de l'environnement. */
+	public function test_l_empreinte_opcache_est_retiree_comme_option_de_reseau(): void {
+		$deleted = [];
+		Functions\when( 'delete_site_option' )->alias(
+			static function ( string $key ) use ( &$deleted ): bool {
+				$deleted[] = $key;
+				return true;
+			}
+		);
+
+		$this->uninstall();
+
+		self::assertContains( SnapshotController::OPCACHE_OPTION, $deleted );
+	}
+
+	/** Une version intermédiaire la rangeait en option de blog : retirée aussi, sur chaque blog. */
 	public function test_l_empreinte_opcache_est_retiree_sur_chaque_blog(): void {
 		$deleted = [];
 		Functions\when( 'delete_option' )->alias(
