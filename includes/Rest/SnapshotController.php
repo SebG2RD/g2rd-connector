@@ -150,8 +150,9 @@ final class SnapshotController {
 	 * @param list<string>|null             $files               Fichiers du connecteur ; opcache_files() sinon.
 	 * @param bool|null                     $api_allowed         L'API d'OPcache est-elle permise à ce script ; opcache_api_allowed() sinon.
 	 * @param string|null                   $server              Identité du serveur PHP ; opcache_server_id() sinon.
+	 * @param string|null                   $disk_version        Version dans l'en-tête du fichier principal sur le disque ; opcache_disk_version() sinon.
 	 */
-	public static function sync_opcache( ?bool $validate_timestamps = null, ?\Closure $invalidate = null, ?array $files = null, ?bool $api_allowed = null, ?string $server = null ): void {
+	public static function sync_opcache( ?bool $validate_timestamps = null, ?\Closure $invalidate = null, ?array $files = null, ?bool $api_allowed = null, ?string $server = null, ?string $disk_version = null ): void {
 		if ( null === $invalidate ) {
 			if ( ! function_exists( 'opcache_invalidate' ) ) {
 				return;
@@ -180,7 +181,15 @@ final class SnapshotController {
 
 		$files       = $files ?? self::opcache_files();
 		$fingerprint = self::opcache_fingerprint( $files );
-		if ( ( $stored[ $server ] ?? null ) === $fingerprint ) {
+
+		// Filet : l'empreinte peut dire « déjà invalidé » alors que l'OPcache sert un autre code
+		// (fichiers ET base restaurés avec leurs dates : l'empreinte d'avant revient). La version
+		// du code en mémoire (la constante) doit être celle du disque ; sinon on invalide, quoi
+		// que dise l'empreinte. Disque illisible : rien n'est forcé.
+		$disk_version ??= self::opcache_disk_version();
+		$stale_code     = '' !== $disk_version && defined( 'G2RD_CONNECTOR_VERSION' ) && G2RD_CONNECTOR_VERSION !== $disk_version;
+
+		if ( ! $stale_code && ( $stored[ $server ] ?? null ) === $fingerprint ) {
 			return;
 		}
 
@@ -201,14 +210,36 @@ final class SnapshotController {
 
 	/**
 	 * Identité stable et non sensible du serveur PHP qui détient l'OPcache : un hachage court
-	 * du nom de la machine et du SAPI (FPM et CLI n'ont pas le même OPcache). Le nom lui-même
-	 * n'est jamais gardé. Préfixée d'une lettre : une clé toute en chiffres deviendrait un entier.
+	 * du nom de la machine, du SAPI et de la version de PHP (FPM et CLI, lsphp 8.1 et 8.2 sur
+	 * une même machine n'ont pas le même OPcache). Le nom lui-même n'est jamais gardé. Préfixée d'une lettre : une clé toute en chiffres deviendrait un entier.
 	 *
 	 * @param string|null $host Nom de la machine ; opcache_host() sinon.
 	 * @param string|null $sapi SAPI ; PHP_SAPI sinon.
+	 * @param string|null $php_version Version de PHP ; PHP_VERSION sinon.
 	 */
-	public static function opcache_server_id( ?string $host = null, ?string $sapi = null ): string {
-		return 's' . substr( sha1( ( $host ?? self::opcache_host() ) . '|' . ( $sapi ?? PHP_SAPI ) ), 0, 12 );
+	public static function opcache_server_id( ?string $host = null, ?string $sapi = null, ?string $php_version = null ): string {
+		return 's' . substr( sha1( ( $host ?? self::opcache_host() ) . '|' . ( $sapi ?? PHP_SAPI ) . '|' . ( $php_version ?? PHP_VERSION ) ), 0, 12 );
+	}
+
+	/**
+	 * Version du connecteur inscrite dans l'en-tête de son fichier principal, sur le disque
+	 * (chaîne vide si illisible). get_file_data() (wp-includes/functions.php) est toujours
+	 * chargée, y compris en REST ; à défaut, lecture équivalente bornée aux 8 premiers Ko.
+	 *
+	 * @param string|null $file Fichier principal ; G2RD_CONNECTOR_FILE sinon.
+	 */
+	public static function opcache_disk_version( ?string $file = null ): string {
+		$file ??= defined( 'G2RD_CONNECTOR_FILE' ) ? (string) G2RD_CONNECTOR_FILE : '';
+		if ( '' === $file || ! is_file( $file ) ) {
+			return '';
+		}
+
+		if ( function_exists( 'get_file_data' ) ) {
+			return trim( (string) ( get_file_data( $file, [ 'Version' => 'Version' ] )['Version'] ?? '' ) );
+		}
+
+		$head = file_get_contents( $file, false, null, 0, 8192 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- fichier local du plugin.
+		return is_string( $head ) && 1 === preg_match( '/^[ 	\/*#@]*Version:(.*)$/mi', $head, $m ) ? trim( $m[1] ) : '';
 	}
 
 	/**

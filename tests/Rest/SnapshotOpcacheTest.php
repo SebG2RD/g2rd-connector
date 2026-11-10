@@ -234,7 +234,8 @@ final class SnapshotOpcacheTest extends TestCase {
 			},
 			$this->files,
 			api_allowed: true,
-			server: $server
+			server: $server,
+			disk_version: ''
 		);
 	}
 
@@ -336,6 +337,68 @@ final class SnapshotOpcacheTest extends TestCase {
 	public function test_sans_php_uname_le_nom_vient_de_gethostname(): void {
 		self::assertSame( (string) gethostname(), SnapshotController::opcache_host( has_uname: false, has_gethostname: true ) );
 		self::assertSame( php_uname( 'n' ), SnapshotController::opcache_host( has_uname: true ) );
+	}
+
+	public function test_deux_versions_de_php_sur_la_meme_machine_ont_deux_identites(): void {
+		$a = SnapshotController::opcache_server_id( 'web-1', 'fpm-fcgi', '8.1.30' );
+
+		self::assertSame( $a, SnapshotController::opcache_server_id( 'web-1', 'fpm-fcgi', '8.1.30' ) );
+		self::assertNotSame( $a, SnapshotController::opcache_server_id( 'web-1', 'fpm-fcgi', '8.2.20' ), 'lsphp 8.1 et 8.2 : deux OPcaches.' );
+	}
+
+	/** Restauration des fichiers ET de la base avec dates conservées : l'empreinte revient, l'OPcache sert le code d'avant. */
+	public function test_version_du_disque_differente_de_celle_en_memoire_invalide_malgre_l_empreinte(): void {
+		$this->sync_on( 'sA' );
+		$this->invalidated = [];
+
+		SnapshotController::sync_opcache(
+			false,
+			function ( string $file ): bool {
+				$this->invalidated[] = $file;
+				return true;
+			},
+			$this->files,
+			api_allowed: true,
+			server: 'sA',
+			disk_version: '9.9.9'
+		);
+
+		self::assertSame( $this->files, $this->invalidated, "L'OPcache sert une autre version que le disque." );
+	}
+
+	public function test_version_du_disque_identique_ou_illisible_ne_force_rien(): void {
+		$this->sync_on( 'sA' );
+		$this->invalidated = [];
+
+		foreach ( [ (string) G2RD_CONNECTOR_VERSION, '' ] as $disk ) {
+			SnapshotController::sync_opcache(
+				false,
+				function ( string $file ): bool {
+					$this->invalidated[] = $file;
+					return true;
+				},
+				$this->files,
+				api_allowed: true,
+				server: 'sA',
+				disk_version: $disk
+			);
+		}
+
+		self::assertSame( [], $this->invalidated );
+	}
+
+	public function test_la_version_du_disque_est_lue_dans_l_en_tete_du_fichier(): void {
+		$main = $this->dir . '/main.php';
+		file_put_contents( $main, "<?php
+/**
+ * Plugin Name: Test
+ * Version: 1.2.3-rc.4
+ */
+" );
+		$this->files[] = $main;
+
+		self::assertSame( '1.2.3-rc.4', SnapshotController::opcache_disk_version( $main ) );
+		self::assertSame( '', SnapshotController::opcache_disk_version( $this->dir . '/absent.php' ) );
 	}
 
 	public function test_l_empreinte_ne_depend_pas_de_l_ordre_des_fichiers(): void {
