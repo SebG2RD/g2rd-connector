@@ -1819,4 +1819,220 @@ final class BackupJobTest extends BackupTestCase {
 		self::assertSame( 5, end( $manifeste )['unreadable'], 'ligne de fin du manifeste : le dossier et les quatre entrées de l\'état local sous lui' );
 		self::assertSame( 5, $r['fin']['totals']['unreadable'] );
 	}
+
+	// ── Reprises après une coupure (scénarios de la relecture du tour 2) ──────
+
+	/**
+	 * Joue la plateforme à partir d'une sauvegarde déjà commencée, jusqu'à la fin.
+	 *
+	 * @return array{segments: array<int, string>, index: array<string, mixed>, fin: array<string, mixed>}
+	 */
+	private function jouer_la_suite( BackupJob $job, string $id ): array {
+		$rapport  = $job->step( [ 'backup_id' => $id ] );
+		$segments = [];
+		for ( $tour = 0; 'finalize' !== $rapport['phase'] && $tour < 50; $tour++ ) {
+			$envois   = [];
+			$termines = [];
+			foreach ( $rapport['pending'] as $p ) {
+				if ( count( $p['uploaded'] ) === count( $p['parts'] ) ) {
+					$termines[] = $p['segment'];
+					continue;
+				}
+				$segments[ $p['segment'] ] = (string) file_get_contents( $this->dossier( $id ) . '/seg-' . $p['segment'] . '.seg' );
+				$envois[]                  = [
+					'segment' => $p['segment'],
+					'parts'   => array_map(
+						static fn ( array $partie ): array => [
+							'part_number' => $partie['part_number'],
+							'url'         => 'https://stockage.test/x',
+							'host'        => 'stockage.test',
+							'port'        => null,
+						],
+						$p['parts']
+					),
+				];
+			}
+			$rapport = $job->step( [ 'backup_id' => $id, 'uploads' => $envois, 'completed' => $termines ] );
+		}
+		self::assertSame( 'finalize', $rapport['phase'] );
+		$fin = $job->step( [ 'backup_id' => $id, 'finished' => true ] );
+
+		return [
+			'segments' => $segments,
+			'index'    => (array) $rapport['index'],
+			'fin'      => $fin,
+		];
+	}
+
+	/**
+	 * Index rendu signé et valide, et chaque segment qu'il cite a l'empreinte annoncée.
+	 *
+	 * @param array{segments: array<int, string>, index: array<string, mixed>} $r
+	 * @return array<string, mixed> Champs de l'index.
+	 */
+	private function assert_index_valide( array $r ): array {
+		$index = (string) hex2bin( (string) $r['index']['chunk'] );
+		self::assertSame( $r['index']['bytes'], strlen( $index ) );
+		self::assertTrue( BackupIndex::verify( $index, (string) hex2bin( (string) $r['index']['signature'] ), (string) SigningKey::public_key(), new Sodium() ), 'index signé valide' );
+		$champs = BackupIndex::parse( $index );
+		foreach ( $champs['segments'] as $s ) {
+			self::assertSame( hash( 'sha256', $r['segments'][ $s['index'] ] ), $s['sha256'], 'segment ' . $s['index'] . ' : empreinte' );
+		}
+
+		return $champs;
+	}
+
+	/**
+	 * Tranche tuée par le serveur pendant la production : `seg-0.seg` déjà renommé, `seg-1.part`
+	 * ordinaire laissé, lignes non validées au bout des trois journaux. La tranche suivante reprend :
+	 * le `.part` laissé est retiré (fichier ordinaire), la sauvegarde finit, index valide, aucune
+	 * ligne fantôme, état local promu, incrémentale possible.
+	 */
+	public function test_tranche_tuee_puis_reprise_jusqu_a_la_fin_puis_incrementale(): void {
+		$job = $this->job();
+		$job->start( self::depart( self::B1 ) );
+		$d = $this->dossier( self::B1 );
+		file_put_contents( $d . '/seg-0.seg', random_bytes( 2048 ) );
+		file_put_contents( $d . '/seg-1.part', random_bytes( 4096 ) );
+		file_put_contents( $d . '/manifest.jsonl', "{\"t\":\"file\",\"path\":\"fantome\"}\n", FILE_APPEND );
+		file_put_contents( $d . '/baseline-new.jsonl', "{\"p\":\"fantome\",\"k\":\"file\",\"s\":1,\"m\":1,\"h\":null}\n", FILE_APPEND );
+		file_put_contents( $d . '/segments.jsonl', "{\"index\":0,\"kind\":\"files\",\"blocks\":1,\"bytes\":1,\"sha256\":\"00\"}\n", FILE_APPEND );
+
+		$r      = $this->jouer_la_suite( $job, self::B1 );
+		$champs = $this->assert_index_valide( $r );
+
+		self::assertSame( [ 'files', 'manifest' ], array_column( $champs['segments'], 'kind' ) );
+		self::assertTrue( $r['fin']['finished'] );
+		self::assertSame( 'done', BackupState::load()['state']['last']['outcome'] );
+		foreach ( $this->manifeste( $r['segments'] ) as $l ) {
+			self::assertNotSame( 'fantome', $l['path'] ?? null, 'aucune ligne non validée dans le manifeste' );
+		}
+		self::assertDirectoryDoesNotExist( $d, 'dossier retiré' );
+		$etat_local = (string) file_get_contents( WorkDir::baseline_dir() . '/' . self::B1 . '.jsonl' );
+		self::assertStringNotContainsString( 'fantome', $etat_local );
+		$courant = (array) json_decode( (string) file_get_contents( WorkDir::baseline_dir() . '/current.json' ), true );
+		self::assertSame( [ self::B1, substr_count( $etat_local, "\n" ), hash( 'sha256', $etat_local ) ], [ $courant['backup_id'], $courant['entries'], $courant['sha256'] ] );
+
+		file_put_contents( $this->racine . '/wp-content/a.txt', 'changé' );
+		$r2 = $this->jouer( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
+		$c2 = $this->assert_index_valide( $r2 );
+		self::assertSame( 'incremental', $c2['type'] );
+		$lignes = array_column( array_filter( $this->manifeste( $r2['segments'] ), static fn ( array $l ): bool => 'file' === $l['t'] ), 'state', 'path' );
+		self::assertSame( 'stored', $lignes['wp-content/a.txt'] );
+		self::assertSame( 'unchanged', $lignes['wp-content/uploads/b.jpg'] );
+		self::assertNotContains( 'deleted', $lignes );
+	}
+
+	/**
+	 * Tranche tuée entre la création d'un fichier neuf (replace_private()) et son rename() :
+	 * `index.bin.<hex>.tmp`, `index.sig.<hex>.tmp` dans le dossier de la sauvegarde,
+	 * `current.json.<hex>.tmp` dans baseline/. La sauvegarde se finit, le dossier est retiré avec
+	 * ses fichiers neufs, celui de baseline/ aussi, et l'incrémentale suivante reste possible.
+	 */
+	public function test_fichiers_neufs_laisses_par_une_tranche_tuee_sont_retires(): void {
+		$job     = $this->job();
+		$rapport = $job->start( self::depart( self::B1 ) );
+		for ( $tour = 0; BackupState::UPLOAD !== $rapport['phase'] && $tour < 20; $tour++ ) {
+			$rapport = $job->step( [ 'backup_id' => self::B1, 'completed' => array_column( $rapport['pending'], 'segment' ) ] );
+		}
+		$d = $this->dossier( self::B1 );
+		file_put_contents( $d . '/index.bin.0123456789abcdef.tmp', 'moitie' );
+		file_put_contents( $d . '/index.sig.0123456789abcdef.tmp', 'moitie' );
+		file_put_contents( WorkDir::baseline_dir() . '/current.json.0123456789abcdef.tmp', '{' );
+
+		$rapport = $job->step( [ 'backup_id' => self::B1, 'completed' => array_column( $rapport['pending'], 'segment' ) ] );
+		self::assertSame( BackupState::FINALIZE, $rapport['phase'] );
+		self::assertTrue( $job->step( [ 'backup_id' => self::B1, 'finished' => true ] )['finished'] );
+
+		self::assertDirectoryDoesNotExist( $d, 'fichiers neufs laissés retirés avec le dossier' );
+		self::assertSame( [ self::B1 . '.jsonl', 'current.json' ], self::contenu( WorkDir::baseline_dir() ), 'fichier neuf de description laissé : retiré' );
+		$this->job()->start( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
+		self::assertSame( 'incremental', BackupState::load()['state']['type'] );
+	}
+
+	/**
+	 * Fin de la tranche qui signe perdue (état non enregistré après l'écriture de l'index) : la
+	 * tranche suivante refait la signature par-dessus l'index déjà écrit ; index valide.
+	 */
+	public function test_signature_refaite_apres_fin_de_tranche_perdue(): void {
+		$job      = $this->job();
+		$rapport  = $job->start( self::depart( self::B1 ) );
+		$segments = [];
+		for ( $tour = 0; BackupState::UPLOAD !== $rapport['phase'] && $tour < 20; $tour++ ) {
+			foreach ( (array) BackupState::load()['state']['pending'] as $p ) {
+				$segments[ $p['segment'] ] = (string) file_get_contents( $this->dossier( self::B1 ) . '/seg-' . $p['segment'] . '.seg' );
+			}
+			$rapport = $job->step( [ 'backup_id' => self::B1, 'completed' => array_column( $rapport['pending'], 'segment' ) ] );
+		}
+		foreach ( (array) BackupState::load()['state']['pending'] as $p ) {
+			$segments[ $p['segment'] ] = (string) file_get_contents( $this->dossier( self::B1 ) . '/seg-' . $p['segment'] . '.seg' );
+		}
+		// Première écriture (début de tranche) passe ; la seconde (fin de tranche) échoue.
+		$this->wpdb->before_write = function (): void {
+			$this->wpdb->before_write = function (): void {
+				$this->wpdb->write_fails = true;
+			};
+		};
+		try {
+			$job->step( [ 'backup_id' => self::B1, 'completed' => array_column( $rapport['pending'], 'segment' ) ] );
+			self::fail( 'Refus attendu : fin de tranche perdue.' );
+		} catch ( BackupRefused $refus ) {
+			self::assertSame( BackupRefused::STORE_UNAVAILABLE, $refus->reason_code() );
+		}
+		self::assertFileExists( $this->dossier( self::B1 ) . '/index.bin', 'index écrit par la tranche perdue' );
+		$this->wpdb->write_fails  = false;
+		$this->wpdb->before_write = null;
+
+		$rapport = $job->step( [ 'backup_id' => self::B1, 'completed' => array_column( $rapport['pending'], 'segment' ) ] );
+
+		self::assertSame( BackupState::FINALIZE, $rapport['phase'] );
+		$this->assert_index_valide(
+			[
+				'index'    => (array) $rapport['index'],
+				'segments' => $segments,
+			]
+		);
+		self::assertSame( [], preg_grep( '/\.tmp\z/', self::contenu( $this->dossier( self::B1 ) ) ), 'aucun fichier neuf laissé' );
+	}
+
+	/**
+	 * Sous Windows : `index.bin` posé comme jonction vers wp-config.php pendant la tranche qui
+	 * signe. rename() ne remplace pas une jonction : refus avec la phrase du lien, sauvegarde close
+	 * en échec, aucun fichier neuf laissé, wp-config.php intact. (Ailleurs, un lien symbolique est
+	 * remplacé sans être suivi : test_index_signe_ecrit_sans_jamais_suivre_un_lien_pose_pendant_la_tranche.)
+	 */
+	public function test_jonction_sur_l_index_pendant_la_signature_est_refusee(): void {
+		$cible = dirname( $this->racine ) . '/wp-config.php';
+		file_put_contents( $cible, "<?php // réglages\n" );
+		$sonde = dirname( $this->racine ) . '/sonde';
+		self::jonction_vers_un_fichier_ou_ignorer( $cible, $sonde );
+		self::retirer_lien( $sonde );
+		$job     = $this->job();
+		$rapport = $job->start( self::depart( self::B1 ) );
+		for ( $tour = 0; BackupState::UPLOAD !== $rapport['phase'] && $tour < 20; $tour++ ) {
+			$rapport = $job->step( [ 'backup_id' => self::B1, 'completed' => array_column( $rapport['pending'], 'segment' ) ] );
+		}
+		$dossier = $this->dossier( self::B1 );
+		\Patchwork\redefine(
+			[ WorkDir::class, 'truncate_journals' ],
+			// Fermeture liée par Patchwork : jamais statique.
+			function () use ( $dossier, $cible ) {
+				$fait = \Patchwork\relay();
+				self::jonction_vers_un_fichier_ou_ignorer( $cible, $dossier . '/index.bin' );
+				return $fait;
+			}
+		);
+		try {
+			$job->step( [ 'backup_id' => self::B1, 'completed' => array_column( $rapport['pending'], 'segment' ) ] );
+			self::fail( 'Refus attendu : jonction à la place de l\'index.' );
+		} catch ( BackupRefused $refus ) {
+			self::assert_arretee_en_cours( $refus, BackupRefused::WORK_DIR_UNAVAILABLE );
+			self::assertStringContainsString( 'raccourci', $refus->getMessage(), 'la phrase dit le lien' );
+			self::assertSame( [], preg_grep( '/\.tmp\z/', self::contenu( $dossier ) ), 'aucun fichier neuf laissé' );
+		} finally {
+			self::retirer_lien( $dossier . '/index.bin' );
+		}
+		self::assertSame( "<?php // réglages\n", file_get_contents( $cible ), 'cible intacte' );
+		self::assert_close_en_echec( 'backup_work_dir_unavailable' );
+	}
 }

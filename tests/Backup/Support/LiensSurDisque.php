@@ -45,6 +45,22 @@ trait LiensSurDisque {
 		}
 	}
 
+	/**
+	 * Jonction Windows de `$link` vers le fichier `$target` (que rename() ne remplace pas) ; le test
+	 * qui l'exige est ignoré ailleurs (un lien symbolique y est remplacé : autre test).
+	 */
+	private static function jonction_vers_un_fichier_ou_ignorer( string $target, string $link ): void {
+		if ( '\\' !== DIRECTORY_SEPARATOR || ! function_exists( 'exec' ) ) {
+			self::markTestSkipped( 'Jonction Windows seulement : ailleurs, un lien symbolique est remplacé par rename() (essai à part).' );
+		}
+		$to_windows = static fn ( string $path ): string => '"' . str_replace( '/', '\\', $path ) . '"';
+		exec( 'cmd /c mklink /J ' . $to_windows( $link ) . ' ' . $to_windows( $target ) . ' 2>&1', $output, $code );
+		clearstatcache( true );
+		if ( 0 !== $code ) {
+			self::markTestSkipped( 'Le système refuse de créer une jonction.' );
+		}
+	}
+
 	/** Le test qui demande un lien vers un dossier est ignoré si le système refuse lien et jonction. */
 	private static function lien_vers_un_dossier_ou_ignorer( string $target, string $link ): void {
 		if ( ! self::lien_vers_un_dossier( $target, $link ) ) {
