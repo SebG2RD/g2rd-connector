@@ -58,6 +58,7 @@ final class SnapshotOpcacheTest extends TestCase {
 				throw new \LogicException( 'update_option( ' . $name . ' ) : empreinte = option de réseau.' );
 			}
 		);
+		Functions\when( 'wp_unslash' )->alias( static fn ( $value ) => is_string( $value ) ? stripslashes( $value ) : $value );
 		Functions\when( 'get_site_option' )->alias(
 			fn ( string $name, $default = false ) => $this->stored[ $name ] ?? $default
 		);
@@ -90,8 +91,39 @@ final class SnapshotOpcacheTest extends TestCase {
 				$this->invalidated[] = $file;
 				return true;
 			},
-			$this->files
+			$this->files,
+			api_allowed: true, // Ni le vrai `opcache.restrict_api` ni $_SERVER de la machine d'essai.
+			server: 'sT',
+			disk_version: ''
 		);
+	}
+
+	/**
+	 * Pose (ou retire, si null) des clés de $_SERVER le temps d'un test.
+	 *
+	 * @param array<string, string|null> $values
+	 */
+	private function with_server( array $values, \Closure $run ): void {
+		$saved = [];
+		foreach ( $values as $key => $value ) {
+			$saved[ $key ] = array_key_exists( $key, $_SERVER ) ? $_SERVER[ $key ] : null;
+			if ( null === $value ) {
+				unset( $_SERVER[ $key ] );
+			} else {
+				$_SERVER[ $key ] = $value;
+			}
+		}
+		try {
+			$run();
+		} finally {
+			foreach ( $saved as $key => $value ) {
+				if ( null === $value ) {
+					unset( $_SERVER[ $key ] );
+				} else {
+					$_SERVER[ $key ] = $value;
+				}
+			}
+		}
 	}
 
 	public function test_validate_timestamps_actif_aucune_invalidation_ni_ecriture(): void {
@@ -165,7 +197,7 @@ final class SnapshotOpcacheTest extends TestCase {
 	}
 
 	public function test_si_opcache_refuse_l_invalidation_rien_n_est_garde(): void {
-		SnapshotController::sync_opcache( false, static fn ( string $file ): bool => false, $this->files );
+		SnapshotController::sync_opcache( false, static fn ( string $file ): bool => false, $this->files, api_allowed: true, server: 'sT', disk_version: '' );
 
 		self::assertSame( [], $this->writes, 'Le prochain inventaire réessaie.' );
 	}
@@ -178,7 +210,10 @@ final class SnapshotOpcacheTest extends TestCase {
 				$this->invalidated[] = $file;
 				return $file !== $failing;
 			},
-			$this->files
+			$this->files,
+			api_allowed: true,
+			server: 'sT',
+			disk_version: ''
 		);
 
 		self::assertSame( $this->files, $this->invalidated, 'Les autres fichiers sont invalidés quand même.' );
@@ -221,8 +256,31 @@ final class SnapshotOpcacheTest extends TestCase {
 	}
 
 	public function test_restrict_api_script_inconnu_interdit_l_api(): void {
-		self::assertFalse( SnapshotController::opcache_api_allowed( '/var/www/admin', null ) );
 		self::assertFalse( SnapshotController::opcache_api_allowed( '/var/www/admin', '' ) );
+
+		$this->with_server(
+			[
+				'SCRIPT_FILENAME' => null,
+				'PATH_TRANSLATED' => null,
+			],
+			static function (): void {
+				self::assertFalse( SnapshotController::opcache_api_allowed( '/var/www/admin', null ), 'Aucun script connu.' );
+			}
+		);
+	}
+
+	/** WordPress ajoute des barres obliques à $_SERVER (wp_magic_quotes) : on les retire avant de comparer. */
+	public function test_restrict_api_lit_le_script_dans_server_sans_les_barres_ajoutees_par_wordpress(): void {
+		$this->with_server(
+			[
+				'SCRIPT_FILENAME' => addslashes( "/var/www/l'espace/index.php" ),
+				'PATH_TRANSLATED' => null,
+			],
+			static function (): void {
+				self::assertTrue( SnapshotController::opcache_api_allowed( "/var/www/l'espace", null ) );
+				self::assertFalse( SnapshotController::opcache_api_allowed( '/var/www/autre', null ) );
+			}
+		);
 	}
 
 	private function sync_on( string $server ): void {
@@ -412,7 +470,10 @@ final class SnapshotOpcacheTest extends TestCase {
 				$this->invalidated[] = $file;
 				return true;
 			},
-			array_reverse( $this->files )
+			array_reverse( $this->files ),
+			api_allowed: true,
+			server: 'sT',
+			disk_version: ''
 		);
 
 		self::assertSame( [], $this->invalidated );
@@ -423,7 +484,7 @@ final class SnapshotOpcacheTest extends TestCase {
 			self::markTestSkipped( 'opcache_invalidate() existe sur cette machine.' );
 		}
 
-		SnapshotController::sync_opcache( false, null, $this->files );
+		SnapshotController::sync_opcache( false, null, $this->files, api_allowed: true, server: 'sT', disk_version: '' );
 
 		self::assertSame( [], $this->writes );
 	}

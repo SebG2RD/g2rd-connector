@@ -266,7 +266,7 @@ final class SnapshotController {
 	 *
 	 * Avec `opcache.restrict_api` (un chemin), PHP n'accepte opcache_invalidate() que depuis
 	 * un script dont le chemin commence par cette valeur (comparaison d'octets, sur le script
-	 * principal de la requête) ; sinon il émet un avertissement. Directive vide : permis.
+	 * principal de la requête, SCRIPT_FILENAME) ; sinon il émet un avertissement. Directive vide : permis.
 	 * Script inconnu alors qu'une restriction existe : refusé, comme PHP.
 	 *
 	 * @param string|null $restrict_api Valeur de la directive ; lue dans la configuration sinon.
@@ -279,8 +279,12 @@ final class SnapshotController {
 		}
 
 		if ( null === $script ) {
-			// phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- chemin comparé à une valeur de configuration, jamais affiché ni utilisé.
-			$script = (string) ( $_SERVER['SCRIPT_FILENAME'] ?? $_SERVER['PATH_TRANSLATED'] ?? '' );
+			// WordPress ajoute des barres obliques à $_SERVER (wp_magic_quotes) : un chemin avec « \ » ou
+			// « ' » ne correspondrait plus à la directive. Valeur comparée à une configuration, jamais affichée.
+			// PATH_TRANSLATED n'est qu'un repli : sous FPM et CGI, c'est la traduction de PATH_INFO, pas le script.
+			// En CLI, PHP compare le chemin réel, qui peut diverger : sans effet ici, l'inventaire passe par HTTP.
+			// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- comparaison seule.
+			$script = (string) wp_unslash( $_SERVER['SCRIPT_FILENAME'] ?? $_SERVER['PATH_TRANSLATED'] ?? '' );
 		}
 
 		return '' !== $script && str_starts_with( $script, $restrict_api );
