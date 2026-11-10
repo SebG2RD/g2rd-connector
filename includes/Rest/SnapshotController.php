@@ -128,8 +128,8 @@ final class SnapshotController {
 	 * taille) à celle gardée à la dernière invalidation : inchangée, rien ; changée, tous les
 	 * fichiers sont invalidés ensemble (n'en invalider qu'un mêlerait du code neuf et ancien),
 	 * puis la nouvelle empreinte est gardée (une seule écriture, seulement en cas de
-	 * changement). Si OPcache refuse l'invalidation (API restreinte, OPcache inactif), rien
-	 * n'est gardé : le prochain inventaire réessaie, comme avant.
+	 * changement), mais seulement si TOUTES les invalidations ont réussi. Si OPcache en refuse
+	 * une (API restreinte, OPcache inactif), rien n'est gardé : le prochain inventaire réessaie.
 	 *
 	 * Les paramètres sont injectables pour les tests ; par défaut, la configuration réelle.
 	 *
@@ -156,11 +156,13 @@ final class SnapshotController {
 			return;
 		}
 
-		$invalidated = false;
+		// Tous les fichiers sont tentés (même après un échec), mais l'empreinte n'est gardée
+		// que si TOUTES les invalidations ont réussi : sinon le prochain inventaire réessaie.
+		$all_invalidated = true;
 		foreach ( $files as $file ) {
-			$invalidated = $invalidate( $file ) || $invalidated;
+			$all_invalidated = $invalidate( $file ) && $all_invalidated;
 		}
-		if ( $invalidated ) {
+		if ( $all_invalidated ) {
 			update_option( self::OPCACHE_OPTION, $fingerprint, false );
 		}
 	}

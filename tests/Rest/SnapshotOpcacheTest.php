@@ -159,6 +159,27 @@ final class SnapshotOpcacheTest extends TestCase {
 		self::assertSame( [], $this->writes, 'Le prochain inventaire réessaie.' );
 	}
 
+	public function test_si_une_seule_invalidation_echoue_rien_n_est_garde_et_le_suivant_reessaie(): void {
+		$failing = $this->files[1];
+		SnapshotController::sync_opcache(
+			false,
+			function ( string $file ) use ( $failing ): bool {
+				$this->invalidated[] = $file;
+				return $file !== $failing;
+			},
+			$this->files
+		);
+
+		self::assertSame( $this->files, $this->invalidated, 'Les autres fichiers sont invalidés quand même.' );
+		self::assertSame( [], $this->writes, 'Une invalidation manquée : le prochain inventaire réessaie.' );
+
+		$this->invalidated = [];
+		$this->sync( false );
+
+		self::assertSame( $this->files, $this->invalidated );
+		self::assertCount( 1, $this->writes );
+	}
+
 	public function test_l_empreinte_ne_depend_pas_de_l_ordre_des_fichiers(): void {
 		$this->sync( false );
 		$this->invalidated = [];
