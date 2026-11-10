@@ -1913,7 +1913,10 @@ final class BackupJobTest extends BackupTestCase {
 		$courant = (array) json_decode( (string) file_get_contents( WorkDir::baseline_dir() . '/current.json' ), true );
 		self::assertSame( [ self::B1, substr_count( $etat_local, "\n" ), hash( 'sha256', $etat_local ) ], [ $courant['backup_id'], $courant['entries'], $courant['sha256'] ] );
 
-		file_put_contents( $this->racine . '/wp-content/a.txt', 'changé' );
+		// Taille et date changées : « bonjour » et « changé » font 7 octets chacun, et la même
+		// seconde garde la même date (comparaison par nature, taille et date).
+		file_put_contents( $this->racine . '/wp-content/a.txt', 'contenu changé' );
+		touch( $this->racine . '/wp-content/a.txt', time() + 60 );
 		$r2 = $this->jouer( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
 		$c2 = $this->assert_index_valide( $r2 );
 		self::assertSame( 'incremental', $c2['type'] );
