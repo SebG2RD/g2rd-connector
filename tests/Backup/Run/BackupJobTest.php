@@ -733,6 +733,47 @@ final class BackupJobTest extends BackupTestCase {
 	}
 
 	/**
+	 * Course à la signature de l'index : `index.bin` et `index.sig` sont posés comme liens vers
+	 * wp-config.php après le contrôle du début de la tranche qui signe. Chacun est écrit dans un
+	 * fichier neuf mis à sa place par rename(), qui remplace le lien sans le suivre : wp-config.php
+	 * reste intact, et l'index rendu est celui écrit. Une jonction Windows ne se remplace pas par
+	 * rename() (la tranche serait alors refusée) : essai mené en CI Linux.
+	 */
+	public function test_index_signe_ecrit_sans_jamais_suivre_un_lien_pose_pendant_la_tranche(): void {
+		$cible = dirname( $this->racine ) . '/wp-config.php';
+		file_put_contents( $cible, "<?php // réglages\n" );
+		$sonde = dirname( $this->racine ) . '/sonde';
+		self::lien_symbolique_ou_ignorer( $cible, $sonde );
+		unlink( $sonde );
+		$job     = $this->job();
+		$rapport = $job->start( self::depart( self::B1 ) );
+		for ( $tour = 0; BackupState::UPLOAD !== $rapport['phase'] && $tour < 20; $tour++ ) {
+			$rapport = $job->step( [ 'backup_id' => self::B1, 'completed' => array_column( $rapport['pending'], 'segment' ) ] );
+		}
+		$dossier = $this->dossier( self::B1 );
+		\Patchwork\redefine(
+			[ WorkDir::class, 'truncate_journals' ],
+			// Fermeture liée par Patchwork : jamais statique.
+			function () use ( $dossier, $cible ) {
+				$fait = \Patchwork\relay();
+				foreach ( [ 'index.bin', 'index.sig' ] as $nom ) {
+					symlink( $cible, $dossier . '/' . $nom );
+				}
+				return $fait;
+			}
+		);
+
+		$rapport = $job->step( [ 'backup_id' => self::B1, 'completed' => array_column( $rapport['pending'], 'segment' ) ] );
+
+		self::assertSame( BackupState::FINALIZE, $rapport['phase'] );
+		self::assertSame( "<?php // réglages\n", file_get_contents( $cible ), 'rien écrit dans la cible' );
+		foreach ( [ 'index.bin', 'index.sig' ] as $nom ) {
+			self::assertFalse( self::est_un_lien( $dossier . '/' . $nom ), $nom . ' : lien remplacé, jamais suivi' );
+		}
+		self::assertSame( hash( 'sha256', (string) file_get_contents( $dossier . '/index.bin' ) ), $rapport['index']['sha256'] ?? null, 'index rendu : celui écrit' );
+	}
+
+	/**
 	 * Joue des tranches sans envoi jusqu'à la fin de la copie (phase sortie de db et files, ou
 	 * segment du manifeste dû) ; chaque segment est copié avant d'être libéré.
 	 *

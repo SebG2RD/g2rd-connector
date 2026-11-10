@@ -9,10 +9,13 @@
  * mesurée : 80 à 200 octets par ligne selon le chemin et l'empreinte, soit 2 à 5 Mo pour les 24 116
  * entrées comptées sur g2rd.fr le 23/10 (compte partiel, donc un minimum).
  *
- * Jamais à travers un lien (WorkDir::link_between()) : un dossier de l'état local, un `current.json`
- * ou un `<backup_id>.jsonl` qui est un lien (même cassé) ou une jonction n'est ni lu, ni écrit, ni
- * retiré. L'état local est alors dit illisible (l'incrémentale devient une complète, et le dit), et
- * la promotion est refusée (la prochaine incrémentale deviendra une complète).
+ * Jamais à travers un lien : l'état local vit dans le dossier privé, et chacun de ses fichiers est
+ * lu par Run\WorkDir::open_private() (ni lien symbolique, ni jonction, ni lien physique, contrôlé
+ * au moment même de l'ouverture). Un `current.json` ou un `<backup_id>.jsonl` qui est un lien n'est
+ * jamais lu : l'état local est dit illisible (l'incrémentale devient une complète, et le dit). La
+ * promotion n'écrit jamais à travers un lien : la description est écrite dans un fichier neuf puis
+ * mise à sa place par rename() (Run\WorkDir::replace_private()), qui remplace un lien sans le
+ * suivre ; les incrémentales redeviennent alors possibles.
  *
  * @package G2RD\Connector
  */
@@ -40,10 +43,7 @@ final class IncrementalBaseline {
 	 * @return array{backup_id: string, created_at: int, entries: int, sha256: string}|null
 	 */
 	public function current(): ?array {
-		if ( $this->link_at( self::CURRENT ) ) {
-			return null;
-		}
-		$raw  = @file_get_contents( $this->dir . '/' . self::CURRENT ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- description de l'état local, absente au premier passage.
+		$raw  = WorkDir::read_private( $this->dir . '/' . self::CURRENT );
 		$data = is_string( $raw ) ? json_decode( $raw, true ) : null;
 		if ( ! is_array( $data ) || ! is_string( $data['backup_id'] ?? null ) || 1 !== preg_match( '/\A[0-9a-f]{32}\z/', $data['backup_id'] )
 			|| ! is_int( $data['created_at'] ?? null ) || ! is_int( $data['entries'] ?? null ) || ! is_string( $data['sha256'] ?? null ) ) {
@@ -65,7 +65,8 @@ final class IncrementalBaseline {
 	 *         baseline_other_backup, baseline_too_old, baseline_unreadable.
 	 */
 	public function usable_for( string $parent_id, int $now ): array {
-		if ( $this->link_at( self::CURRENT ) ) {
+		// Description qui est un lien, ou rangée derrière un lien : jamais lue, illisible.
+		if ( ! WorkDir::within_private( $this->dir . '/' . self::CURRENT ) ) {
 			return self::refused( 'baseline_unreadable' );
 		}
 		$current = $this->current();
@@ -79,8 +80,8 @@ final class IncrementalBaseline {
 			return self::refused( 'baseline_too_old' );
 		}
 		$file = $this->dir . '/' . $current['backup_id'] . '.jsonl';
-		$hash = ! $this->link_at( $current['backup_id'] . '.jsonl' ) && is_readable( $file ) ? hash_file( 'sha256', $file ) : false;
-		if ( false === $hash || ! hash_equals( $current['sha256'], $hash ) ) {
+		$hash = self::sha256_and_lines( $file )['sha256'];
+		if ( null === $hash || ! hash_equals( $current['sha256'], $hash ) ) {
 			return self::refused( 'baseline_unreadable' );
 		}
 
@@ -141,53 +142,67 @@ final class IncrementalBaseline {
 
 	/**
 	 * Fait de $source l'état local de la complète $backup_id ; retire les états locaux précédents
-	 * (fichiers `<32 hex>.jsonl` du module, jamais un lien). Faux si impossible, ou si $source, le
-	 * dossier de l'état local, sa description ou le fichier visé est un lien : rien n'est alors
-	 * déplacé ni écrit (la sauvegarde reste réussie ; la prochaine incrémentale deviendra une
-	 * complète, et le dira).
+	 * (fichiers `<32 hex>.jsonl` du module, jamais un lien). Faux si impossible, ou si $source ou le
+	 * dossier de l'état local n'est atteint qu'à travers un lien (rien n'est alors déplacé ni écrit) :
+	 * la sauvegarde reste réussie ; la prochaine incrémentale deviendra une complète, et le dira.
+	 * rename() remplace un lien posé à la place du fichier visé ou de la description sans le suivre.
 	 */
 	public function promote( string $source, string $backup_id, int $created_at ): bool {
 		$target = $this->dir . '/' . $backup_id . '.jsonl';
-		if ( WorkDir::link_between( dirname( $source ), $source ) || $this->link_at( $backup_id . '.jsonl' ) || $this->link_at( self::CURRENT ) ) {
+		if ( ! WorkDir::within_private( $source ) || ! WorkDir::within_private( $this->dir ) ) {
 			return false;
 		}
 		if ( ! @rename( $source, $target ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.rename_rename -- fichier du module déplacé du dossier de la sauvegarde vers baseline/, dans le même dossier privé protégé ; échec rendu par la valeur de retour.
 			return false;
 		}
-		$hash  = hash_file( 'sha256', $target );
-		$lines = 0;
-		$h     = @fopen( $target, 'rb' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- comptage des lignes de l'état local.
-		if ( false === $hash || false === $h ) {
+		$read = self::sha256_and_lines( $target );
+		if ( null === $read['sha256'] ) {
 			return false;
 		}
-		while ( false !== fgets( $h ) ) {
-			++$lines;
-		}
-		fclose( $h ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- fermeture du flux ouvert ci-dessus.
 		$description = [
 			'backup_id'  => $backup_id,
 			'created_at' => $created_at,
-			'entries'    => $lines,
-			'sha256'     => $hash,
+			'entries'    => $read['lines'],
+			'sha256'     => $read['sha256'],
 		];
-		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents, WordPress.WP.AlternativeFunctions.json_encode_json_encode -- description de l'état local, écrite après lui.
-		$written = file_put_contents( $this->dir . '/' . self::CURRENT, (string) json_encode( $description ) );
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- description de l'état local, valeurs scalaires.
+		$written = WorkDir::replace_private( $this->dir . '/' . self::CURRENT, (string) json_encode( $description ) );
 		foreach ( (array) glob( $this->dir . '/*.jsonl' ) as $old ) {
 			$name = basename( (string) $old );
-			if ( 1 === preg_match( '/\A[0-9a-f]{32}\.jsonl\z/', $name ) && $backup_id . '.jsonl' !== $name && ! $this->link_at( $name ) ) {
-				wp_delete_file( (string) $old );
+			if ( 1 === preg_match( '/\A[0-9a-f]{32}\.jsonl\z/', $name ) && $backup_id . '.jsonl' !== $name ) {
+				WorkDir::remove_private_file( (string) $old ); // Un lien n'est jamais retiré, sa cible non plus.
 			}
 		}
 
-		return false !== $written;
+		return $written;
 	}
 
 	/**
-	 * Un lien (même cassé) ou une jonction est-il à la place du dossier de l'état local, ou de $name
-	 * dans ce dossier ?
+	 * Empreinte SHA-256 et nombre de lignes d'un fichier de l'état local, lu en une passe par
+	 * Run\WorkDir::open_private() ; empreinte null s'il est absent, illisible ou un lien.
+	 *
+	 * @return array{sha256: string|null, lines: int}
 	 */
-	private function link_at( string $name ): bool {
-		return WorkDir::link_between( dirname( $this->dir ), $this->dir . '/' . $name );
+	private static function sha256_and_lines( string $file ): array {
+		$handle = WorkDir::open_private( $file, 'rb' );
+		if ( null === $handle ) {
+			return [
+				'sha256' => null,
+				'lines'  => 0,
+			];
+		}
+		$context = hash_init( 'sha256' );
+		$lines   = 0;
+		while ( false !== ( $line = fgets( $handle ) ) ) { // phpcs:ignore Generic.CodeAnalysis.AssignmentInCondition.FoundInWhileCondition -- lecture ligne à ligne.
+			hash_update( $context, $line );
+			++$lines;
+		}
+		fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- fermeture du fichier ouvert ci-dessus.
+
+		return [
+			'sha256' => hash_final( $context ),
+			'lines'  => $lines,
+		];
 	}
 
 	/**

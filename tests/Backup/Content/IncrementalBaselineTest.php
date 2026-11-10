@@ -4,14 +4,19 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Tests\Backup\Content;
 
-use Brain\Monkey\Functions;
 use G2RD\Connector\Backup\Content\BaselineReader;
 use G2RD\Connector\Backup\Content\IncrementalBaseline;
+use G2RD\Connector\Tests\Backup\Support\DossierDeTravailTemporaire;
 use G2RD\Connector\Tests\Backup\Support\LiensSurDisque;
 use G2RD\Connector\Tests\TestCase;
 
+/**
+ * État local des incrémentales. Il vit dans `baseline/` du dossier privé des sauvegardes : il n'est
+ * lu et écrit que là, jamais à travers un lien (Run\WorkDir::open_private(), replace_private()).
+ */
 final class IncrementalBaselineTest extends TestCase {
 
+	use DossierDeTravailTemporaire;
 	use LiensSurDisque;
 
 	private const T0       = 1792843200;
@@ -19,22 +24,18 @@ final class IncrementalBaselineTest extends TestCase {
 
 	private string $dossier;
 
+	/** Dossier extérieur au dossier privé (sous le dossier de travail), visé par les liens. */
+	private string $dehors;
+
 	protected function setUp(): void {
 		parent::setUp();
-		$this->dossier = str_replace( '\\', '/', sys_get_temp_dir() ) . '/g2rd-base-' . bin2hex( random_bytes( 4 ) );
-		mkdir( $this->dossier );
-		Functions\when( 'wp_delete_file' )->alias( static function ( string $f ): void {
-			if ( is_file( $f ) ) {
-				unlink( $f );
-			}
-		} );
+		$this->dossier = $this->preparer_dossier_de_travail() . '/baseline';
+		$this->dehors  = $this->racine_de_travail . '/dehors';
+		mkdir( $this->dehors );
 	}
 
 	protected function tearDown(): void {
-		foreach ( (array) glob( $this->dossier . '/*' ) as $f ) {
-			unlink( (string) $f );
-		}
-		rmdir( $this->dossier );
+		$this->retirer_dossier_de_travail();
 		parent::tearDown();
 	}
 
@@ -102,51 +103,69 @@ final class IncrementalBaselineTest extends TestCase {
 	 * est refusée sans rien déplacer ni écrire dans la cible, et l'état local n'y est jamais lu.
 	 */
 	public function test_promotion_refusee_si_le_dossier_de_l_etat_local_est_un_lien(): void {
-		$dehors = $this->dossier . '-dehors';
-		$lien   = $this->dossier . '-lien';
-		$source = $this->dossier . '/nouveau.jsonl';
+		$job = dirname( $this->dossier ) . '/job-' . self::COMPLETE;
+		mkdir( $job );
+		$source = $job . '/baseline-new.jsonl';
 		file_put_contents( $source, IncrementalBaseline::line( [ 'path' => 'a.txt', 'type' => 'file', 'size' => 3, 'mtime' => self::T0 ], null ) );
-		mkdir( $dehors );
+		rmdir( $this->dossier );
 		try {
-			self::lien_vers_un_dossier_ou_ignorer( $dehors, $lien );
-			self::assertFalse( ( new IncrementalBaseline( $lien ) )->promote( $source, self::COMPLETE, self::T0 ) );
-			self::assertSame( [], self::contenu( $dehors ), 'rien déplacé ni écrit dans la cible' );
+			self::lien_vers_un_dossier_ou_ignorer( $this->dehors, $this->dossier );
+			self::assertFalse( ( new IncrementalBaseline( $this->dossier ) )->promote( $source, self::COMPLETE, self::T0 ) );
+			self::assertSame( [], self::contenu( $this->dehors ), 'rien déplacé ni écrit dans la cible' );
 			self::assertFileExists( $source, 'futur état local gardé à sa place' );
-			self::assertSame( 'baseline_unreadable', ( new IncrementalBaseline( $lien ) )->usable_for( self::COMPLETE, self::T0 )['reason'], 'jamais lu à travers le lien' );
+			self::assertSame( 'baseline_unreadable', ( new IncrementalBaseline( $this->dossier ) )->usable_for( self::COMPLETE, self::T0 )['reason'], 'jamais lu à travers le lien' );
 		} finally {
-			self::retirer_lien( $lien );
-			foreach ( (array) glob( $dehors . '/*' ) as $f ) {
-				unlink( (string) $f );
-			}
-			rmdir( $dehors );
+			self::retirer_lien( $this->dossier );
 		}
 	}
 
 	/**
 	 * `current.json` est un lien cassé vers un fichier extérieur : la promotion n'écrit jamais à
-	 * travers lui (la cible n'est pas créée) ; elle est refusée, le lien reste.
+	 * travers lui, la cible n'est jamais créée. Lien symbolique : remplacé par la nouvelle
+	 * description (rename() ne le suit pas). Jonction Windows : rename() la refuse, la promotion
+	 * aussi, et la jonction reste.
 	 */
 	public function test_la_promotion_n_ecrit_jamais_a_travers_un_fichier_qui_est_un_lien(): void {
-		$cible  = $this->dossier . '-cible.json';
-		$lien   = $this->dossier . '/current.json';
-		$source = $this->dossier . '/nouveau.jsonl';
-		file_put_contents( $source, IncrementalBaseline::line( [ 'path' => 'a.txt', 'type' => 'file', 'size' => 3, 'mtime' => self::T0 ], null ) );
+		$cible = $this->dehors . '/cible.json';
+		$lien  = $this->dossier . '/current.json';
 		try {
 			self::lien_vers_un_fichier_ou_ignorer( $cible, $lien );
-			self::assertFalse( ( new IncrementalBaseline( $this->dossier ) )->promote( $source, self::COMPLETE, self::T0 ) );
+			$source = $this->dossier . '/nouveau.jsonl';
+			file_put_contents( $source, IncrementalBaseline::line( [ 'path' => 'a.txt', 'type' => 'file', 'size' => 3, 'mtime' => self::T0 ], null ) );
+			$promue = ( new IncrementalBaseline( $this->dossier ) )->promote( $source, self::COMPLETE, self::T0 );
 			clearstatcache( true );
 			self::assertFileDoesNotExist( $cible, 'rien écrit à travers le lien' );
-			self::assertTrue( self::est_un_lien( $lien ), 'le lien reste' );
-			self::assertFileExists( $source, 'futur état local gardé à sa place' );
+			self::assertSame( ! $promue, self::est_un_lien( $lien ), 'promue : le lien est remplacé ; sinon il reste' );
 		} finally {
 			self::retirer_lien( $lien );
-			@unlink( $cible ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
 		}
+	}
+
+	/**
+	 * Point ouvert b : `current.json` est un lien (symbolique) vers un fichier extérieur. Il n'est
+	 * jamais lu (incrémentale refusée, baseline_unreadable) ; la complète suivante écrit sa
+	 * description dans un fichier neuf mis à la place du lien, sans jamais le suivre : la cible reste
+	 * intacte, et les incrémentales redeviennent possibles. Une jonction Windows ne se remplace pas
+	 * par rename() : essai mené en CI Linux.
+	 */
+	public function test_une_description_qui_est_un_lien_est_remplacee_et_l_incrementale_redevient_possible(): void {
+		$cible = $this->dehors . '/reglages.json';
+		file_put_contents( $cible, 'à garder' );
+		$lien = $this->dossier . '/current.json';
+		self::lien_symbolique_ou_ignorer( $cible, $lien );
+		$base = new IncrementalBaseline( $this->dossier );
+		self::assertSame( 'baseline_unreadable', $base->usable_for( self::COMPLETE, self::T0 )['reason'], 'jamais lu à travers le lien' );
+
+		$this->promouvoir();
+
+		self::assertFalse( self::est_un_lien( $lien ), 'lien remplacé, jamais suivi' );
+		self::assertSame( 'à garder', file_get_contents( $cible ), 'cible intacte' );
+		self::assertNull( $base->usable_for( self::COMPLETE, self::T0 + 86400 )['reason'], 'incrémentale de nouveau possible' );
 	}
 
 	/** Un ancien état local qui est un lien n'est pas retiré par la promotion ; sa cible non plus. */
 	public function test_un_ancien_etat_local_qui_est_un_lien_reste_avec_sa_cible(): void {
-		$cible = $this->dossier . '-ancien.jsonl';
+		$cible = $this->dehors . '/ancien.jsonl';
 		$lien  = $this->dossier . '/' . str_repeat( 'b', 32 ) . '.jsonl';
 		file_put_contents( $cible, 'à garder' );
 		try {
@@ -173,7 +192,7 @@ final class IncrementalBaselineTest extends TestCase {
 
 		foreach ( [ 'current.json', self::COMPLETE . '.jsonl' ] as $nom ) {
 			$fichier = $this->dossier . '/' . $nom;
-			$copie   = $this->dossier . '-' . $nom;
+			$copie   = $this->dehors . '/' . $nom;
 			rename( $fichier, $copie );
 			try {
 				self::lien_vers_un_fichier_ou_ignorer( $copie, $fichier );

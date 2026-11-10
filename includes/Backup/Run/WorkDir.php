@@ -258,6 +258,29 @@ final class WorkDir {
 		return $handle;
 	}
 
+	/**
+	 * Remplace le contenu d'un fichier du module du dossier privé : écrit dans un fichier neuf au nom
+	 * aléatoire, à côté (open_private(), `xb`), puis mis à sa place par rename(), qui remplace un lien
+	 * posé à ce chemin sans jamais le suivre (sous Windows, une jonction ne se remplace pas : refus).
+	 * Faux si impossible ; le fichier neuf est alors retiré.
+	 */
+	public static function replace_private( string $path, string $content ): bool {
+		$temp   = $path . '.' . bin2hex( random_bytes( 8 ) ) . '.tmp';
+		$handle = self::open_private( $temp, 'xb' );
+		if ( null === $handle ) {
+			return false;
+		}
+		$written = fwrite( $handle, $content ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- fichier neuf ouvert par open_private().
+		$closed  = fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- fermeture du fichier écrit.
+		// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.rename_rename -- fichier neuf mis à sa place dans le même dossier ; échec rendu par la valeur de retour.
+		if ( strlen( $content ) !== $written || ! $closed || ! self::within_private( dirname( $path ) ) || ! @rename( $temp, $path ) ) {
+			self::remove_private_file( $temp );
+			return false;
+		}
+
+		return true;
+	}
+
 	/** Contenu d'un fichier du module du dossier privé, lu par open_private() ; null si refusé ou illisible. */
 	public static function read_private( string $path ): ?string {
 		$handle = self::open_private( $path, 'rb' );
@@ -404,7 +427,7 @@ final class WorkDir {
 		if ( ! self::link_between( $private_path, $baseline ) && is_dir( $baseline ) ) {
 			foreach ( (array) scandir( $baseline ) as $name ) {
 				$name = (string) $name;
-				if ( ( 'current.json' === $name || 1 === preg_match( '/\A[0-9a-f]{32}\.jsonl\z/', $name ) ) && ! self::link_between( $baseline, $baseline . '/' . $name ) ) {
+				if ( 1 === preg_match( '/\A(current\.json|current\.json\.[0-9a-f]{16}\.tmp|[0-9a-f]{32}\.jsonl)\z/', $name ) && ! self::link_between( $baseline, $baseline . '/' . $name ) ) {
 					wp_delete_file( $baseline . '/' . $name );
 				}
 			}
@@ -416,9 +439,12 @@ final class WorkDir {
 		self::remove_if_only_guards( $private_path );
 	}
 
-	/** Nom d'un fichier que le module écrit dans un dossier `job-<id>` (journaux, index, segments). */
+	/**
+	 * Nom d'un fichier que le module écrit dans un dossier `job-<id>` (journaux, index, segments, et
+	 * fichier neuf d'un index pas encore mis à sa place : replace_private()).
+	 */
 	private static function is_job_file( string $name ): bool {
-		return in_array( $name, self::JOB_FILES, true ) || 1 === preg_match( '/\Aseg-[0-9]{1,4}\.(part|seg)\z/', $name );
+		return in_array( $name, self::JOB_FILES, true ) || 1 === preg_match( '/\A(seg-[0-9]{1,4}\.(part|seg)|index\.(bin|sig)\.[0-9a-f]{16}\.tmp)\z/', $name );
 	}
 
 	/**

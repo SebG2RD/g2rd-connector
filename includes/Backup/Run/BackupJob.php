@@ -1133,9 +1133,10 @@ final class BackupJob {
 			'manifest_segment' => $manifest,
 		];
 		$signed = ( new Finalizer( $this->sodium, $this->self_test ) )->finalize( $fields, $pair['secret'], $pair['public'] );
-		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- index signé de la sauvegarde, dans son dossier de travail, en attente de la plateforme.
-		if ( false === file_put_contents( $job . '/index.bin', $signed['index'] ) || false === file_put_contents( $job . '/index.sig', $signed['signature'] ) ) {
-			throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+		// Index signé et sa signature, en attente de la plateforme : écrits chacun dans un fichier neuf
+		// puis mis à leur place par rename(), qui remplace un lien sans le suivre (WorkDir::replace_private()).
+		if ( ! WorkDir::replace_private( $job . '/index.bin', $signed['index'] ) || ! WorkDir::replace_private( $job . '/index.sig', $signed['signature'] ) ) {
+			throw WorkDir::unavailable( $job . '/index.bin' ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
 		}
 		$state['phase'] = BackupState::FINALIZE;
 
@@ -1146,8 +1147,9 @@ final class BackupJob {
 	 * @return array{bytes: int, sha256: string, signature: string, offset: int, chunk: string}
 	 */
 	private static function index_chunk( string $job, int $offset ): array {
-		$index     = (string) file_get_contents( $job . '/index.bin' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- index signé gardé dans le dossier de travail.
-		$signature = (string) file_get_contents( $job . '/index.sig' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- signature de l'index gardée dans le dossier de travail.
+		// Index et signature relus par WorkDir::read_private(), jamais à travers un lien.
+		$index     = (string) WorkDir::read_private( $job . '/index.bin' );
+		$signature = (string) WorkDir::read_private( $job . '/index.sig' );
 		$offset    = max( 0, min( $offset, strlen( $index ) ) );
 
 		return [
