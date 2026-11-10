@@ -318,15 +318,18 @@ final class WorkDir {
 
 	/**
 	 * Un lien sépare-t-il $path de $base ? Chaque élément entre $base (exclu) et $path (compris) est
-	 * examiné par PathRules::crosses_link() : un lien symbolique, même cassé, ou une jonction
-	 * Windows (chemin réel ailleurs que là où il est rangé) rend vrai. Un élément absent n'a rien à
-	 * suivre. Vrai aussi pour un $path qui n'est pas sous $base, qui contient `.` ou `..`, ou que
-	 * PHP refuse (octet nul) : rien n'y est alors lu, écrit ni retiré. Un dossier wp-content placé
-	 * derrière un lien par l'hébergeur reste accepté : $base est exclu, et les chemins réels de ses
-	 * éléments le traversent tous. Cache des chemins réels vidé d'abord (un dossier remplacé par un
-	 * lien y resterait résolu à son ancien chemin).
+	 * examiné par is_link_at() : un lien symbolique, même cassé, ou une jonction Windows (vers un
+	 * dossier, un fichier ou rien) rend vrai. Un élément absent n'a rien à suivre. Vrai aussi pour un
+	 * $path qui n'est pas sous $base, qui contient `.` ou `..`, ou qui porte un octet nul (PHP 8 ne
+	 * lève pas toujours d'erreur pour lui : refusé avant tout) : rien n'y est alors lu, écrit ni
+	 * retiré. Un dossier wp-content placé derrière un lien par l'hébergeur reste accepté : $base est
+	 * exclu, et les chemins réels de ses éléments le traversent tous. Cache des chemins réels vidé
+	 * d'abord (un dossier remplacé par un lien y resterait résolu à son ancien chemin).
 	 */
 	public static function link_between( string $base, string $path ): bool {
+		if ( str_contains( $base . $path, "\0" ) ) {
+			return true;
+		}
 		$base = PathRules::normalize( $base );
 		$path = PathRules::normalize( $path );
 		if ( $path === $base ) {
@@ -336,18 +339,44 @@ final class WorkDir {
 			return true;
 		}
 		clearstatcache( true );
-		try {
-			foreach ( explode( '/', substr( $path, strlen( $base ) + 1 ) ) as $name ) {
-				if ( in_array( $name, [ '', '.', '..' ], true ) || PathRules::crosses_link( $base, $name ) ) {
-					return true;
-				}
-				$base .= '/' . $name;
+		foreach ( explode( '/', substr( $path, strlen( $base ) + 1 ) ) as $name ) {
+			if ( in_array( $name, [ '', '.', '..' ], true ) || self::is_link_at( $base, $name ) ) {
+				return true;
 			}
-		} catch ( \ValueError ) {
-			return true;
+			$base .= '/' . $name;
 		}
 
 		return false;
+	}
+
+	/**
+	 * `$base/$name` est-il un lien, ou un élément dont la place ne se vérifie pas ? Vrai pour un lien
+	 * symbolique (même cassé) et pour une jonction Windows vers un dossier, vers un fichier ou vers
+	 * rien : PHP y rend is_link(), is_dir() et is_file() faux, mais son chemin réel (realpath() suit
+	 * la jonction, même cassée) n'est pas là où elle est rangée. Vrai aussi quand l'élément existe
+	 * mais qu'un chemin réel ne se lit pas : refus plutôt que supposition. Faux pour un élément
+	 * absent (rien à suivre). Règle stricte du module ; PathRules::crosses_link(), qui sert à la
+	 * mesure de la taille du site, reste tel quel.
+	 */
+	private static function is_link_at( string $base, string $name ): bool {
+		$path = $base . '/' . $name;
+		if ( is_link( $path ) ) {
+			return true;
+		}
+		// is_link() garde en cache le lstat() d'une jonction (Windows) : vidé avant ce qui suit.
+		clearstatcache( true );
+		if ( ! @file_exists( $path ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- open_basedir : aucun avertissement, qui porterait le chemin.
+			return false;
+		}
+		$real_base = @realpath( PathRules::is_root( $base ) ? $base . '/' : $base ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- idem.
+		$real_path = @realpath( $path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- idem.
+		if ( false === $real_base || false === $real_path ) {
+			return true;
+		}
+		$expected = PathRules::normalize( $real_base ) . '/' . $name;
+		$actual   = PathRules::normalize( $real_path );
+		// Windows ne distingue pas la casse, et realpath() y rend celle du disque.
+		return '\\' === DIRECTORY_SEPARATOR ? 0 !== strcasecmp( $actual, $expected ) : $actual !== $expected;
 	}
 
 	/**
@@ -371,7 +400,8 @@ final class WorkDir {
 
 	/**
 	 * Un lien est-il au chemin du dossier `job-<id>` (ou avant lui, depuis le dossier de travail), ou
-	 * à la place d'un fichier que le module y écrit ? Dossier absent : rien à suivre.
+	 * à la place d'un fichier que le module y écrit ? Nom comparé sans la casse : sous Windows,
+	 * `SEG-5.PART` est le fichier `seg-5.part` que le module écrirait. Dossier absent : rien à suivre.
 	 */
 	private static function link_in_job( string $dir ): bool {
 		if ( ! self::within_private( $dir ) ) {
@@ -382,7 +412,7 @@ final class WorkDir {
 		}
 		foreach ( (array) @scandir( $dir ) as $name ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- dossier illisible : aucun lien lu, l'écriture qui suit échoue d'elle-même.
 			$name = (string) $name;
-			if ( self::is_job_file( $name ) && self::link_between( $dir, $dir . '/' . $name ) ) {
+			if ( self::is_job_file( strtolower( $name ) ) && self::link_between( $dir, $dir . '/' . $name ) ) {
 				return true;
 			}
 		}

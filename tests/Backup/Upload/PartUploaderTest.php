@@ -378,7 +378,7 @@ final class PartUploaderTest extends TestCase {
 			self::assertSame( PartUploadResult::READ_FAILED, ( new PartUploader( false, false, true ) )->upload( self::url(), self::HOTE, null, $lien, 0, 10, 30 )->outcome, 'envoi d\'une sauvegarde' );
 			self::assertSame( PartUploadResult::READ_FAILED, ( new PartUploader() )->upload( self::url(), self::HOTE, null, $lien, 0, 10, 30 )->outcome, 'envoi sans dossier imposé' );
 		} finally {
-			unlink( $lien );
+			self::retirer_lien( $lien );
 		}
 		self::assertSame( [], $this->appels, 'rien envoyé' );
 	}

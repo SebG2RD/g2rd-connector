@@ -136,9 +136,10 @@ final class IncrementalBaselineTest extends TestCase {
 			self::assertFalse( ( new IncrementalBaseline( $this->dossier ) )->promote( $source, self::COMPLETE, self::T0 ) );
 			clearstatcache( true );
 			self::assertFileDoesNotExist( $cible, 'rien écrit à travers le lien' );
-			self::assertTrue( is_link( $lien ), 'le lien reste' );
+			self::assertTrue( self::est_un_lien( $lien ), 'le lien reste' );
 			self::assertFileExists( $source, 'futur état local gardé à sa place' );
 		} finally {
+			self::retirer_lien( $lien );
 			@unlink( $cible ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
 		}
 	}
@@ -152,9 +153,10 @@ final class IncrementalBaselineTest extends TestCase {
 			self::lien_vers_un_fichier_ou_ignorer( $cible, $lien );
 			$this->promouvoir();
 			clearstatcache( true );
-			self::assertTrue( is_link( $lien ), 'le lien reste' );
+			self::assertTrue( self::est_un_lien( $lien ), 'le lien reste' );
 			self::assertSame( 'à garder', file_get_contents( $cible ), 'sa cible aussi' );
 		} finally {
+			self::retirer_lien( $lien );
 			unlink( $cible );
 		}
 	}
@@ -180,9 +182,7 @@ final class IncrementalBaselineTest extends TestCase {
 					self::assertNull( $base->current(), 'description jamais lue à travers un lien' );
 				}
 			} finally {
-				if ( is_link( $fichier ) ) {
-					unlink( $fichier );
-				}
+				self::retirer_lien( $fichier );
 				rename( $copie, $fichier );
 			}
 		}

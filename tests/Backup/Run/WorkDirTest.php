@@ -454,9 +454,8 @@ final class WorkDirTest extends TestCase {
 
 	/**
 	 * Un fichier de protection (`.htaccess`) du dossier de travail ou du dossier privé est un lien
-	 * cassé vers un fichier extérieur : ensure() ne l'écrit jamais à travers lui (la cible n'est pas
-	 * créée), il refuse ; job() aussi. Le lien reste. Lien vers un fichier : ignoré sans le droit
-	 * de créer des liens symboliques (une jonction Windows ne vise qu'un dossier).
+	 * cassé vers un fichier extérieur (lien symbolique, ou jonction Windows vers rien) : ensure() ne
+	 * l'écrit jamais à travers lui (la cible n'est pas créée), il refuse ; job() aussi. Le lien reste.
 	 */
 	public function test_une_protection_qui_est_un_lien_casse_n_est_jamais_ecrite(): void {
 		self::assertTrue( WorkDir::ensure() );
@@ -471,14 +470,94 @@ final class WorkDirTest extends TestCase {
 				self::assertNull( WorkDir::job( str_repeat( '9', 32 ) ), $cas );
 				clearstatcache( true );
 				self::assertFileDoesNotExist( $cible, $cas . ' : rien écrit à travers le lien' );
-				self::assertTrue( is_link( $garde ), $cas . ' : le lien reste' );
+				self::assertTrue( self::est_un_lien( $garde ), $cas . ' : le lien reste' );
 			} finally {
-				if ( is_link( $garde ) ) {
-					unlink( $garde );
-				}
+				self::retirer_lien( $garde );
 				file_put_contents( $garde, 'protection remise' );
 			}
 		}
+	}
+
+	// ── Jonction vers un fichier, jonction cassée, nom en majuscules, octet nul ──
+
+	/**
+	 * Fichier de réglages hors du dossier privé, visé par les liens des essais suivants.
+	 */
+	private function reglages_dehors(): string {
+		mkdir( $this->dossier . '/site', 0777, true );
+		$cible = $this->dossier . '/site/wp-config.php';
+		file_put_contents( $cible, "<?php // réglages\n" );
+		return $cible;
+	}
+
+	/**
+	 * Un fichier du module (`seg-5.part`) est un lien vers wp-config.php : sous Windows, une jonction
+	 * vers un fichier (mklink /J, sans droit), que PHP ne voit ni comme un lien, ni comme un dossier,
+	 * ni comme un fichier ; ailleurs, un lien symbolique. job() refuse, blocked_by_link() le dit, la
+	 * partie n'est pas « dans le dossier privé », et wp-config.php reste intact.
+	 */
+	public function test_un_fichier_du_module_qui_est_une_jonction_vers_un_fichier_est_refuse(): void {
+		$id    = str_repeat( 'a', 32 );
+		$job   = (string) WorkDir::job( $id );
+		$cible = $this->reglages_dehors();
+		$lien  = $job . '/seg-5.part';
+		try {
+			self::lien_vers_un_fichier_ou_ignorer( $cible, $lien );
+			self::assertNull( WorkDir::job( $id ), 'tranche refusée' );
+			self::assertTrue( WorkDir::blocked_by_link( $id ), 'cause dite : un lien' );
+			self::assertFalse( WorkDir::within_private( $lien ) );
+			self::assertSame( "<?php // réglages\n", file_get_contents( $cible ), 'cible intacte' );
+		} finally {
+			self::retirer_lien( $lien );
+		}
+	}
+
+	/**
+	 * Un journal du module (`manifest.jsonl`) est un lien cassé : jonction vers rien sous Windows,
+	 * lien symbolique ailleurs. job() refuse, et la cible n'est jamais créée.
+	 */
+	public function test_un_fichier_du_module_qui_est_un_lien_casse_est_refuse(): void {
+		$id     = str_repeat( 'b', 32 );
+		$job    = (string) WorkDir::job( $id );
+		$absent = $this->dossier . '/absent.jsonl';
+		$lien   = $job . '/manifest.jsonl';
+		try {
+			self::lien_vers_un_fichier_ou_ignorer( $absent, $lien );
+			self::assertNull( WorkDir::job( $id ) );
+			self::assertTrue( WorkDir::blocked_by_link( $id ) );
+			self::assertFalse( WorkDir::within_private( $lien ) );
+			clearstatcache( true );
+			self::assertFileDoesNotExist( $absent, 'cible jamais créée' );
+		} finally {
+			self::retirer_lien( $lien );
+		}
+	}
+
+	/**
+	 * Un lien au nom d'un fichier du module écrit en majuscules (`SEG-5.PART`) : sous Windows, c'est
+	 * le même fichier que `seg-5.part`, que le module écrirait à travers lui. Refusé comme les autres.
+	 */
+	public function test_un_lien_au_nom_d_un_fichier_du_module_en_majuscules_est_refuse(): void {
+		$id    = str_repeat( 'c', 32 );
+		$job   = (string) WorkDir::job( $id );
+		$cible = $this->reglages_dehors();
+		$lien  = $job . '/SEG-5.PART';
+		try {
+			self::lien_vers_un_fichier_ou_ignorer( $cible, $lien );
+			self::assertNull( WorkDir::job( $id ) );
+			self::assertTrue( WorkDir::blocked_by_link( $id ) );
+			self::assertSame( "<?php // réglages\n", file_get_contents( $cible ) );
+		} finally {
+			self::retirer_lien( $lien );
+		}
+	}
+
+	/** Un chemin qui porte un octet nul n'est jamais pris pour un chemin sans lien. */
+	public function test_un_chemin_avec_un_octet_nul_est_refuse(): void {
+		self::assertTrue( WorkDir::ensure() );
+		self::assertTrue( WorkDir::link_between( WorkDir::path(), WorkDir::private_dir() . "/job-x\0y" ) );
+		self::assertTrue( WorkDir::link_between( WorkDir::path() . "\0", WorkDir::private_dir() ) );
+		self::assertFalse( WorkDir::within_private( WorkDir::private_dir() . "/seg-0\0.part" ) );
 	}
 
 	// ── Outils ────────────────────────────────────────────────────────────────

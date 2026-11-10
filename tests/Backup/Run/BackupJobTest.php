@@ -453,21 +453,23 @@ final class BackupJobTest extends BackupTestCase {
 	/**
 	 * Un fichier du module laissé dans le dossier de la sauvegarde est un lien (le nettoyage ne
 	 * touche jamais un lien) : le même numéro est refusé à chaque tentative, et la phrase le dit.
-	 * La cible du lien n'est jamais écrite. Lien vers un fichier : ignoré sans le droit de créer
-	 * des liens symboliques.
+	 * La cible du lien n'est jamais écrite. Sous Windows, une jonction vers le fichier.
 	 */
 	public function test_fichier_du_module_qui_est_un_lien_refuse_la_meme_sauvegarde_et_le_dit(): void {
 		self::assertTrue( WorkDir::ensure() );
 		mkdir( $this->dossier( self::B1 ) );
 		$cible = dirname( $this->racine ) . '/wp-config.php';
 		file_put_contents( $cible, "<?php // réglages\n" );
-		self::lien_vers_un_fichier_ou_ignorer( $cible, $this->dossier( self::B1 ) . '/manifest.jsonl' );
-
-		foreach ( [ 'première tentative', 'seconde tentative' ] as $cas ) {
-			self::assert_refus_pour_un_lien( $this->refus_au_depart( self::B1 ), 'La sauvegarde n’a pas été lancée : ' );
-			self::assertSame( "<?php // réglages\n", file_get_contents( $cible ), $cas . ' : cible jamais écrite' );
-			clearstatcache( true );
-			self::assertTrue( is_link( $this->dossier( self::B1 ) . '/manifest.jsonl' ), $cas . ' : le lien reste' );
+		$lien = $this->dossier( self::B1 ) . '/manifest.jsonl';
+		try {
+			self::lien_vers_un_fichier_ou_ignorer( $cible, $lien );
+			foreach ( [ 'première tentative', 'seconde tentative' ] as $cas ) {
+				self::assert_refus_pour_un_lien( $this->refus_au_depart( self::B1 ), 'La sauvegarde n’a pas été lancée : ' );
+				self::assertSame( "<?php // réglages\n", file_get_contents( $cible ), $cas . ' : cible jamais écrite' );
+				self::assertTrue( self::est_un_lien( $lien ), $cas . ' : le lien reste' );
+			}
+		} finally {
+			self::retirer_lien( $lien );
 		}
 	}
 
@@ -971,9 +973,7 @@ final class BackupJobTest extends BackupTestCase {
 		} catch ( BackupRefused $refus ) {
 			self::assert_arretee_en_cours( $refus, BackupRefused::WORK_DIR_UNAVAILABLE );
 		} finally {
-			if ( is_link( $etat_local ) ) {
-				unlink( $etat_local );
-			}
+			self::retirer_lien( $etat_local );
 		}
 		self::assert_close_en_echec( 'backup_work_dir_unavailable' );
 	}
