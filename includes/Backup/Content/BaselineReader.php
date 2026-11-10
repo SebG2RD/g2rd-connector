@@ -3,7 +3,9 @@
  * Lecteur en flux de l'état local d'une incrémentale, pour la comparaison par fusion avec le
  * parcours : une ligne à la fois, reprise au décalage gardé dans l'état de la sauvegarde. Une ligne
  * illisible est sautée (elle compte alors comme un fichier nouveau ou supprimé : jamais comme
- * inchangé).
+ * inchangé). Il reçoit le fichier déjà ouvert et placé au décalage de reprise : c'est l'appelant
+ * qui l'ouvre sans lien et vérifie qu'il est bien là, de la bonne taille (Run\BackupJob) ; un état
+ * local absent ne donne jamais un lecteur vide, qui ferait oublier les suppressions.
  *
  * @package G2RD\Connector
  */
@@ -22,12 +24,13 @@ final class BaselineReader {
 
 	private int $offset = 0;
 
-	public function __construct( string $file, int $offset ) {
-		$handle       = @fopen( $file, 'rb' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- lecture en flux de l'état local.
-		$this->handle = false === $handle ? null : $handle;
-		if ( null !== $this->handle && $offset > 0 ) {
-			fseek( $this->handle, $offset );
-		}
+	/**
+	 * @param resource $handle État local ouvert en lecture, placé au décalage de reprise.
+	 */
+	public function __construct( $handle ) {
+		$this->handle = $handle;
+		$position     = ftell( $handle );
+		$this->offset = false === $position ? 0 : $position;
 		$this->advance();
 	}
 

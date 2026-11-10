@@ -226,13 +226,17 @@ final class BackupJob {
 			self::refuse_after_create( $refusal, $backup_id, $created );
 		}
 
-		$downgraded = null;
+		$downgraded    = null;
+		$baseline_size = null;
 		if ( 'incremental' === $type ) {
 			$usable = ( new IncrementalBaseline( WorkDir::baseline_dir() ) )->usable_for( (string) $parent, $now );
 			if ( null !== $usable['reason'] ) {
 				$downgraded = $usable['reason'];
 				$type       = 'full';
 				$parent     = null;
+			} else {
+				// Taille de l'état local vérifié au départ, revérifiée à chaque tranche (baseline_reader()).
+				$baseline_size = $usable['bytes'];
 			}
 		}
 
@@ -259,6 +263,7 @@ final class BackupJob {
 				'offset'          => 0,
 				'current'         => null,
 				'baseline_offset' => 'incremental' === $type ? 0 : null,
+				'baseline_size'   => $baseline_size,
 				'done'            => false,
 			],
 			'journals'     => [
@@ -789,13 +794,7 @@ final class BackupJob {
 		$files    = (array) $state['files'];
 		$totals   = (array) $state['totals'];
 		$baseline = 'full' === $state['type'] ? new JournalFile( $job . '/baseline-new.jsonl' ) : null;
-		$parent   = 'incremental' === $state['type'] ? WorkDir::baseline_dir() . '/' . $state['parent'] . '.jsonl' : null;
-		// État local de la complète parente remplacé par un lien depuis le départ : jamais lu à travers
-		// lui (une copie extérieure ferait dire inchangés des fichiers qui ne le sont pas) ; arrêtée.
-		if ( null !== $parent && ! WorkDir::within_private( $parent ) ) {
-			throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE, null, BackupRefused::DETAIL_LINK ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
-		}
-		$reader   = null === $parent ? null : new BaselineReader( $parent, (int) $files['baseline_offset'] );
+		$reader   = 'incremental' === $state['type'] ? self::baseline_reader( WorkDir::baseline_dir() . '/' . $state['parent'] . '.jsonl', $files ) : null;
 		$target   = self::segment_target();
 		$verify   = (bool) apply_filters( 'g2rd_connector_backup_verify_unchanged_hash', false );
 		$cursor   = self::cursor_of( $files );
@@ -1330,6 +1329,31 @@ final class BackupJob {
 			WorkDir::discard_new_job( $backup_id );
 		}
 		throw $refusal;
+	}
+
+	/**
+	 * Lecteur de l'état local de la complète parente, rouvert à chaque segment d'une incrémentale :
+	 * par WorkDir::open_private() (jamais à travers un lien), de la taille vérifiée au départ, puis
+	 * placé au décalage de reprise gardé dans l'état. Disparu, tronqué, réécrit, ou décalage au-delà
+	 * de sa fin : la sauvegarde s'arrête. Une incrémentale sans son état local oublierait les
+	 * suppressions (une restauration ressusciterait un fichier supprimé) : jamais dite réussie.
+	 *
+	 * @param array<string, mixed> $files État `files` de la sauvegarde.
+	 * @throws BackupRefused WORK_DIR_UNAVAILABLE (phrase du lien si un lien en est la cause).
+	 */
+	private static function baseline_reader( string $file, array $files ): BaselineReader {
+		$handle = WorkDir::open_private( $file, 'rb' );
+		$stat   = null === $handle ? false : fstat( $handle );
+		$offset = $files['baseline_offset'] ?? null;
+		$size   = $files['baseline_size'] ?? null;
+		if ( null === $handle || false === $stat || ! is_int( $offset ) || ! is_int( $size ) || $stat['size'] !== $size || $offset < 0 || $offset > $size || 0 !== fseek( $handle, $offset ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions -- reprise de l'état local à son décalage.
+			if ( null !== $handle ) {
+				fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- état local refusé, fermé sans être lu.
+			}
+			throw WorkDir::unavailable( $file ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+		}
+
+		return new BaselineReader( $handle );
 	}
 
 	/**

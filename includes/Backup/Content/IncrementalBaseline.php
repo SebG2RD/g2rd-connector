@@ -61,8 +61,9 @@ final class IncrementalBaseline {
 	/**
 	 * L'état local peut-il servir à une incrémentale de parent $parent_id ?
 	 *
-	 * @return array{file: string|null, reason: string|null} `reason` : baseline_missing,
-	 *         baseline_other_backup, baseline_too_old, baseline_unreadable.
+	 * @return array{file: string|null, reason: string|null, bytes: int|null} `reason` : baseline_missing,
+	 *         baseline_other_backup, baseline_too_old, baseline_unreadable ; `bytes` : taille de
+	 *         l'état local utilisable, gardée par la sauvegarde pour le revérifier à chaque tranche.
 	 */
 	public function usable_for( string $parent_id, int $now ): array {
 		// Description qui est un lien, ou rangée derrière un lien : jamais lue, illisible.
@@ -80,14 +81,15 @@ final class IncrementalBaseline {
 			return self::refused( 'baseline_too_old' );
 		}
 		$file = $this->dir . '/' . $current['backup_id'] . '.jsonl';
-		$hash = self::sha256_and_lines( $file )['sha256'];
-		if ( null === $hash || ! hash_equals( $current['sha256'], $hash ) ) {
+		$read = self::sha256_and_lines( $file );
+		if ( null === $read['sha256'] || ! hash_equals( $current['sha256'], $read['sha256'] ) ) {
 			return self::refused( 'baseline_unreadable' );
 		}
 
 		return [
 			'file'   => $file,
 			'reason' => null,
+			'bytes'  => $read['bytes'],
 		];
 	}
 
@@ -178,10 +180,10 @@ final class IncrementalBaseline {
 	}
 
 	/**
-	 * Empreinte SHA-256 et nombre de lignes d'un fichier de l'état local, lu en une passe par
-	 * Run\WorkDir::open_private() ; empreinte null s'il est absent, illisible ou un lien.
+	 * Empreinte SHA-256, nombre de lignes et taille d'un fichier de l'état local, lu en une passe
+	 * par Run\WorkDir::open_private() ; empreinte null s'il est absent, illisible ou un lien.
 	 *
-	 * @return array{sha256: string|null, lines: int}
+	 * @return array{sha256: string|null, lines: int, bytes: int}
 	 */
 	private static function sha256_and_lines( string $file ): array {
 		$handle = WorkDir::open_private( $file, 'rb' );
@@ -189,29 +191,34 @@ final class IncrementalBaseline {
 			return [
 				'sha256' => null,
 				'lines'  => 0,
+				'bytes'  => 0,
 			];
 		}
 		$context = hash_init( 'sha256' );
 		$lines   = 0;
+		$bytes   = 0;
 		while ( false !== ( $line = fgets( $handle ) ) ) { // phpcs:ignore Generic.CodeAnalysis.AssignmentInCondition.FoundInWhileCondition -- lecture ligne à ligne.
 			hash_update( $context, $line );
 			++$lines;
+			$bytes += strlen( $line );
 		}
 		fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- fermeture du fichier ouvert ci-dessus.
 
 		return [
 			'sha256' => hash_final( $context ),
 			'lines'  => $lines,
+			'bytes'  => $bytes,
 		];
 	}
 
 	/**
-	 * @return array{file: null, reason: string}
+	 * @return array{file: null, reason: string, bytes: null}
 	 */
 	private static function refused( string $reason ): array {
 		return [
 			'file'   => null,
 			'reason' => $reason,
+			'bytes'  => null,
 		];
 	}
 }

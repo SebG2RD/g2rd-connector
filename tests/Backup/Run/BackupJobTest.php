@@ -1097,6 +1097,58 @@ final class BackupJobTest extends BackupTestCase {
 	}
 
 	/**
+	 * Incrémentale en cours : l'état local de la complète parente disparaît entre deux tranches
+	 * (extension de nettoyage, par exemple). Sans lui, l'incrémentale oublierait les suppressions
+	 * (une restauration ressusciterait un fichier supprimé) : elle est arrêtée en échec, avec une
+	 * phrase vraie, qui ne parle pas de lien.
+	 */
+	public function test_etat_local_disparu_en_cours_d_incrementale_l_arrete_en_echec(): void {
+		$this->etat_local_de_l_arbre();
+		unlink( $this->racine . '/index.php' );
+		$job = $this->job();
+		$job->start( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
+		self::assertSame( 'incremental', BackupState::load()['state']['type'] );
+		unlink( WorkDir::baseline_dir() . '/' . self::B1 . '.jsonl' );
+
+		$this->assert_incrementale_arretee_sans_son_etat_local( $job );
+	}
+
+	/** Même arrêt quand l'état local a changé de taille depuis le départ (tronqué, réécrit). */
+	public function test_etat_local_change_en_cours_d_incrementale_l_arrete_en_echec(): void {
+		$this->etat_local_de_l_arbre();
+		$job = $this->job();
+		$job->start( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
+		file_put_contents( WorkDir::baseline_dir() . '/' . self::B1 . '.jsonl', IncrementalBaseline::line( [ 'path' => 'zz.txt', 'type' => 'file', 'size' => 1, 'mtime' => 1 ], null ), FILE_APPEND );
+
+		$this->assert_incrementale_arretee_sans_son_etat_local( $job );
+	}
+
+	/** Même arrêt quand le décalage de reprise gardé dans l'état dépasse la fin de l'état local. */
+	public function test_decalage_de_l_etat_local_au_dela_de_sa_fin_arrete_l_incrementale(): void {
+		$this->etat_local_de_l_arbre();
+		$job = $this->job();
+		$job->start( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
+		$files                    = (array) BackupState::load()['state']['files'];
+		$files['baseline_offset'] = 1000000000;
+		$this->poser_etat( [ 'files' => $files ] );
+
+		$this->assert_incrementale_arretee_sans_son_etat_local( $job );
+	}
+
+	/** Tranche suivante refusée (phrase vraie, sans lien), sauvegarde close en échec, jamais finie. */
+	private function assert_incrementale_arretee_sans_son_etat_local( BackupJob $job ): void {
+		try {
+			$job->step( [ 'backup_id' => self::B2 ] );
+			self::fail( 'Refus attendu : une incrémentale sans son état local oublierait les suppressions.' );
+		} catch ( BackupRefused $refus ) {
+			self::assert_arretee_en_cours( $refus, BackupRefused::WORK_DIR_UNAVAILABLE );
+			self::assertStringNotContainsString( 'raccourci', $refus->getMessage(), 'cause qui n’est pas un lien : la phrase n’en parle pas' );
+			self::assertStringContainsString( 'retirés par une extension de nettoyage', $refus->getMessage() );
+		}
+		self::assert_close_en_echec( 'backup_work_dir_unavailable' );
+	}
+
+	/**
 	 * Incrémentale en cours : l'état local de la complète parente est remplacé, entre deux tranches,
 	 * par un lien vers une copie extérieure identique. Il n'est jamais lu à travers le lien : la
 	 * sauvegarde est arrêtée et le dit, close en échec.
@@ -1484,6 +1536,7 @@ final class BackupJobTest extends BackupTestCase {
 				'offset'          => 0,
 				'current'         => null,
 				'baseline_offset' => null,
+				'baseline_size'   => null,
 				'done'            => false,
 			],
 			$etat['files']

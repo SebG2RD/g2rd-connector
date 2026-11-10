@@ -6,6 +6,7 @@ namespace G2RD\Connector\Tests\Backup\Content;
 
 use G2RD\Connector\Backup\Content\BaselineReader;
 use G2RD\Connector\Backup\Content\IncrementalBaseline;
+use G2RD\Connector\Backup\Run\WorkDir;
 use G2RD\Connector\Tests\Backup\Support\DossierDeTravailTemporaire;
 use G2RD\Connector\Tests\Backup\Support\LiensSurDisque;
 use G2RD\Connector\Tests\TestCase;
@@ -39,6 +40,18 @@ final class IncrementalBaselineTest extends TestCase {
 		parent::tearDown();
 	}
 
+	/**
+	 * État local ouvert sans lien et placé au décalage $offset, comme BackupJob le donne au lecteur.
+	 *
+	 * @return resource
+	 */
+	private static function ouvrir( string $fichier, int $offset ) {
+		$handle = WorkDir::open_private( $fichier, 'rb' );
+		self::assertIsResource( $handle );
+		self::assertSame( 0, fseek( $handle, $offset ) );
+		return $handle;
+	}
+
 	private function promouvoir(): void {
 		$source = $this->dossier . '/nouveau.jsonl';
 		file_put_contents(
@@ -55,7 +68,7 @@ final class IncrementalBaselineTest extends TestCase {
 
 		self::assertNull( $etat['reason'] );
 		self::assertIsString( $etat['file'] );
-		$lecteur = new BaselineReader( (string) $etat['file'], 0 );
+		$lecteur = new BaselineReader( self::ouvrir( (string) $etat['file'], 0 ) );
 		self::assertSame( 'a.txt', $lecteur->peek()['path'] ?? null );
 		self::assertSame( hash( 'sha256', 'abc' ), $lecteur->peek()['sha256'] ?? null );
 		$lecteur->next();
@@ -64,7 +77,7 @@ final class IncrementalBaselineTest extends TestCase {
 		$lecteur->next();
 		self::assertNull( $lecteur->peek() );
 		$lecteur->close();
-		self::assertSame( "b/\xe9.txt", ( new BaselineReader( (string) $etat['file'], $reprise ) )->peek()['path'] ?? null, 'reprise au décalage' );
+		self::assertSame( "b/\xe9.txt", ( new BaselineReader( self::ouvrir( (string) $etat['file'], $reprise ) ) )->peek()['path'] ?? null, 'reprise au décalage' );
 	}
 
 	public function test_raisons_d_une_complete_a_la_place(): void {
