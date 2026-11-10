@@ -167,7 +167,9 @@ final class WorkDir {
 		if ( self::link_in_job( $dir ) || ( ! is_dir( $dir ) && ! wp_mkdir_p( $dir ) ) ) {
 			return null;
 		}
-		return $dir;
+		// Revu après la création : un lien posé entre-temps (autre processus) refuse aussi. Le départ
+		// retire alors le dossier qu'il vient de créer, sans suivre de lien (discard_new_job()).
+		return self::blocked_by_link( $backup_id ) ? null : $dir;
 	}
 
 	/**

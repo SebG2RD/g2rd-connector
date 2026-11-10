@@ -496,6 +496,77 @@ final class BackupJobTest extends BackupTestCase {
 		self::assertSame( [], self::contenu( $dehors ), 'rien écrit à travers le lien' );
 	}
 
+	/**
+	 * Un autre processus pose un lien à la place de `baseline/` juste après la création du dossier
+	 * de la sauvegarde par job() (doublure de wp_mkdir_p) : job() refuse après avoir créé ce
+	 * dossier ; le départ le retire (vide, créé par lui), sans toucher au lien ni à sa cible.
+	 */
+	public function test_dossier_cree_par_le_depart_puis_refuse_est_retire(): void {
+		self::assertTrue( WorkDir::ensure() );
+		$dehors = dirname( $this->racine ) . '/dehors';
+		mkdir( $dehors );
+		$sonde = dirname( $this->racine ) . '/sonde';
+		self::lien_vers_un_dossier_ou_ignorer( $dehors, $sonde );
+		self::retirer_lien( $sonde );
+		$baseline = WorkDir::baseline_dir();
+		$cree     = $this->dossier( self::B1 );
+		Functions\when( 'wp_mkdir_p' )->alias(
+			static function ( string $d ) use ( $cree, $baseline, $dehors ): bool {
+				$fait = is_dir( $d ) || mkdir( $d, 0777, true );
+				if ( $d === $cree ) {
+					rmdir( $baseline );
+					self::lien_vers_un_dossier( $dehors, $baseline );
+				}
+				return $fait;
+			}
+		);
+		try {
+			self::assert_refus_pour_un_lien( $this->refus_au_depart( self::B1 ), 'La sauvegarde n’a pas été lancée : ' );
+			clearstatcache( true );
+			self::assertDirectoryDoesNotExist( $cree, 'dossier créé par ce départ retiré' );
+			self::assertTrue( is_link( $baseline ) || file_exists( $baseline ), 'le lien reste' );
+			self::assertSame( [], self::contenu( $dehors ), 'rien écrit ni retiré à travers le lien' );
+			self::assertSame( BackupState::IDLE, BackupState::load()['state']['phase'] );
+		} finally {
+			self::retirer_lien( $baseline );
+		}
+	}
+
+	/**
+	 * Même course, mais c'est le dossier privé qui devient un lien (vers son ancien contenu) juste
+	 * après la création du dossier de la sauvegarde : ce dossier ne s'atteint plus qu'à travers le
+	 * lien, et le départ refusé ne le retire pas (jamais à travers un lien), sans avertissement.
+	 */
+	public function test_dossier_cree_puis_refuse_derriere_un_lien_n_est_jamais_retire_a_travers_lui(): void {
+		self::assertTrue( WorkDir::ensure() );
+		$prive = WorkDir::private_dir();
+		$vrai  = dirname( $this->racine ) . '/prive-deplace';
+		$sonde = dirname( $this->racine ) . '/sonde';
+		mkdir( $vrai );
+		self::lien_vers_un_dossier_ou_ignorer( $vrai, $sonde );
+		self::retirer_lien( $sonde );
+		rmdir( $vrai );
+		$cree = $this->dossier( self::B1 );
+		Functions\when( 'wp_mkdir_p' )->alias(
+			static function ( string $d ) use ( $cree, $prive, $vrai ): bool {
+				$fait = is_dir( $d ) || mkdir( $d, 0777, true );
+				if ( $d === $cree ) {
+					rename( $prive, $vrai );
+					self::lien_vers_un_dossier( $vrai, $prive );
+				}
+				return $fait;
+			}
+		);
+		try {
+			self::assert_refus_pour_un_lien( $this->refus_au_depart( self::B1 ), 'La sauvegarde n’a pas été lancée : ' );
+			clearstatcache( true );
+			self::assertDirectoryExists( $vrai . '/job-' . self::B1, 'jamais retiré à travers le lien' );
+			self::assertTrue( is_link( $prive ) || file_exists( $prive ), 'le lien reste' );
+		} finally {
+			self::retirer_lien( $prive );
+		}
+	}
+
 	public function test_dossier_de_la_sauvegarde_perdu_entre_deux_tranches_l_arrete_et_le_dit(): void {
 		$job = $this->job();
 		$job->start( self::depart( self::B1 ) );

@@ -212,12 +212,13 @@ final class BackupJob {
 		}
 		WorkDir::clear_job( $backup_id );
 		// Rien à ce chemin juste avant job() : le dossier rendu est créé par ce départ, et retiré s'il
-		// est refusé ensuite (disque insuffisant, journal impossible à écrire). Un dossier déjà là
-		// n'est jamais touché.
+		// est refusé ensuite (disque insuffisant, journal impossible à écrire), ou si job() lui-même
+		// le refuse après l'avoir créé (lien posé entre-temps). Un dossier déjà là n'est jamais
+		// touché, ni un dossier que l'on n'atteint qu'à travers un lien (WorkDir::discard_new_job()).
 		$created = ! WorkDir::job_exists( $backup_id );
 		$job     = WorkDir::job( $backup_id );
 		if ( null === $job ) {
-			throw self::work_dir_refusal( $backup_id ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+			self::refuse_after_create( self::work_dir_refusal( $backup_id ), $backup_id, $created );
 		}
 		try {
 			$this->assert_disk( $job );
