@@ -15,6 +15,8 @@ declare(strict_types=1);
 namespace G2RD\Connector\Backup\Content;
 
 use G2RD\Connector\Backup\Commands\BackupRefused;
+use G2RD\Connector\Backup\Run\JournalFile;
+use G2RD\Connector\Backup\Run\WorkDir;
 
 final class ManifestJournal {
 
@@ -24,8 +26,12 @@ final class ManifestJournal {
 
 	private string $file;
 
+	/** Journal ouvert au premier ajout et gardé ouvert (Run\JournalFile) : jamais à travers un lien. */
+	private JournalFile $journal;
+
 	public function __construct( string $file ) {
-		$this->file = $file;
+		$this->file    = $file;
+		$this->journal = new JournalFile( $file );
 	}
 
 	/**
@@ -56,13 +62,11 @@ final class ManifestJournal {
 
 	/**
 	 * @param array<string, mixed> $line
-	 * @throws BackupRefused WORK_DIR_UNAVAILABLE si l'écriture échoue.
+	 * @throws BackupRefused WORK_DIR_UNAVAILABLE si l'écriture échoue, ou si le journal est un lien
+	 *                       (Run\WorkDir::open_private()).
 	 */
 	public function append( array $line ): void {
-		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- journal du manifeste dans le dossier de travail protégé, ajouté ligne à ligne.
-		if ( false === file_put_contents( $this->file, self::encode( $line ), FILE_APPEND ) ) {
-			throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
-		}
+		$this->journal->append( self::encode( $line ) );
 	}
 
 	/**
@@ -70,12 +74,12 @@ final class ManifestJournal {
 	 *
 	 * @param \Closure(int, string): void $emit Reçoit le décalage et le morceau.
 	 * @return int Octets rendus.
-	 * @throws BackupRefused WORK_DIR_UNAVAILABLE si le journal est illisible.
+	 * @throws BackupRefused WORK_DIR_UNAVAILABLE si le journal est illisible, ou si c'est un lien.
 	 */
 	public function stream( \Closure $emit ): int {
-		$handle = @fopen( $this->file, 'rb' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- lecture en flux du journal du manifeste.
-		if ( false === $handle ) {
-			throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+		$handle = WorkDir::open_private( $this->file, 'rb' );
+		if ( null === $handle ) {
+			throw WorkDir::unavailable( $this->file ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
 		}
 		$offset = 0;
 		try {

@@ -25,6 +25,7 @@ use G2RD\Connector\Support\DiskSpace;
 use G2RD\Connector\Tests\Backup\BackupTestCase;
 use G2RD\Connector\Tests\Backup\Content\FakeDumpWpdb;
 use G2RD\Connector\Tests\Backup\Support\LiensSurDisque;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * La machine à états, la plateforme jouée par le test. Tâche 28 : départ, arrêt, tranche sans
@@ -487,6 +488,63 @@ final class BackupJobTest extends BackupTestCase {
 		} finally {
 			self::retirer_lien( $lien );
 		}
+	}
+
+	/**
+	 * @return iterable<string, array{string, string}> Fichier écrit par la tranche, nature du lien.
+	 */
+	public static function fichiers_ecrits_par_une_tranche(): iterable {
+		yield 'segment en cours, lien'          => [ 'seg-0.part', 'lien' ];
+		yield 'journal du manifeste, lien'      => [ 'manifest.jsonl', 'lien' ];
+		yield 'futur état local, lien'          => [ 'baseline-new.jsonl', 'lien' ];
+		yield 'journal du manifeste, physique'  => [ 'manifest.jsonl', 'physique' ];
+		yield 'futur état local, physique'      => [ 'baseline-new.jsonl', 'physique' ];
+	}
+
+	/**
+	 * Course : un lien vers wp-config.php est posé à la place d'un fichier que la tranche va écrire,
+	 * APRÈS le contrôle de son début (job(), puis journaux ramenés à leur longueur validée : point
+	 * d'injection) et avant la production, 20 à 50 s plus tôt sur un vrai site. Lien symbolique (ou
+	 * jonction Windows) ou lien physique : rien n'est écrit dans wp-config.php, la tranche est
+	 * refusée avec la phrase du lien, la sauvegarde close en échec.
+	 */
+	#[DataProvider( 'fichiers_ecrits_par_une_tranche' )]
+	public function test_lien_pose_apres_le_controle_de_la_tranche_ne_recoit_rien( string $nom, string $nature ): void {
+		$cible = dirname( $this->racine ) . '/wp-config.php';
+		file_put_contents( $cible, "<?php // réglages\n" );
+		$sonde = dirname( $this->racine ) . '/sonde';
+		$pose  = 'lien' === $nature ? self::lien_vers_un_fichier( $cible, $sonde ) : @link( $cible, $sonde ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+		if ( ! $pose ) {
+			self::markTestSkipped( 'Le système refuse ce lien.' );
+		}
+		self::retirer_lien( $sonde );
+		$job = $this->job();
+		$job->start( self::depart( self::B1 ) );
+		$lien = $this->dossier( self::B1 ) . '/' . $nom;
+		\Patchwork\redefine(
+			[ WorkDir::class, 'truncate_journals' ],
+			// Fermeture liée par Patchwork : jamais statique.
+			function () use ( $lien, $cible, $nature ) {
+				$fait = \Patchwork\relay();
+				if ( file_exists( $lien ) ) {
+					unlink( $lien );
+				}
+				'lien' === $nature ? self::lien_vers_un_fichier( $cible, $lien ) : link( $cible, $lien );
+				return $fait;
+			}
+		);
+
+		try {
+			$job->step( [ 'backup_id' => self::B1 ] );
+			self::fail( 'Refus attendu : ' . $nom . ' remplacé pendant la tranche.' );
+		} catch ( BackupRefused $refus ) {
+			self::assert_arretee_en_cours( $refus, BackupRefused::WORK_DIR_UNAVAILABLE );
+			self::assertStringContainsString( 'raccourci', $refus->getMessage(), 'la phrase dit le lien' );
+		} finally {
+			self::retirer_lien( $lien );
+		}
+		self::assertSame( "<?php // réglages\n", file_get_contents( $cible ), 'rien écrit dans la cible' );
+		self::assert_close_en_echec( 'backup_work_dir_unavailable' );
 	}
 
 	/**

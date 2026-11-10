@@ -786,7 +786,7 @@ final class BackupJob {
 		$journal  = new ManifestJournal( $job . '/manifest.jsonl' );
 		$files    = (array) $state['files'];
 		$totals   = (array) $state['totals'];
-		$baseline = 'full' === $state['type'] ? $job . '/baseline-new.jsonl' : null;
+		$baseline = 'full' === $state['type'] ? new JournalFile( $job . '/baseline-new.jsonl' ) : null;
 		$parent   = 'incremental' === $state['type'] ? WorkDir::baseline_dir() . '/' . $state['parent'] . '.jsonl' : null;
 		// État local de la complète parente remplacé par un lien depuis le départ : jamais lu à travers
 		// lui (une copie extérieure ferait dire inchangés des fichiers qui ne le sont pas) ; arrêtée.
@@ -955,7 +955,7 @@ final class BackupJob {
 	 * @param array<string, mixed>                                                                     $totals
 	 * @throws BackupRefused WORK_DIR_UNAVAILABLE.
 	 */
-	private function file_line( ManifestJournal $journal, ?string $baseline, array $entry, ?string $sha256, string $status, ?int $segment, array &$totals ): void {
+	private function file_line( ManifestJournal $journal, ?JournalFile $baseline, array $entry, ?string $sha256, string $status, ?int $segment, array &$totals ): void {
 		$journal->append(
 			[ 't' => 'file' ] + ManifestJournal::path_field( $entry['path'] ) + [
 				'kind'    => $entry['type'],
@@ -972,12 +972,9 @@ final class BackupJob {
 			$totals['unreadable'] = (int) $totals['unreadable'] + 1;
 			return;
 		}
-		if ( null !== $baseline ) {
-			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- futur état local des incrémentales, dans le dossier de travail (journal tronqué à sa longueur validée à chaque tranche).
-			if ( false === file_put_contents( $baseline, IncrementalBaseline::line( $entry, $sha256 ), FILE_APPEND ) ) {
-				throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
-			}
-		}
+		// Futur état local des incrémentales (journal tronqué à sa longueur validée à chaque tranche),
+		// ouvert une fois par segment, jamais à travers un lien (JournalFile).
+		$baseline?->append( IncrementalBaseline::line( $entry, $sha256 ) );
 	}
 
 	/**
@@ -1104,7 +1101,13 @@ final class BackupJob {
 		}
 		$segments = [];
 		$manifest = 0;
-		foreach ( (array) file( $job . '/segments.jsonl', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES ) as $line ) {
+		// Liste des segments relue par WorkDir::read_private(), jamais à travers un lien ; illisible :
+		// aucun index sans ses segments, la sauvegarde s'arrête.
+		$listed = WorkDir::read_private( $job . '/segments.jsonl' );
+		if ( null === $listed ) {
+			throw WorkDir::unavailable( $job . '/segments.jsonl' ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+		}
+		foreach ( array_filter( explode( "\n", $listed ), static fn ( string $line ): bool => '' !== $line ) as $line ) {
 			$segment = json_decode( (string) $line, true );
 			if ( is_array( $segment ) ) {
 				$segments[ (int) $segment['index'] ] = $segment;
@@ -1194,10 +1197,9 @@ final class BackupJob {
 			'bytes'  => $entry['bytes'],
 			'sha256' => $entry['sha256'],
 		];
-		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents, WordPress.WP.AlternativeFunctions.json_encode_json_encode -- liste des segments de la sauvegarde, dans son dossier de travail.
-		if ( false === file_put_contents( $job . '/segments.jsonl', (string) json_encode( $line ) . "\n", FILE_APPEND ) ) {
-			throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
-		}
+		// Liste des segments, jamais écrite à travers un lien (JournalFile, fermé aussitôt).
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- ligne de la liste des segments, valeurs scalaires.
+		( new JournalFile( $job . '/segments.jsonl' ) )->append( (string) json_encode( $line ) . "\n" );
 		$limit                             = self::memory_limit();
 		$state['pending'][]                = [
 			'segment'  => $entry['segment'],

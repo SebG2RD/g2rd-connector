@@ -13,7 +13,9 @@
  * Jamais à travers un lien (within_private(), link_between()) : un lien symbolique, même cassé, ou
  * une jonction Windows placé dans le dossier privé ou à sa place ne fait jamais écrire, lire ni
  * supprimer quoi que ce soit hors de lui. Le départ ou la tranche est refusé, le nettoyage passe
- * son chemin, et le lien reste.
+ * son chemin, et le lien reste. Chaque fichier du module est ouvert par open_private(), qui
+ * revérifie au moment même de l'ouverture (un lien posé pendant la tranche, après le contrôle de
+ * son début, ne reçoit rien) et refuse aussi un lien physique (fichier à plusieurs noms).
  *
  * @package G2RD\Connector
  */
@@ -22,6 +24,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Backup\Run;
 
+use G2RD\Connector\Backup\Commands\BackupRefused;
 use G2RD\Connector\Support\PathRules;
 
 final class WorkDir {
@@ -35,6 +38,14 @@ final class WorkDir {
 		'baseline' => 'baseline-new.jsonl',
 		'segments' => 'segments.jsonl',
 	];
+
+	/** Modes de open_private() : fichier neuf, ajout, réécriture, fichier existant à modifier, lecture. */
+	private const OPEN_MODES = [ 'xb', 'ab', 'cb', 'r+b', 'rb' ];
+
+	/** Bits du type de fichier dans le mode de stat(), et la valeur d'un fichier ordinaire. */
+	private const TYPE_MASK = 0170000;
+
+	private const TYPE_FILE = 0100000;
 
 	private const GUARDS = [
 		'index.php'  => "<?php\n// Silence is golden.\n",
@@ -83,8 +94,7 @@ final class WorkDir {
 			}
 			foreach ( self::GUARDS as $name => $content ) {
 				$file = $folder . '/' . $name;
-				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- fichiers de protection du dossier de travail, écrits une fois (modèle de RestorePointStore::ensure_dir()).
-				if ( ! file_exists( $file ) && false === file_put_contents( $file, $content ) ) {
+				if ( ! file_exists( $file ) && ! self::write_new( $file, $content ) ) {
 					return false;
 				}
 			}
@@ -103,11 +113,12 @@ final class WorkDir {
 	 * @return array{manifest: int, baseline: int, segments: int}
 	 */
 	public static function journal_sizes( string $job ): array {
-		clearstatcache();
+		clearstatcache( true );
 		$sizes = [];
 		foreach ( self::JOURNALS as $key => $file ) {
-			$size          = is_file( $job . '/' . $file ) ? filesize( $job . '/' . $file ) : 0;
-			$sizes[ $key ] = false === $size ? 0 : $size;
+			// lstat() : la taille d'un lien n'est jamais celle de sa cible.
+			$stat          = self::lstat_of( $job . '/' . $file );
+			$sizes[ $key ] = false !== $stat && self::TYPE_FILE === ( $stat['mode'] & self::TYPE_MASK ) ? (int) $stat['size'] : 0;
 		}
 
 		return [
@@ -120,24 +131,27 @@ final class WorkDir {
 	/**
 	 * Tronque chaque journal à sa longueur validée (état de la sauvegarde). Faux si un journal est
 	 * plus court que sa longueur validée (perdu ou abîmé : la sauvegarde ne peut pas continuer), si
-	 * une longueur validée est négative (état abîmé : rien n'est tronqué) ou si la troncature échoue.
+	 * une longueur validée est négative (état abîmé : rien n'est tronqué), si un journal n'est pas
+	 * un fichier ordinaire à lui seul (lien, jonction, lien physique : open_private()) ou si la
+	 * troncature échoue.
 	 *
 	 * @param array<string, mixed> $committed Longueurs validées, clés de JOURNALS.
 	 */
 	public static function truncate_journals( string $job, array $committed ): bool {
-		clearstatcache();
+		clearstatcache( true );
 		foreach ( self::JOURNALS as $key => $file ) {
 			$length = is_int( $committed[ $key ] ?? null ) ? $committed[ $key ] : 0;
 			$path   = $job . '/' . $file;
-			$size   = is_file( $path ) ? (int) filesize( $path ) : 0;
+			$stat   = self::lstat_of( $path );
+			$size   = false === $stat ? 0 : (int) $stat['size'];
 			if ( $length < 0 || $size < $length ) {
 				return false;
 			}
 			if ( $size === $length ) {
 				continue;
 			}
-			$handle = @fopen( $path, 'r+b' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- journal de la sauvegarde, dans le dossier privé ; échec rendu par la valeur de retour.
-			if ( false === $handle ) {
+			$handle = self::open_private( $path, 'r+b' );
+			if ( null === $handle ) {
 				return false;
 			}
 			$done = ftruncate( $handle, $length ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- troncature du journal à sa longueur validée (WP_Filesystem ne tronque pas).
@@ -185,6 +199,107 @@ final class WorkDir {
 	public static function blocked_by_link( string $backup_id ): bool {
 		self::assert_id( $backup_id );
 		return self::link_in_work_dir() || self::link_in_job( self::private_dir() . '/job-' . $backup_id );
+	}
+
+	/**
+	 * Ouvre un fichier du module rangé dans le dossier privé, jamais à travers un lien ; null sinon
+	 * (rien n'est alors lu ni écrit). Le chemin est vérifié (within_private()), puis le fichier :
+	 * présent, ce doit être un fichier ordinaire à un seul nom (lstat() : ni lien symbolique, ni
+	 * jonction, ni lien physique). Il n'est jamais ouvert d'une façon qui créerait ou viderait une
+	 * cible à travers un lien posé entre-temps : absent, il est créé en exclusif (`xb` refuse tout ce
+	 * qui est déjà là, lien cassé compris) ; présent, il est ouvert sans création (`r+b` ou `rb`).
+	 * Puis le descripteur ouvert est comparé au chemin (fstat() et lstat() : même appareil, même
+	 * inode, un seul nom, le même qu'avant l'ouverture), et le chemin revérifié ; sinon il est fermé
+	 * sans rien écrire. Modes : `xb` fichier neuf (refusé s'il existe), `ab` ajout à la fin (créé
+	 * au besoin), `cb` réécriture (vidé seulement après ces contrôles), `r+b` fichier existant à
+	 * modifier, `rb` lecture.
+	 *
+	 * @return resource|null
+	 * @throws \InvalidArgumentException Mode inconnu (erreur de programmation).
+	 */
+	public static function open_private( string $path, string $mode ) {
+		if ( ! in_array( $mode, self::OPEN_MODES, true ) ) {
+			throw new \InvalidArgumentException( 'Mode d\'ouverture inconnu (erreur de programmation).' );
+		}
+		if ( ! self::within_private( $path ) ) {
+			return null;
+		}
+		$before = self::lstat_of( $path );
+		if ( false === $before ? in_array( $mode, [ 'r+b', 'rb' ], true ) : ( 'xb' === $mode || ! self::plain_file( $before ) ) ) {
+			return null;
+		}
+		$handle = @fopen( $path, false === $before ? 'xb' : ( 'rb' === $mode ? 'rb' : 'r+b' ) ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- fichier du module dans le dossier privé, contrôlé avant et après l'ouverture ; échec rendu par la valeur de retour.
+		if ( false === $handle ) {
+			return null;
+		}
+		$opened = fstat( $handle );
+		$after  = self::lstat_of( $path );
+		$same   = false !== $opened
+			&& false !== $after
+			&& self::plain_file( $opened )
+			&& self::plain_file( $after )
+			&& self::same_file( $opened, $after )
+			&& ! self::link_between( self::path(), $path ); // Aucun lien apparu sur le chemin entre-temps.
+		if ( $same && false !== $before ) {
+			// Le fichier ouvert est celui qui a été contrôlé avant l'ouverture, pas un autre mis à sa place.
+			$same = self::same_file( $before, $after );
+		}
+		if ( $same && 'cb' === $mode ) {
+			$same = ftruncate( $handle, 0 ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- réécriture : vidé après les contrôles, jamais par l'ouverture.
+		}
+		if ( $same && 'ab' === $mode ) {
+			$same = 0 === fseek( $handle, 0, SEEK_END ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- ajout à la fin du fichier ouvert sans création.
+		}
+		if ( ! $same ) {
+			fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- fermé sans rien écrire.
+			return null;
+		}
+
+		return $handle;
+	}
+
+	/** Contenu d'un fichier du module du dossier privé, lu par open_private() ; null si refusé ou illisible. */
+	public static function read_private( string $path ): ?string {
+		$handle = self::open_private( $path, 'rb' );
+		if ( null === $handle ) {
+			return null;
+		}
+		$content = stream_get_contents( $handle );
+		fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- fermeture du fichier ouvert ci-dessus.
+
+		return false === $content ? null : $content;
+	}
+
+	/**
+	 * Retire un fichier du module du dossier privé : un fichier ordinaire seulement, atteint sans
+	 * lien (jamais un lien, une jonction ni un dossier, que le module ne crée pas). Vrai s'il n'y a
+	 * plus rien à ce chemin.
+	 */
+	public static function remove_private_file( string $path ): bool {
+		if ( ! self::within_private( $path ) ) {
+			return false;
+		}
+		$stat = self::lstat_of( $path );
+		if ( false === $stat ) {
+			return true;
+		}
+		if ( self::TYPE_FILE !== ( $stat['mode'] & self::TYPE_MASK ) ) {
+			return false;
+		}
+		wp_delete_file( $path );
+
+		return false === self::lstat_of( $path );
+	}
+
+	/**
+	 * Refus WORK_DIR_UNAVAILABLE d'une lecture ou d'une écriture refusée sur $path : avec la phrase
+	 * du lien (BackupRefused::DETAIL_LINK) si un lien ou un lien physique est en cause, à ce chemin
+	 * ou dans le dossier de travail ; sinon la phrase des droits du dossier.
+	 */
+	public static function unavailable( string $path ): BackupRefused {
+		$link = ! self::within_private( $path ) || self::hard_linked( $path ) || self::link_in_work_dir();
+
+		return new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE, null, $link ? BackupRefused::DETAIL_LINK : '' );
 	}
 
 	/** Retire les fichiers que le module a créés pour $backup_id, puis le dossier s'il est vide. */
@@ -416,8 +531,9 @@ final class WorkDir {
 
 	/**
 	 * Un lien est-il au chemin du dossier `job-<id>` (ou avant lui, depuis le dossier de travail), ou
-	 * à la place d'un fichier que le module y écrit ? Nom comparé sans la casse : sous Windows,
-	 * `SEG-5.PART` est le fichier `seg-5.part` que le module écrirait. Dossier absent : rien à suivre.
+	 * à la place d'un fichier que le module y écrit (lien physique compris) ? Nom comparé sans la
+	 * casse : sous Windows, `SEG-5.PART` est le fichier `seg-5.part` que le module écrirait. Dossier
+	 * absent : rien à suivre.
 	 */
 	private static function link_in_job( string $dir ): bool {
 		if ( ! self::within_private( $dir ) ) {
@@ -428,12 +544,60 @@ final class WorkDir {
 		}
 		foreach ( (array) @scandir( $dir ) as $name ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- dossier illisible : aucun lien lu, l'écriture qui suit échoue d'elle-même.
 			$name = (string) $name;
-			if ( self::is_job_file( strtolower( $name ) ) && self::link_between( $dir, $dir . '/' . $name ) ) {
+			if ( self::is_job_file( strtolower( $name ) ) && ( self::link_between( $dir, $dir . '/' . $name ) || self::hard_linked( $dir . '/' . $name ) ) ) {
 				return true;
 			}
 		}
 
 		return false;
+	}
+
+	/**
+	 * Fichier ordinaire à un seul nom (stat() ou fstat()) : ni lien, ni jonction, ni lien physique.
+	 *
+	 * @param array<int|string, int> $stat
+	 */
+	private static function plain_file( array $stat ): bool {
+		return self::TYPE_FILE === ( $stat['mode'] & self::TYPE_MASK ) && 1 === $stat['nlink'];
+	}
+
+	/**
+	 * Même fichier : même appareil, même inode.
+	 *
+	 * @param array<int|string, int> $a
+	 * @param array<int|string, int> $b
+	 */
+	private static function same_file( array $a, array $b ): bool {
+		return $a['dev'] === $b['dev'] && $a['ino'] === $b['ino'];
+	}
+
+	/** Fichier ordinaire à plusieurs noms (lien physique : son contenu est aussi celui d'un autre fichier). */
+	private static function hard_linked( string $path ): bool {
+		$stat = self::lstat_of( $path );
+
+		return false !== $stat && self::TYPE_FILE === ( $stat['mode'] & self::TYPE_MASK ) && $stat['nlink'] > 1;
+	}
+
+	/**
+	 * lstat() du chemin, cache vidé d'abord ; faux s'il n'y a rien (sans avertissement). lstat() ne
+	 * suit jamais un lien : c'est le lien lui-même qui est décrit.
+	 *
+	 * @return array<int|string, int>|false
+	 */
+	private static function lstat_of( string $path ): array|false {
+		clearstatcache( true );
+		return @lstat( $path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- chemin absent : faux, sans avertissement.
+	}
+
+	/** Écrit un fichier neuf, en exclusif (`xb`) : jamais à travers un lien, même cassé, posé entre-temps. */
+	private static function write_new( string $file, string $content ): bool {
+		$handle = @fopen( $file, 'xb' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- fichier de protection du dossier de travail, créé une fois en exclusif ; échec rendu par la valeur de retour.
+		if ( false === $handle ) {
+			return false;
+		}
+		$written = fwrite( $handle, $content ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- fichier de protection ouvert ci-dessus.
+
+		return fclose( $handle ) && strlen( $content ) === $written; // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- fermeture du fichier écrit.
 	}
 
 	/**

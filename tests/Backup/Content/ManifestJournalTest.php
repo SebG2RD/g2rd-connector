@@ -5,13 +5,22 @@ declare(strict_types=1);
 namespace G2RD\Connector\Tests\Backup\Content;
 
 use G2RD\Connector\Backup\Content\ManifestJournal;
-use PHPUnit\Framework\TestCase;
+use G2RD\Connector\Tests\Backup\Support\DossierDeTravailTemporaire;
+use G2RD\Connector\Tests\TestCase;
 
 /**
  * Journal du manifeste (docs/backup-payload.md § 5) : octets exacts des vecteurs `manifest_lines`,
- * chemin et nom de table non UTF-8 en base64, journal rendu par morceaux dans l'ordre.
+ * chemin et nom de table non UTF-8 en base64, journal rendu par morceaux dans l'ordre. Le journal
+ * vit dans le dossier privé des sauvegardes (il n'est ouvert que là, jamais à travers un lien).
  */
 final class ManifestJournalTest extends TestCase {
+
+	use DossierDeTravailTemporaire;
+
+	protected function tearDown(): void {
+		$this->retirer_dossier_de_travail();
+		parent::tearDown();
+	}
 
 	public function test_lignes_du_manifeste_des_vecteurs(): void {
 		$v = json_decode( (string) file_get_contents( dirname( __DIR__, 2 ) . '/fixtures/backup-payload-vectors.json' ), true, 32, JSON_THROW_ON_ERROR );
@@ -32,7 +41,9 @@ final class ManifestJournalTest extends TestCase {
 	}
 
 	public function test_journal_ajoute_puis_rendu_par_morceaux_dans_l_ordre(): void {
-		$fichier = sys_get_temp_dir() . '/g2rd-manifeste-' . bin2hex( random_bytes( 4 ) ) . '.jsonl';
+		$dossier = $this->preparer_dossier_de_travail() . '/job-' . str_repeat( 'a', 32 );
+		mkdir( $dossier );
+		$fichier = $dossier . '/manifest.jsonl';
 		$journal = new ManifestJournal( $fichier );
 		for ( $i = 0; $i < 3000; $i++ ) {
 			$journal->append( [ 't' => 'file', 'path' => str_repeat( 'x', 500 ) . $i ] );
@@ -47,6 +58,5 @@ final class ManifestJournalTest extends TestCase {
 		self::assertSame( (string) file_get_contents( $fichier ), $rendu );
 		self::assertSame( 0, $decalage[0] );
 		self::assertGreaterThan( 1, count( $decalage ), 'morceaux d\'au plus 1 Mio' );
-		unlink( $fichier );
 	}
 }

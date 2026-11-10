@@ -560,6 +560,59 @@ final class WorkDirTest extends TestCase {
 		self::assertFalse( WorkDir::within_private( WorkDir::private_dir() . "/seg-0\0.part" ) );
 	}
 
+	// ── open_private() : chaque fichier du module ouvert sans jamais suivre de lien ──
+
+	/**
+	 * Modes de open_private() sur un vrai fichier du module : `ab` crée puis ajoute, `xb` refuse un
+	 * fichier déjà là, `cb` vide après contrôle, `rb` et `r+b` refusent un fichier absent ; un
+	 * chemin hors du dossier privé n'est jamais ouvert ; un mode inconnu est une erreur de
+	 * programmation.
+	 */
+	public function test_open_private_ouvre_un_fichier_du_module_selon_son_mode(): void {
+		$job     = (string) WorkDir::job( str_repeat( 'f', 32 ) );
+		$fichier = $job . '/manifest.jsonl';
+		foreach ( [ 'un', 'deux' ] as $mot ) {
+			$h = WorkDir::open_private( $fichier, 'ab' );
+			self::assertIsResource( $h );
+			fwrite( $h, $mot );
+			fclose( $h );
+		}
+		self::assertSame( 'undeux', file_get_contents( $fichier ) );
+		self::assertNull( WorkDir::open_private( $fichier, 'xb' ), 'fichier neuf : refusé s\'il existe' );
+		$h = WorkDir::open_private( $fichier, 'cb' );
+		self::assertIsResource( $h );
+		fwrite( $h, 'trois' );
+		fclose( $h );
+		self::assertSame( 'trois', WorkDir::read_private( $fichier ) );
+		self::assertNull( WorkDir::open_private( $job . '/index.bin', 'rb' ), 'absent : rien à lire' );
+		self::assertNull( WorkDir::open_private( $job . '/index.bin', 'r+b' ) );
+		self::assertNull( WorkDir::open_private( $this->dossier . '/dehors.jsonl', 'ab' ), 'hors du dossier privé' );
+		self::assertFileDoesNotExist( $this->dossier . '/dehors.jsonl' );
+		$this->expectException( \InvalidArgumentException::class );
+		WorkDir::open_private( $fichier, 'wb' );
+	}
+
+	/**
+	 * Un lien physique (fichier à deux noms : wp-config.php et `seg-3.part`) dans le dossier de la
+	 * sauvegarde : job() refuse et le dit, et aucun mode de open_private() ne l'ouvre. Le contenu
+	 * de wp-config.php n'est jamais touché.
+	 */
+	public function test_un_lien_physique_n_est_jamais_ouvert(): void {
+		$id    = str_repeat( '0', 32 );
+		$job   = (string) WorkDir::job( $id );
+		$cible = $this->reglages_dehors();
+		$lien  = $job . '/seg-3.part';
+		if ( ! @link( $cible, $lien ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+			self::markTestSkipped( 'Le système refuse de créer un lien physique.' );
+		}
+		self::assertNull( WorkDir::job( $id ) );
+		self::assertTrue( WorkDir::blocked_by_link( $id ) );
+		foreach ( [ 'xb', 'ab', 'cb', 'r+b', 'rb' ] as $mode ) {
+			self::assertNull( WorkDir::open_private( $lien, $mode ), $mode );
+		}
+		self::assertSame( "<?php // réglages\n", file_get_contents( $cible ) );
+	}
+
 	// ── Dossier de travail (g2rd-backups) qui est lui-même un lien ─────────────
 
 	/** Le dossier de travail devient `$chemin` (filtre g2rd_connector_backup_dir). */

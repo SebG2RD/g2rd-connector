@@ -3,7 +3,9 @@
  * Production d'un segment entier : SegmentWriter (clé de données neuve, en-tête, blocs AES-256-GCM)
  * dans `seg-<n>.part` du dossier de la sauvegarde, rempli par la charge utile ($fill), puis
  * autotest SelfTest relancé ; seulement alors le fichier devient `seg-<n>.seg`. Tout échec jette le
- * fichier commencé. Rien de ce que garde le producteur ne rouvre la clé de données (§ 9 de la
+ * fichier commencé. Jamais à travers un lien : `seg-<n>.part` est créé en exclusif par
+ * WorkDir::open_private() (un `.part` laissé par une tranche interrompue est d'abord retiré, s'il
+ * est un fichier ordinaire), et son en-tête est relu de même. Rien de ce que garde le producteur ne rouvre la clé de données (§ 9 de la
  * spécification) : il ne reçoit que la clé publique du site.
  *
  * @package G2RD\Connector
@@ -74,9 +76,9 @@ final class SegmentProducer {
 	public function produce( int $segment, int $kind, \Closure $fill ): array {
 		$part  = $this->dir . '/seg-' . $segment . '.part';
 		$final = $this->dir . '/seg-' . $segment . '.seg';
-		$out   = @fopen( $part, 'wb' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- segment chiffré écrit en flux dans le dossier de travail protégé.
-		if ( false === $out ) {
-			throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+		$out   = WorkDir::remove_private_file( $part ) ? WorkDir::open_private( $part, 'xb' ) : null;
+		if ( null === $out ) {
+			throw WorkDir::unavailable( $part ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
 		}
 
 		try {
@@ -101,13 +103,19 @@ final class SegmentProducer {
 
 		$check = ( $this->self_test )();
 		if ( true !== $check['ok'] ) {
-			wp_delete_file( $part );
+			WorkDir::remove_private_file( $part );
 			throw new BackupRefused( BackupRefused::SELF_TEST_FAILED ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
 		}
-		$header = (string) file_get_contents( $part, false, null, 0, SegmentHeader::BYTES ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- en-tête du segment écrit (148 octets), pour seal-checks.
+		// En-tête du segment écrit (148 octets), pour seal-checks : relu par open_private(), jamais à travers un lien.
+		$in     = WorkDir::open_private( $part, 'rb' );
+		$header = null === $in ? '' : (string) fread( $in, SegmentHeader::BYTES ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- en-tête du segment ouvert ci-dessus.
+		if ( null !== $in ) {
+			fclose( $in ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- fermeture de l'en-tête lu.
+		}
+		// rename() remplace un lien posé à la place de `seg-<n>.seg` sans jamais le suivre.
 		if ( SegmentHeader::BYTES !== strlen( $header ) || ! @rename( $part, $final ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.rename_rename -- segment terminé renommé dans son dossier.
-			wp_delete_file( $part );
-			throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+			WorkDir::remove_private_file( $part );
+			throw WorkDir::unavailable( $part ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
 		}
 
 		return [
@@ -128,7 +136,7 @@ final class SegmentProducer {
 		if ( is_resource( $out ) ) {
 			fclose( $out ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- segment interrompu, jeté.
 		}
-		wp_delete_file( $part );
+		WorkDir::remove_private_file( $part );
 	}
 
 	private static function refusal_for( string $reason ): string {

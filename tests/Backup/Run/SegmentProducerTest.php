@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Tests\Backup\Run;
 
-use Brain\Monkey\Functions;
 use G2RD\Connector\Backup\Commands\BackupRefused;
 use G2RD\Connector\Backup\Crypto\Sodium;
 use G2RD\Connector\Backup\Format\Hpke;
@@ -13,9 +12,12 @@ use G2RD\Connector\Backup\Format\SegmentReader;
 use G2RD\Connector\Backup\Payload\PayloadReader;
 use G2RD\Connector\Backup\Payload\PayloadWriter;
 use G2RD\Connector\Backup\Run\SegmentProducer;
+use G2RD\Connector\Tests\Backup\Support\DossierDeTravailTemporaire;
 use G2RD\Connector\Tests\TestCase;
 
 final class SegmentProducerTest extends TestCase {
+
+	use DossierDeTravailTemporaire;
 
 	private const BACKUP = '8985695e536befd8b249c869f62ee42b';
 
@@ -27,22 +29,15 @@ final class SegmentProducerTest extends TestCase {
 
 	protected function setUp(): void {
 		parent::setUp();
-		$this->dossier  = str_replace( '\\', '/', sys_get_temp_dir() ) . '/g2rd-prod-' . bin2hex( random_bytes( 4 ) );
+		// Dossier de la sauvegarde dans le dossier privé : le producteur n'écrit que là.
+		$this->dossier  = $this->preparer_dossier_de_travail() . '/job-' . self::BACKUP;
 		mkdir( $this->dossier );
 		$this->secrete  = random_bytes( 32 );
 		$this->publique = ( new Sodium() )->x25519_base( $this->secrete );
-		Functions\when( 'wp_delete_file' )->alias( static function ( string $f ): void {
-			if ( is_file( $f ) ) {
-				unlink( $f );
-			}
-		} );
 	}
 
 	protected function tearDown(): void {
-		foreach ( (array) glob( $this->dossier . '/*' ) as $f ) {
-			unlink( (string) $f );
-		}
-		rmdir( $this->dossier );
+		$this->retirer_dossier_de_travail();
 		parent::tearDown();
 	}
 

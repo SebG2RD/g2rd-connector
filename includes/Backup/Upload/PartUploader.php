@@ -282,28 +282,29 @@ final class PartUploader {
 	 * fichier est absent, illisible, trop court, ou atteint à travers un lien.
 	 *
 	 * Chemin réel vérifié avant de lire : pour une sauvegarde ($private_only), le fichier est
-	 * dans le dossier privé, et ni ce dossier ni rien entre lui et le fichier n'est un lien
-	 * (même cassé) ou une jonction ; sinon (banc), le fichier lui-même n'est pas un lien. Une
-	 * partie remplacée par un lien vers wp-config.php, par exemple, n'est jamais envoyée.
+	 * ouvert par WorkDir::open_private() (dans le dossier privé, ni lien, ni jonction, ni lien
+	 * physique, contrôlé au moment même de l'ouverture) ; sinon (banc), le fichier lui-même n'est
+	 * pas un lien. Une partie remplacée par un lien vers wp-config.php, par exemple, n'est jamais
+	 * envoyée. La taille est celle du fichier ouvert (fstat()).
 	 */
 	private static function read_part( string $file, int $offset, int $length, bool $private_only ): ?string {
 		if ( '' === $file || str_contains( $file, "\0" ) ) {
 			return null;
 		}
-		if ( $private_only ? ! WorkDir::within_private( $file ) : WorkDir::link_between( dirname( $file ), $file ) ) {
+		if ( $private_only ) {
+			$handle = WorkDir::open_private( $file, 'rb' );
+		} else {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- lecture bornée d'une partie (banc) ; WP_Filesystem n'a pas d'API de lecture par décalage.
+			$handle = WorkDir::link_between( dirname( $file ), $file ) || ! is_file( $file ) || ! is_readable( $file ) ? null : fopen( $file, 'rb' );
+		}
+		if ( null === $handle || false === $handle ) {
 			return null;
 		}
-		if ( ! is_file( $file ) || ! is_readable( $file ) ) {
-			return null;
-		}
-		$size = filesize( $file );
-		if ( false === $size || $offset > $size - $length ) {
-			return null;
-		}
-
-		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- lecture bornée d'une partie ; WP_Filesystem n'a pas d'API de lecture par décalage.
-		$handle = fopen( $file, 'rb' );
-		if ( false === $handle ) {
+		$stat = fstat( $handle );
+		$size = is_array( $stat ) ? $stat['size'] : null;
+		if ( null === $size || $offset > $size - $length ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- partie trop courte : fermée sans rien lire.
+			fclose( $handle );
 			return null;
 		}
 
