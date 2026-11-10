@@ -761,6 +761,28 @@ final class BackupJobTest extends BackupTestCase {
 	}
 
 	/**
+	 * L'index signé ne se relit plus (retiré entre deux tranches, après sa signature) : jamais un
+	 * index vide rendu à la plateforme ; la sauvegarde s'arrête en échec et le dit.
+	 */
+	public function test_index_illisible_n_est_jamais_rendu_vide(): void {
+		$job     = $this->job();
+		$rapport = $job->start( self::depart( self::B1 ) );
+		for ( $tour = 0; BackupState::FINALIZE !== $rapport['phase'] && $tour < 20; $tour++ ) {
+			$rapport = $job->step( [ 'backup_id' => self::B1, 'completed' => array_column( $rapport['pending'], 'segment' ) ] );
+		}
+		self::assertSame( BackupState::FINALIZE, $rapport['phase'] );
+		unlink( $this->dossier( self::B1 ) . '/index.bin' );
+
+		try {
+			$job->step( [ 'backup_id' => self::B1 ] );
+			self::fail( 'Refus attendu : index illisible.' );
+		} catch ( BackupRefused $refus ) {
+			self::assert_arretee_en_cours( $refus, BackupRefused::WORK_DIR_UNAVAILABLE );
+		}
+		self::assert_close_en_echec( 'backup_work_dir_unavailable' );
+	}
+
+	/**
 	 * Course à la signature de l'index : `index.bin` et `index.sig` sont posés comme liens vers
 	 * wp-config.php après le contrôle du début de la tranche qui signe. Chacun est écrit dans un
 	 * fichier neuf mis à sa place par rename(), qui remplace le lien sans le suivre : wp-config.php

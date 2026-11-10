@@ -357,7 +357,13 @@ final class BackupJob {
 			if ( true === ( $payload['finished'] ?? false ) ) {
 				return $this->finish( $raw, $state, $job, $now );
 			}
-			$index = self::index_chunk( $job, is_int( $payload['index_offset'] ?? null ) ? $payload['index_offset'] : 0 );
+			try {
+				$index = self::index_chunk( $job, is_int( $payload['index_offset'] ?? null ) ? $payload['index_offset'] : 0 );
+			} catch ( BackupRefused $refusal ) {
+				// Index illisible : jamais rendu vide ; sauvegarde close en échec (statut vrai).
+				$this->close( $raw, $state, 'failed', $refusal->reason_code(), $now );
+				throw $refusal;
+			}
 		}
 
 		$state['slice'] = null;
@@ -1145,13 +1151,19 @@ final class BackupJob {
 	}
 
 	/**
+	 * Morceau de l'index signé rendu à la plateforme. Index et signature relus par
+	 * WorkDir::read_private(), jamais à travers un lien ; illisibles : refus, jamais un index vide.
+	 *
 	 * @return array{bytes: int, sha256: string, signature: string, offset: int, chunk: string}
+	 * @throws BackupRefused WORK_DIR_UNAVAILABLE si l'index ou sa signature ne se relit pas.
 	 */
 	private static function index_chunk( string $job, int $offset ): array {
-		// Index et signature relus par WorkDir::read_private(), jamais à travers un lien.
-		$index     = (string) WorkDir::read_private( $job . '/index.bin' );
-		$signature = (string) WorkDir::read_private( $job . '/index.sig' );
-		$offset    = max( 0, min( $offset, strlen( $index ) ) );
+		$index     = WorkDir::read_private( $job . '/index.bin' );
+		$signature = WorkDir::read_private( $job . '/index.sig' );
+		if ( null === $index || null === $signature ) {
+			throw WorkDir::unavailable( $job . '/' . ( null === $index ? 'index.bin' : 'index.sig' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+		}
+		$offset = max( 0, min( $offset, strlen( $index ) ) );
 
 		return [
 			'bytes'     => strlen( $index ),
