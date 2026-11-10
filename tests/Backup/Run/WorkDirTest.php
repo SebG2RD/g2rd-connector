@@ -565,9 +565,9 @@ final class WorkDirTest extends TestCase {
 
 	/**
 	 * Modes de open_private() sur un vrai fichier du module : `ab` crée puis ajoute, `xb` refuse un
-	 * fichier déjà là, `cb` vide après contrôle, `rb` et `r+b` refusent un fichier absent ; un
-	 * chemin hors du dossier privé n'est jamais ouvert ; un mode inconnu est une erreur de
-	 * programmation.
+	 * fichier déjà là, `rb` lit, `rb` et `r+b` refusent un fichier absent ; un chemin hors du
+	 * dossier privé n'est jamais ouvert ; un mode inconnu (`cb` compris, retiré : aucun usage) est
+	 * une erreur de programmation.
 	 */
 	public function test_open_private_ouvre_un_fichier_du_module_selon_son_mode(): void {
 		$job     = (string) WorkDir::job( str_repeat( 'f', 32 ) );
@@ -580,17 +580,38 @@ final class WorkDirTest extends TestCase {
 		}
 		self::assertSame( 'undeux', file_get_contents( $fichier ) );
 		self::assertNull( WorkDir::open_private( $fichier, 'xb' ), 'fichier neuf : refusé s\'il existe' );
-		$h = WorkDir::open_private( $fichier, 'cb' );
-		self::assertIsResource( $h );
-		fwrite( $h, 'trois' );
-		fclose( $h );
-		self::assertSame( 'trois', WorkDir::read_private( $fichier ) );
+		self::assertSame( 'undeux', WorkDir::read_private( $fichier ) );
 		self::assertNull( WorkDir::open_private( $job . '/index.bin', 'rb' ), 'absent : rien à lire' );
 		self::assertNull( WorkDir::open_private( $job . '/index.bin', 'r+b' ) );
 		self::assertNull( WorkDir::open_private( $this->dossier . '/dehors.jsonl', 'ab' ), 'hors du dossier privé' );
 		self::assertFileDoesNotExist( $this->dossier . '/dehors.jsonl' );
-		$this->expectException( \InvalidArgumentException::class );
-		WorkDir::open_private( $fichier, 'wb' );
+		foreach ( [ 'wb', 'cb' ] as $mode ) {
+			try {
+				WorkDir::open_private( $fichier, $mode );
+				self::fail( $mode . ' : erreur de programmation attendue' );
+			} catch ( \InvalidArgumentException ) {
+				self::assertSame( 'undeux', file_get_contents( $fichier ), $mode . ' : rien vidé' );
+			}
+		}
+	}
+
+	/**
+	 * `ab` sur un fichier existant est un vrai ajout (O_APPEND) : deux descripteurs ouverts l'un
+	 * après l'autre écrivent tous deux à la fin, jamais l'un par-dessus l'autre.
+	 */
+	public function test_open_private_ajoute_toujours_a_la_fin(): void {
+		$job     = (string) WorkDir::job( str_repeat( '1', 32 ) );
+		$fichier = $job . '/segments.jsonl';
+		$premier = WorkDir::open_private( $fichier, 'ab' );
+		self::assertIsResource( $premier );
+		fwrite( $premier, 'debut' );
+		$second = WorkDir::open_private( $fichier, 'ab' );
+		self::assertIsResource( $second );
+		fwrite( $premier, 'A' );
+		fwrite( $second, 'B' );
+		fclose( $premier );
+		fclose( $second );
+		self::assertSame( 'debutAB', file_get_contents( $fichier ) );
 	}
 
 	/**
@@ -608,7 +629,7 @@ final class WorkDirTest extends TestCase {
 		}
 		self::assertNull( WorkDir::job( $id ) );
 		self::assertTrue( WorkDir::blocked_by_link( $id ) );
-		foreach ( [ 'xb', 'ab', 'cb', 'r+b', 'rb' ] as $mode ) {
+		foreach ( [ 'xb', 'ab', 'r+b', 'rb' ] as $mode ) {
 			self::assertNull( WorkDir::open_private( $lien, $mode ), $mode );
 		}
 		self::assertSame( "<?php // réglages\n", file_get_contents( $cible ) );

@@ -39,8 +39,8 @@ final class WorkDir {
 		'segments' => 'segments.jsonl',
 	];
 
-	/** Modes de open_private() : fichier neuf, ajout, réécriture, fichier existant à modifier, lecture. */
-	private const OPEN_MODES = [ 'xb', 'ab', 'cb', 'r+b', 'rb' ];
+	/** Modes de open_private() : fichier neuf, ajout, fichier existant à modifier, lecture. */
+	private const OPEN_MODES = [ 'xb', 'ab', 'r+b', 'rb' ];
 
 	/** Bits du type de fichier dans le mode de stat(), et la valeur d'un fichier ordinaire. */
 	private const TYPE_MASK = 0170000;
@@ -214,10 +214,11 @@ final class WorkDir {
 	 * sinon il est fermé sans rien écrire ni lire. C'est ce contrôle après l'ouverture qui protège :
 	 * PHP résout les liens avant d'ouvrir, et suit un lien cassé même en mode `xb`. Limite qui
 	 * reste, inévitable en PHP (ni O_NOFOLLOW ni openat()) : un lien cassé posé entre le lstat() et
-	 * l'ouverture d'un fichier absent fait créer un fichier VIDE à sa cible, aussitôt refermé sans
-	 * rien y écrire ; rien d'autre n'est jamais écrit hors du dossier privé. Modes : `xb` fichier neuf (refusé s'il existe), `ab` ajout à la fin (créé
-	 * au besoin), `cb` réécriture (vidé seulement après ces contrôles), `r+b` fichier existant à
-	 * modifier, `rb` lecture.
+	 * l'ouverture (fichier absent ouvert en `xb`, ou fichier existant ouvert en `ab`, deux modes qui
+	 * créent) fait créer un fichier VIDE à sa cible, aussitôt refermé sans rien y écrire ; rien
+	 * d'autre n'est jamais écrit hors du dossier privé. Modes : `xb` fichier neuf (refusé s'il
+	 * existe) ; `ab` ajout à la fin, vrai O_APPEND sur un fichier existant (créé en `xb` s'il est
+	 * absent) ; `r+b` fichier existant à modifier (troncature d'un journal) ; `rb` lecture.
 	 *
 	 * @return resource|null
 	 * @throws \InvalidArgumentException Mode inconnu (erreur de programmation).
@@ -233,7 +234,7 @@ final class WorkDir {
 		if ( false === $before ? in_array( $mode, [ 'r+b', 'rb' ], true ) : ( 'xb' === $mode || ! self::plain_file( $before ) ) ) {
 			return null;
 		}
-		$handle = @fopen( $path, false === $before ? 'xb' : ( 'rb' === $mode ? 'rb' : 'r+b' ) ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- fichier du module dans le dossier privé, contrôlé avant et après l'ouverture ; échec rendu par la valeur de retour.
+		$handle = @fopen( $path, false === $before ? 'xb' : $mode ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- fichier du module dans le dossier privé, contrôlé avant et après l'ouverture ; échec rendu par la valeur de retour.
 		if ( false === $handle ) {
 			return null;
 		}
@@ -248,12 +249,6 @@ final class WorkDir {
 		if ( $same && false !== $before ) {
 			// Le fichier ouvert est celui qui a été contrôlé avant l'ouverture, pas un autre mis à sa place.
 			$same = self::same_file( $before, $after );
-		}
-		if ( $same && 'cb' === $mode ) {
-			$same = ftruncate( $handle, 0 ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- réécriture : vidé après les contrôles, jamais par l'ouverture.
-		}
-		if ( $same && 'ab' === $mode ) {
-			$same = 0 === fseek( $handle, 0, SEEK_END ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- ajout à la fin du fichier ouvert sans création.
 		}
 		if ( ! $same ) {
 			fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- fermé sans rien écrire.
