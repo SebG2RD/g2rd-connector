@@ -175,6 +175,13 @@ final class IncrementalBaseline {
 				WorkDir::remove_private_file( (string) $old ); // Un lien n'est jamais retiré, sa cible non plus.
 			}
 		}
+		// Fichier neuf de description laissé par une tranche tuée avant son rename() : au format du
+		// module seulement, et jamais un lien (WorkDir::remove_private_file()).
+		foreach ( (array) glob( $this->dir . '/' . self::CURRENT . '.*.tmp' ) as $left ) {
+			if ( 1 === preg_match( '/\Acurrent\.json\.[0-9a-f]{16}\.tmp\z/', basename( (string) $left ) ) ) {
+				WorkDir::remove_private_file( (string) $left );
+			}
+		}
 
 		return $written;
 	}

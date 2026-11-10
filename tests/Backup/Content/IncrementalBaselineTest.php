@@ -176,6 +176,30 @@ final class IncrementalBaselineTest extends TestCase {
 		self::assertNull( $base->usable_for( self::COMPLETE, self::T0 + 86400 )['reason'], 'incrémentale de nouveau possible' );
 	}
 
+	/**
+	 * Fichier neuf de description laissé par une tranche tuée entre sa création et son rename()
+	 * (`current.json.<16 hex>.tmp`) : retiré par la promotion suivante. Un nom qui n'est pas au
+	 * format du module reste, et un lien à ce format aussi (jamais retiré, sa cible non plus).
+	 */
+	public function test_un_fichier_neuf_de_description_laisse_par_une_coupure_est_retire(): void {
+		file_put_contents( $this->dossier . '/current.json.0123456789abcdef.tmp', '{' );
+		file_put_contents( $this->dossier . '/current.json.autre.tmp', 'étranger' );
+		$cible = $this->dehors . '/garde.json';
+		file_put_contents( $cible, 'à garder' );
+		$lien = $this->dossier . '/current.json.fedcba9876543210.tmp';
+		try {
+			self::lien_vers_un_fichier_ou_ignorer( $cible, $lien );
+			$this->promouvoir();
+			clearstatcache( true );
+			self::assertFileDoesNotExist( $this->dossier . '/current.json.0123456789abcdef.tmp', 'fichier neuf laissé : retiré' );
+			self::assertFileExists( $this->dossier . '/current.json.autre.tmp', 'nom étranger : gardé' );
+			self::assertTrue( self::est_un_lien( $lien ), 'lien : gardé' );
+			self::assertSame( 'à garder', file_get_contents( $cible ) );
+		} finally {
+			self::retirer_lien( $lien );
+		}
+	}
+
 	/** Un ancien état local qui est un lien n'est pas retiré par la promotion ; sa cible non plus. */
 	public function test_un_ancien_etat_local_qui_est_un_lien_reste_avec_sa_cible(): void {
 		$cible = $this->dehors . '/ancien.jsonl';
