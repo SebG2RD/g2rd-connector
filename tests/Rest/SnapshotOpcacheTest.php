@@ -180,6 +180,40 @@ final class SnapshotOpcacheTest extends TestCase {
 		self::assertCount( 1, $this->writes );
 	}
 
+	public function test_api_restreinte_aucune_invalidation_ni_empreinte(): void {
+		SnapshotController::sync_opcache(
+			false,
+			function ( string $file ): bool {
+				$this->invalidated[] = $file;
+				return true;
+			},
+			$this->files,
+			api_allowed: false
+		);
+
+		self::assertSame( [], $this->invalidated, "opcache_invalidate() émettrait un avertissement : on ne l'appelle pas." );
+		self::assertSame( [], $this->writes, "Rien n'a été invalidé : aucune empreinte." );
+	}
+
+	public function test_restrict_api_vide_autorise_l_api(): void {
+		self::assertTrue( SnapshotController::opcache_api_allowed( '', '/var/www/index.php' ) );
+		self::assertTrue( SnapshotController::opcache_api_allowed( '', null ) );
+	}
+
+	public function test_restrict_api_le_script_sous_le_chemin_autorise_l_api(): void {
+		self::assertTrue( SnapshotController::opcache_api_allowed( '/var/www/admin', '/var/www/admin/index.php' ) );
+	}
+
+	public function test_restrict_api_le_script_hors_du_chemin_interdit_l_api(): void {
+		self::assertFalse( SnapshotController::opcache_api_allowed( '/var/www/admin', '/var/www/site/index.php' ) );
+		self::assertFalse( SnapshotController::opcache_api_allowed( '/var/www/admin', '/var/www' ), 'Chemin plus court que la restriction.' );
+	}
+
+	public function test_restrict_api_script_inconnu_interdit_l_api(): void {
+		self::assertFalse( SnapshotController::opcache_api_allowed( '/var/www/admin', null ) );
+		self::assertFalse( SnapshotController::opcache_api_allowed( '/var/www/admin', '' ) );
+	}
+
 	public function test_l_empreinte_ne_depend_pas_de_l_ordre_des_fichiers(): void {
 		$this->sync( false );
 		$this->invalidated = [];

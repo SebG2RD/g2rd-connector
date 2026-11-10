@@ -136,8 +136,9 @@ final class SnapshotController {
 	 * @param bool|null                     $validate_timestamps Valeur de `opcache.validate_timestamps`.
 	 * @param (\Closure(string): bool)|null $invalidate          Invalidation d'un fichier ; opcache_invalidate() sinon.
 	 * @param list<string>|null             $files               Fichiers du connecteur ; opcache_files() sinon.
+	 * @param bool|null                     $api_allowed         L'API d'OPcache est-elle permise à ce script ; opcache_api_allowed() sinon.
 	 */
-	public static function sync_opcache( ?bool $validate_timestamps = null, ?\Closure $invalidate = null, ?array $files = null ): void {
+	public static function sync_opcache( ?bool $validate_timestamps = null, ?\Closure $invalidate = null, ?array $files = null, ?bool $api_allowed = null ): void {
 		if ( null === $invalidate ) {
 			if ( ! function_exists( 'opcache_invalidate' ) ) {
 				return;
@@ -147,6 +148,13 @@ final class SnapshotController {
 
 		$validate_timestamps ??= filter_var( ini_get( 'opcache.validate_timestamps' ), FILTER_VALIDATE_BOOLEAN );
 		if ( $validate_timestamps ) {
+			return;
+		}
+
+		// `opcache.restrict_api` : hors du chemin permis, opcache_invalidate() émet un
+		// avertissement et n'invalide rien. On ne l'appelle pas, et aucune empreinte n'est gardée.
+		$api_allowed ??= self::opcache_api_allowed();
+		if ( ! $api_allowed ) {
 			return;
 		}
 
@@ -165,6 +173,31 @@ final class SnapshotController {
 		if ( $all_invalidated ) {
 			update_option( self::OPCACHE_OPTION, $fingerprint, false );
 		}
+	}
+
+	/**
+	 * Le script en cours a-t-il le droit d'appeler l'API d'OPcache ?
+	 *
+	 * Avec `opcache.restrict_api` (un chemin), PHP n'accepte opcache_invalidate() que depuis
+	 * un script dont le chemin commence par cette valeur (comparaison d'octets, sur le script
+	 * principal de la requête) ; sinon il émet un avertissement. Directive vide : permis.
+	 * Script inconnu alors qu'une restriction existe : refusé, comme PHP.
+	 *
+	 * @param string|null $restrict_api Valeur de la directive ; lue dans la configuration sinon.
+	 * @param string|null $script       Script principal de la requête ; lu dans $_SERVER sinon.
+	 */
+	public static function opcache_api_allowed( ?string $restrict_api = null, ?string $script = null ): bool {
+		$restrict_api ??= (string) ini_get( 'opcache.restrict_api' );
+		if ( '' === $restrict_api ) {
+			return true;
+		}
+
+		if ( null === $script ) {
+			// phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- chemin comparé à une valeur de configuration, jamais affiché ni utilisé.
+			$script = (string) ( $_SERVER['SCRIPT_FILENAME'] ?? $_SERVER['PATH_TRANSLATED'] ?? '' );
+		}
+
+		return '' !== $script && str_starts_with( $script, $restrict_api );
 	}
 
 	/**
