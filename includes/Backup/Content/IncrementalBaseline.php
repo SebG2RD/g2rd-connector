@@ -67,10 +67,11 @@ final class IncrementalBaseline {
 	/**
 	 * L'état local peut-il servir à une incrémentale de parent $parent_id ?
 	 *
-	 * @return array{file: string|null, reason: string|null, bytes: int|null, created_at: int|null} `reason` :
-	 *         baseline_missing, baseline_other_backup, baseline_too_old, baseline_unreadable ;
-	 *         `bytes` : taille de l'état local utilisable, gardée par la sauvegarde pour le revérifier
-	 *         à chaque tranche ; `created_at` : départ de la complète parente (same()).
+	 * @return array{file: string|null, reason: string|null, bytes: int|null, mtime: int|null, ino: int|null, created_at: int|null}
+	 *         `reason` : baseline_missing, baseline_other_backup, baseline_too_old, baseline_unreadable ;
+	 *         `bytes`, `mtime`, `ino` : taille, date et inode de l'état local utilisable (fstat() du
+	 *         fichier lu), gardés par la sauvegarde pour le revérifier à chaque tranche ;
+	 *         `created_at` : départ de la complète parente (same()).
 	 */
 	public function usable_for( string $parent_id, int $now ): array {
 		// Description qui est un lien (lien physique compris), ou rangée derrière un lien : jamais
@@ -98,6 +99,8 @@ final class IncrementalBaseline {
 			'file'       => $file,
 			'reason'     => null,
 			'bytes'      => $read['bytes'],
+			'mtime'      => $read['mtime'],
+			'ino'        => $read['ino'],
 			'created_at' => $current['created_at'],
 		];
 	}
@@ -212,18 +215,25 @@ final class IncrementalBaseline {
 	}
 
 	/**
-	 * Empreinte SHA-256, nombre de lignes et taille d'un fichier de l'état local, lu en une passe
-	 * par Run\WorkDir::open_private() ; empreinte null s'il est absent, illisible ou un lien.
+	 * Empreinte SHA-256, nombre de lignes, taille, date et inode (fstat() du fichier ouvert) d'un
+	 * fichier de l'état local, lu en une passe par Run\WorkDir::open_private() ; empreinte null s'il
+	 * est absent, illisible ou un lien.
 	 *
-	 * @return array{sha256: string|null, lines: int, bytes: int}
+	 * @return array{sha256: string|null, lines: int, bytes: int, mtime: int, ino: int}
 	 */
 	private static function sha256_and_lines( string $file ): array {
 		$handle = WorkDir::open_private( $file, 'rb' );
-		if ( null === $handle ) {
+		$stat   = null === $handle ? false : fstat( $handle );
+		if ( null === $handle || false === $stat ) {
+			if ( null !== $handle ) {
+				fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- fichier sans fstat() : fermé sans être lu.
+			}
 			return [
 				'sha256' => null,
 				'lines'  => 0,
 				'bytes'  => 0,
+				'mtime'  => 0,
+				'ino'    => 0,
 			];
 		}
 		$context = hash_init( 'sha256' );
@@ -240,17 +250,21 @@ final class IncrementalBaseline {
 			'sha256' => hash_final( $context ),
 			'lines'  => $lines,
 			'bytes'  => $bytes,
+			'mtime'  => (int) $stat['mtime'],
+			'ino'    => (int) $stat['ino'],
 		];
 	}
 
 	/**
-	 * @return array{file: null, reason: string, bytes: null, created_at: null}
+	 * @return array{file: null, reason: string, bytes: null, mtime: null, ino: null, created_at: null}
 	 */
 	private static function refused( string $reason ): array {
 		return [
 			'file'       => null,
 			'reason'     => $reason,
 			'bytes'      => null,
+			'mtime'      => null,
+			'ino'        => null,
 			'created_at' => null,
 		];
 	}

@@ -1184,6 +1184,36 @@ final class BackupJobTest extends BackupTestCase {
 		$this->assert_incrementale_arretee_sans_son_etat_local( $job );
 	}
 
+	/**
+	 * Même arrêt quand l'état local a été réécrit à l'identique de taille : date changée (touché),
+	 * ou fichier remplacé par une copie de même taille et même date (autre inode).
+	 */
+	public function test_etat_local_reecrit_a_taille_egale_en_cours_d_incrementale_l_arrete(): void {
+		foreach ( [ 'date changée', 'autre fichier, même date' ] as $cas ) {
+			$this->etat_local_de_l_arbre();
+			$job = $this->job();
+			$id  = 'date changée' === $cas ? self::B2 : str_repeat( '3', 32 );
+			$job->start( self::depart( $id, 'files', 'incremental', self::B1 ) );
+			$etat_local = WorkDir::baseline_dir() . '/' . self::B1 . '.jsonl';
+			clearstatcache();
+			$date = (int) filemtime( $etat_local );
+			if ( 'date changée' === $cas ) {
+				touch( $etat_local, $date - 100 );
+			} else {
+				copy( $etat_local, $etat_local . '.copie' );
+				touch( $etat_local . '.copie', $date );
+				rename( $etat_local . '.copie', $etat_local );
+			}
+			try {
+				$job->step( [ 'backup_id' => $id ] );
+				self::fail( $cas . ' : refus attendu' );
+			} catch ( BackupRefused $refus ) {
+				self::assert_arretee_en_cours( $refus, BackupRefused::WORK_DIR_UNAVAILABLE );
+			}
+			self::assert_close_en_echec( 'backup_work_dir_unavailable' );
+		}
+	}
+
 	/** Même arrêt quand le décalage de reprise gardé dans l'état dépasse la fin de l'état local. */
 	public function test_decalage_de_l_etat_local_au_dela_de_sa_fin_arrete_l_incrementale(): void {
 		$this->etat_local_de_l_arbre();
@@ -1598,6 +1628,8 @@ final class BackupJobTest extends BackupTestCase {
 				'current'         => null,
 				'baseline_offset'   => null,
 				'baseline_size'     => null,
+				'baseline_mtime'    => null,
+				'baseline_ino'      => null,
 				'parent_created_at' => null,
 				'done'              => false,
 			],

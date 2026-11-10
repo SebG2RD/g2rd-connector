@@ -228,6 +228,8 @@ final class BackupJob {
 
 		$downgraded        = null;
 		$baseline_size     = null;
+		$baseline_mtime    = null;
+		$baseline_ino      = null;
 		$parent_created_at = null;
 		if ( 'incremental' === $type ) {
 			$usable = ( new IncrementalBaseline( WorkDir::baseline_dir() ) )->usable_for( (string) $parent, $now );
@@ -236,9 +238,12 @@ final class BackupJob {
 				$type       = 'full';
 				$parent     = null;
 			} else {
-				// Taille de l'état local vérifié au départ, revérifiée à chaque tranche (baseline_reader()) ;
-				// départ de la complète parente, pour dire « inchangé » (IncrementalBaseline::same()).
+				// Taille, date et inode de l'état local vérifié au départ, revérifiés à chaque tranche
+				// (baseline_reader()) ; départ de la complète parente, pour dire « inchangé »
+				// (IncrementalBaseline::same()).
 				$baseline_size     = $usable['bytes'];
+				$baseline_mtime    = $usable['mtime'];
+				$baseline_ino      = $usable['ino'];
 				$parent_created_at = $usable['created_at'];
 			}
 		}
@@ -267,6 +272,8 @@ final class BackupJob {
 				'current'         => null,
 				'baseline_offset' => 'incremental' === $type ? 0 : null,
 				'baseline_size'     => $baseline_size,
+				'baseline_mtime'    => $baseline_mtime,
+				'baseline_ino'      => $baseline_ino,
 				'parent_created_at' => $parent_created_at,
 				'done'              => false,
 			],
@@ -1353,10 +1360,12 @@ final class BackupJob {
 
 	/**
 	 * Lecteur de l'état local de la complète parente, rouvert à chaque segment d'une incrémentale :
-	 * par WorkDir::open_private() (jamais à travers un lien), de la taille vérifiée au départ, puis
-	 * placé au décalage de reprise gardé dans l'état. Disparu, tronqué, réécrit, ou décalage au-delà
-	 * de sa fin : la sauvegarde s'arrête. Une incrémentale sans son état local oublierait les
-	 * suppressions (une restauration ressusciterait un fichier supprimé) : jamais dite réussie.
+	 * par WorkDir::open_private() (jamais à travers un lien), le même fichier que celui vérifié au
+	 * départ (taille, date et inode lus par fstat(), fiables sous Linux comme sous Windows), puis placé
+	 * au décalage de reprise gardé dans l'état. Disparu, changé de taille ou de date, remplacé par un
+	 * autre fichier, ou décalage au-delà de sa fin : la sauvegarde s'arrête. Une incrémentale sans son
+	 * état local oublierait les suppressions (une restauration ressusciterait un fichier supprimé) :
+	 * jamais dite réussie.
 	 *
 	 * @param array<string, mixed> $files État `files` de la sauvegarde.
 	 * @throws BackupRefused WORK_DIR_UNAVAILABLE (phrase du lien si un lien en est la cause).
@@ -1366,7 +1375,10 @@ final class BackupJob {
 		$stat   = null === $handle ? false : fstat( $handle );
 		$offset = $files['baseline_offset'] ?? null;
 		$size   = $files['baseline_size'] ?? null;
-		if ( null === $handle || false === $stat || ! is_int( $offset ) || ! is_int( $size ) || $stat['size'] !== $size || $offset < 0 || $offset > $size || 0 !== fseek( $handle, $offset ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions -- reprise de l'état local à son décalage.
+		$mtime  = $files['baseline_mtime'] ?? null;
+		$ino    = $files['baseline_ino'] ?? null;
+		$same   = false !== $stat && is_int( $size ) && $size === $stat['size'] && $mtime === $stat['mtime'] && $ino === $stat['ino'];
+		if ( null === $handle || ! $same || ! is_int( $offset ) || $offset < 0 || $offset > $size || 0 !== fseek( $handle, $offset ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions -- reprise de l'état local à son décalage.
 			if ( null !== $handle ) {
 				fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- état local refusé, fermé sans être lu.
 			}
