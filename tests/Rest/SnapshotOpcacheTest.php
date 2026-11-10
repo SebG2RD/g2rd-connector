@@ -327,6 +327,17 @@ final class SnapshotOpcacheTest extends TestCase {
 		self::assertStringNotContainsString( (string) php_uname( 'n' ), $stored );
 	}
 
+	public function test_nom_de_machine_indisponible_aucune_erreur_fatale(): void {
+		// php_uname() et gethostname() absentes (disable_functions) : identité sans nom d'hôte.
+		self::assertSame( '', SnapshotController::opcache_host( has_uname: false, has_gethostname: false ) );
+		self::assertMatchesRegularExpression( '/^s[0-9a-f]{12}$/', SnapshotController::opcache_server_id( '', 'fpm-fcgi' ) );
+	}
+
+	public function test_sans_php_uname_le_nom_vient_de_gethostname(): void {
+		self::assertSame( (string) gethostname(), SnapshotController::opcache_host( has_uname: false, has_gethostname: true ) );
+		self::assertSame( php_uname( 'n' ), SnapshotController::opcache_host( has_uname: true ) );
+	}
+
 	public function test_l_empreinte_ne_depend_pas_de_l_ordre_des_fichiers(): void {
 		$this->sync( false );
 		$this->invalidated = [];

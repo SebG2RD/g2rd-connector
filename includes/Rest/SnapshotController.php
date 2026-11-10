@@ -71,7 +71,13 @@ final class SnapshotController {
 
 		// OPcache : jamais d'invalidation si le serveur revoit lui-même les fichiers modifiés ;
 		// sinon seulement si les fichiers du connecteur ont changé (cf. sync_opcache()).
-		self::sync_opcache();
+		// Une optimisation ne doit jamais casser l'inventaire : toute erreur est ignorée, et
+		// la synchronisation suivante réessaie.
+		try {
+			self::sync_opcache();
+		} catch ( \Throwable $e ) {
+			unset( $e );
+		}
 
 		// Ce que l'inventaire relit, et seulement cela (plus de wp_cache_flush()).
 		self::forget_stale_caches();
@@ -198,11 +204,30 @@ final class SnapshotController {
 	 * du nom de la machine et du SAPI (FPM et CLI n'ont pas le même OPcache). Le nom lui-même
 	 * n'est jamais gardé. Préfixée d'une lettre : une clé toute en chiffres deviendrait un entier.
 	 *
-	 * @param string|null $host Nom de la machine ; php_uname( 'n' ) sinon.
+	 * @param string|null $host Nom de la machine ; opcache_host() sinon.
 	 * @param string|null $sapi SAPI ; PHP_SAPI sinon.
 	 */
 	public static function opcache_server_id( ?string $host = null, ?string $sapi = null ): string {
-		return 's' . substr( sha1( ( $host ?? php_uname( 'n' ) ) . '|' . ( $sapi ?? PHP_SAPI ) ), 0, 12 );
+		return 's' . substr( sha1( ( $host ?? self::opcache_host() ) . '|' . ( $sapi ?? PHP_SAPI ) ), 0, 12 );
+	}
+
+	/**
+	 * Nom de la machine, sans jamais supposer que php_uname() existe : elle est souvent dans
+	 * `disable_functions` sur un hébergement mutualisé (l'appeler serait une erreur fatale, donc
+	 * un 500 à chaque inventaire). Repli sur gethostname(), puis chaîne vide : l'identité reste
+	 * valable, moins précise.
+	 *
+	 * @param bool|null $has_uname       php_uname() est-elle disponible ; testé sinon.
+	 * @param bool|null $has_gethostname gethostname() est-elle disponible ; testé sinon.
+	 */
+	public static function opcache_host( ?bool $has_uname = null, ?bool $has_gethostname = null ): string {
+		if ( $has_uname ?? function_exists( 'php_uname' ) ) {
+			return php_uname( 'n' );
+		}
+		if ( $has_gethostname ?? function_exists( 'gethostname' ) ) {
+			return (string) gethostname();
+		}
+		return '';
 	}
 
 	/**

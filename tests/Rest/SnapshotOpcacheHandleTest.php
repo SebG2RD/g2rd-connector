@@ -27,4 +27,18 @@ final class SnapshotOpcacheHandleTest extends SnapshotTestCase {
 
 		self::assertSame( 1, $calls, 'handle() doit synchroniser l\'OPcache, une seule fois.' );
 	}
+
+	public function test_si_sync_opcache_leve_handle_repond_quand_meme(): void {
+		\Patchwork\redefine(
+			SnapshotController::class . '::sync_opcache',
+			static function (): void {
+				throw new \Error( 'Call to undefined function php_uname()' );
+			}
+		);
+
+		$this->update_transients_checked( 3600 );
+		$data = $this->snapshot();
+
+		self::assertArrayHasKey( 'plugins', $data, 'Une optimisation ne casse jamais l\'inventaire.' );
+	}
 }
