@@ -100,10 +100,10 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 * **Fix: no more PHP warning on every sync when `opcache.restrict_api` forbids the call.** The
   plugin checks beforehand whether the script may use the OPcache API, and invalidates nothing
   otherwise.
-* **Storage: the option `g2rd_connector_opcache_files` is not autoloaded.** It holds one short
-  fingerprint per server (8 at most, a hash of the machine, the SAPI and the PHP version: no
-  machine name is stored), a single row per network on a multisite, and is removed when the
-  plugin is deleted.
+* **Storage: the option `g2rd_connector_opcache_files` is not autoloaded.** It holds one
+  fingerprint of the connector's files per PHP server (8 servers at most), each server identified
+  by a short hash of the machine name, the SAPI and the PHP version: no machine name is stored.
+  It is a single row per network on a multisite, and is removed when the plugin is deleted.
 
 = 1.16.0-rc.2 =
 

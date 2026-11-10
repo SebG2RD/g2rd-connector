@@ -11,7 +11,8 @@
  * seulement pour un transient de mise à jour absent, ou sans réponse de wordpress.org
  * depuis plus de 3 h, ou ne couvrant pas ce qui est installé, santé
  * de la base calculée au plus une fois par jour, OPcache invalidé pour le seul
- * connecteur, et seulement si ses fichiers ont changé sur un serveur qui ne les revoit pas. Les données renvoyées restent celles que WordPress tient pour vraies.
+ * connecteur, et seulement si ses fichiers ont changé sur un serveur qui ne les revoit pas, ou si la
+ * version du disque diffère de celle du code chargé. Les données renvoyées restent celles que WordPress tient pour vraies.
  *
  * @package G2RD\Connector
  */
@@ -71,12 +72,12 @@ final class SnapshotController {
 
 		// OPcache : jamais d'invalidation si le serveur revoit lui-même les fichiers modifiés ;
 		// sinon seulement si les fichiers du connecteur ont changé (cf. sync_opcache()).
-		// Une optimisation ne doit jamais casser l'inventaire : toute erreur est ignorée, et
-		// la synchronisation suivante réessaie.
+		// Une optimisation ne doit jamais casser l'inventaire : l'erreur n'interrompt rien (la
+		// synchronisation suivante réessaie) ; l'action la signale à qui veut la journaliser.
 		try {
 			self::sync_opcache();
 		} catch ( \Throwable $e ) {
-			unset( $e );
+			do_action( 'g2rd_connector_opcache_sync_failed', $e );
 		}
 
 		// Ce que l'inventaire relit, et seulement cela (plus de wp_cache_flush()).
@@ -137,7 +138,8 @@ final class SnapshotController {
 	 * Avec `validate_timestamps=0`, OPcache ne revoit jamais rien : un connecteur mis à jour
 	 * hors de WordPress (WP-CLI, panneau de l'hébergeur, FTP) continuerait d'annoncer
 	 * l'ancienne version. On compare alors l'empreinte des fichiers (chemin relatif, mtime,
-	 * taille) à celle gardée à la dernière invalidation : inchangée, rien ; changée, tous les
+	 * taille) à celle gardée à la dernière invalidation : inchangée, rien ; changée (ou si la
+	 * version du disque diffère de celle du code chargé), tous les
 	 * fichiers sont invalidés ensemble (n'en invalider qu'un mêlerait du code neuf et ancien),
 	 * puis la nouvelle empreinte est gardée (une seule écriture, seulement en cas de
 	 * changement), mais seulement si TOUTES les invalidations ont réussi. Si OPcache en refuse
@@ -239,7 +241,7 @@ final class SnapshotController {
 		}
 
 		$head = file_get_contents( $file, false, null, 0, 8192 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- fichier local du plugin.
-		return is_string( $head ) && 1 === preg_match( '/^[ 	\/*#@]*Version:(.*)$/mi', $head, $m ) ? trim( $m[1] ) : '';
+		return is_string( $head ) && 1 === preg_match( '/^[ \t\/*#@]*Version:(.*)$/mi', $head, $m ) ? trim( $m[1] ) : '';
 	}
 
 	/**

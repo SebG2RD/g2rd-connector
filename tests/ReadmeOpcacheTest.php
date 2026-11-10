@@ -31,8 +31,8 @@ final class ReadmeOpcacheTest extends PHPUnitTestCase {
 			[
 				'`g2rd_connector_opcache_files`',
 				'not autoloaded',
-				'one short fingerprint per server',
-				'no machine name is stored',
+				"one fingerprint of the connector's files per PHP server (8 servers at most)",
+				'identified by a short hash of the machine name, the SAPI and the PHP version: no machine name is stored',
 				'removed when the plugin is deleted',
 				'`opcache.restrict_api`',
 				'PHP warning',

@@ -380,10 +380,12 @@ final class SnapshotOpcacheTest extends TestCase {
 	}
 
 	public function test_l_option_ne_contient_aucun_nom_d_hote(): void {
-		$this->sync( false );
+		$this->sync_on( SnapshotController::opcache_server_id( 'web-12.cluster.interne', 'fpm-fcgi', '8.1.30' ) );
 
-		$stored = json_encode( $this->stored[ SnapshotController::OPCACHE_OPTION ] );
-		self::assertStringNotContainsString( (string) php_uname( 'n' ), $stored );
+		$stored = (string) json_encode( $this->stored[ SnapshotController::OPCACHE_OPTION ] );
+		self::assertNotSame( '', $stored );
+		self::assertStringNotContainsString( 'web-12', $stored );
+		self::assertStringNotContainsString( 'cluster', $stored );
 	}
 
 	public function test_nom_de_machine_indisponible_aucune_erreur_fatale(): void {
@@ -443,6 +445,13 @@ final class SnapshotOpcacheTest extends TestCase {
 		}
 
 		self::assertSame( [], $this->invalidated );
+	}
+
+	public function test_la_classe_de_caracteres_de_l_en_tete_n_utilise_pas_de_tabulation_litterale(): void {
+		$source = (string) file_get_contents( dirname( __DIR__, 2 ) . '/includes/Rest/SnapshotController.php' );
+
+		self::assertStringNotContainsString( "[ 	\/*#@]", $source, 'Tabulation littérale dans la classe de caractères.' );
+		self::assertStringContainsString( '[ \t\/*#@]', $source );
 	}
 
 	public function test_la_version_du_disque_est_lue_dans_l_en_tete_du_fichier(): void {
