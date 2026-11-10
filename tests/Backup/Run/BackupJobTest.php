@@ -771,6 +771,39 @@ final class BackupJobTest extends BackupTestCase {
 	}
 
 	/**
+	 * Envoi des parties d'une sauvegarde, tel que BackupJob le monte hors des tests : une partie du
+	 * dossier privé est lue et envoyée ; un fichier hors de lui n'est jamais lu (le chemin vient de
+	 * la tranche, et une partie remplacée entre-temps par autre chose n'y est jamais cherchée).
+	 */
+	public function test_l_envoi_par_defaut_ne_lit_une_partie_que_dans_le_dossier_prive(): void {
+		$requetes = [];
+		Functions\when( 'wp_get_environment_type' )->justReturn( 'production' );
+		Functions\when( 'wp_parse_url' )->alias( static fn ( string $url, int $component = -1 ) => parse_url( $url, $component ) );
+		Functions\when( 'is_wp_error' )->justReturn( false );
+		Functions\when( 'wp_remote_request' )->alias(
+			static function ( string $url, array $args ) use ( &$requetes ): array {
+				$requetes[] = $args['body'];
+				return [ 'response' => [ 'code' => 200 ] ];
+			}
+		);
+		Functions\when( 'wp_remote_retrieve_response_code' )->justReturn( 200 );
+		Functions\when( 'wp_remote_retrieve_header' )->justReturn( '"etag-1"' );
+		Functions\when( 'wp_remote_retrieve_body' )->justReturn( '' );
+		$envoi = ( new \ReflectionProperty( BackupJob::class, 'upload' ) )->getValue( new BackupJob( new Sodium(), null, null, null, $this->racine, $this->wpdb ) );
+		self::assertInstanceOf( \Closure::class, $envoi );
+		self::assertTrue( WorkDir::ensure() );
+		mkdir( $this->dossier( self::B1 ) );
+		file_put_contents( $this->dossier( self::B1 ) . '/seg-0.seg', 'abcdefghij' );
+		$dehors = dirname( $this->racine ) . '/seg-0.seg';
+		file_put_contents( $dehors, 'secret!!!!' );
+		$url = 'https://stockage.example/g2rd/t/0?X-Amz-Date=20261110T000000Z&X-Amz-Expires=900&X-Amz-Signature=abc';
+
+		self::assertSame( PartUploadResult::UPLOADED, $envoi( $url, 'stockage.example', null, $this->dossier( self::B1 ) . '/seg-0.seg', 0, 10, 30 )->outcome );
+		self::assertSame( PartUploadResult::READ_FAILED, $envoi( $url, 'stockage.example', null, $dehors, 0, 10, 30 )->outcome, 'hors du dossier privé : jamais lu' );
+		self::assertSame( [ 'abcdefghij' ], $requetes, 'seule la partie du dossier privé est envoyée' );
+	}
+
+	/**
 	 * Incrémentale en cours : l'état local de la complète parente est remplacé, entre deux tranches,
 	 * par un lien vers une copie extérieure identique. Il n'est jamais lu à travers le lien : la
 	 * sauvegarde est arrêtée et le dit, close en échec.

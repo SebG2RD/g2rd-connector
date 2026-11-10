@@ -127,7 +127,8 @@ final class BackupJob {
 		$this->ms        = $ms ?? static fn (): int => (int) ( hrtime( true ) / 1000000 );
 		$this->upload    = $upload ?? static function ( string $url, string $host, ?int $port, string $file, int $offset, int $length, int $timeout ): PartUploadResult {
 			$bench = function_exists( 'wp_get_environment_type' ) && 'local' === wp_get_environment_type();
-			return ( new PartUploader( (bool) Settings::get( 'force_ipv4_to_storage' ), $bench ) )->upload( $url, $host, $port, $file, $offset, $length, $timeout );
+			// Partie lue seulement dans le dossier privé, jamais à travers un lien.
+			return ( new PartUploader( (bool) Settings::get( 'force_ipv4_to_storage' ), $bench, true ) )->upload( $url, $host, $port, $file, $offset, $length, $timeout );
 		};
 		$this->root      = rtrim( str_replace( '\\', '/', $root ?? ABSPATH ), '/' );
 		$this->wpdb      = $wpdb ?? $GLOBALS['wpdb'];

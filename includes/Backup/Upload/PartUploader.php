@@ -15,6 +15,8 @@
  *  - `https` seulement (sauf `allow_insecure_http`, réservé au banc local), aucune
  *    redirection suivie, `reject_unsafe_urls` hors banc, réponse lue sur 64 Kio au plus ;
  *  - lecture bornée à la partie demandée (64 Mio au plus) ;
+ *  - jamais à travers un lien : chemin réel vérifié avant de lire ; pour une sauvegarde, la partie
+ *    n'est lue que dans le dossier privé des sauvegardes (WorkDir::within_private()) ;
  *  - l'URL signée n'apparaît dans aucun résultat ni aucune exception.
  *
  * Une URL échue se reconnaît à l'horloge du STOCKAGE (en-tête `Date` d'une réponse
@@ -35,6 +37,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Backup\Upload;
 
+use G2RD\Connector\Backup\Run\WorkDir;
 use G2RD\Connector\Outbound\ManagerIpv4Guard;
 
 final class PartUploader {
@@ -75,10 +78,15 @@ final class PartUploader {
 	 * @param bool $force_ipv4          IPv4 forcée vers l'hôte de stockage, pour la seule durée de la
 	 *                                  requête (réglage reçu de l'appelant, phase 4).
 	 * @param bool $allow_insecure_http Accepte `http` et désactive `reject_unsafe_urls` : banc local seulement.
+	 * @param bool $private_parts_only  Partie lue seulement dans le dossier privé des sauvegardes, atteinte
+	 *                                  sans traverser aucun lien (WorkDir::within_private()) : vrai pour
+	 *                                  les sauvegardes ; faux pour le banc de mesure et les tests de
+	 *                                  l'envoi, où le fichier lui-même n'est jamais un lien non plus.
 	 */
 	public function __construct(
 		private readonly bool $force_ipv4 = false,
 		private readonly bool $allow_insecure_http = false,
+		private readonly bool $private_parts_only = false,
 	) {
 	}
 
@@ -104,7 +112,7 @@ final class PartUploader {
 			return new PartUploadResult( PartUploadResult::BAD_URL, null, 0, null, '', 0 );
 		}
 
-		$bytes = self::read_part( $file, $offset, $length );
+		$bytes = self::read_part( $file, $offset, $length, $this->private_parts_only );
 		if ( null === $bytes ) {
 			return new PartUploadResult( PartUploadResult::READ_FAILED, null, 0, null, '', 0 );
 		}
@@ -271,10 +279,21 @@ final class PartUploader {
 
 	/**
 	 * Les `$length` octets de `$file` à partir de `$offset`, exactement, ou null si le
-	 * fichier est absent, illisible ou trop court.
+	 * fichier est absent, illisible, trop court, ou atteint à travers un lien.
+	 *
+	 * Chemin réel vérifié avant de lire : pour une sauvegarde ($private_only), le fichier est
+	 * dans le dossier privé, et ni ce dossier ni rien entre lui et le fichier n'est un lien
+	 * (même cassé) ou une jonction ; sinon (banc), le fichier lui-même n'est pas un lien. Une
+	 * partie remplacée par un lien vers wp-config.php, par exemple, n'est jamais envoyée.
 	 */
-	private static function read_part( string $file, int $offset, int $length ): ?string {
-		if ( '' === $file || str_contains( $file, "\0" ) || ! is_file( $file ) || ! is_readable( $file ) ) {
+	private static function read_part( string $file, int $offset, int $length, bool $private_only ): ?string {
+		if ( '' === $file || str_contains( $file, "\0" ) ) {
+			return null;
+		}
+		if ( $private_only ? ! WorkDir::within_private( $file ) : WorkDir::link_between( dirname( $file ), $file ) ) {
+			return null;
+		}
+		if ( ! is_file( $file ) || ! is_readable( $file ) ) {
 			return null;
 		}
 		$size = filesize( $file );

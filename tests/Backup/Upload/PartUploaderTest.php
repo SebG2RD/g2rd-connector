@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace G2RD\Connector\Tests\Backup\Upload;
 
 use Brain\Monkey\Functions;
+use G2RD\Connector\Backup\Run\WorkDir;
 use G2RD\Connector\Backup\Upload\PartUploader;
 use G2RD\Connector\Backup\Upload\PartUploadResult;
+use G2RD\Connector\Tests\Backup\Support\LiensSurDisque;
 use G2RD\Connector\Tests\TestCase;
 
 /**
@@ -20,6 +22,8 @@ use G2RD\Connector\Tests\TestCase;
  * vide quand la réponse n'en porte pas.
  */
 final class PartUploaderTest extends TestCase {
+
+	use LiensSurDisque;
 
 	private const HOTE = 'stockage.example';
 
@@ -44,10 +48,14 @@ final class PartUploaderTest extends TestCase {
 	/** @var list<string> Fichiers temporaires créés par le test. */
 	private array $fichiers = [];
 
+	/** @var list<string> Dossiers temporaires créés par le test (dossier de travail des sauvegardes, dossier extérieur). */
+	private array $dossiers = [];
+
 	protected function setUp(): void {
 		parent::setUp();
 		$this->appels   = [];
 		$this->fichiers = [];
+		$this->dossiers = [];
 		$this->reponse  = self::reponse( 200, [ 'etag' => self::ETAG ] );
 
 		Functions\when( 'wp_parse_url' )->alias( static fn ( string $url, int $component = -1 ) => parse_url( $url, $component ) );
@@ -89,6 +97,16 @@ final class PartUploaderTest extends TestCase {
 			if ( is_file( $fichier ) ) {
 				unlink( $fichier );
 			}
+		}
+		// Liens déjà retirés par les tests (retirer_lien) : rien n'est suivi ici.
+		foreach ( $this->dossiers as $dossier ) {
+			if ( ! is_dir( $dossier ) ) {
+				continue;
+			}
+			foreach ( new \RecursiveIteratorIterator( new \RecursiveDirectoryIterator( $dossier, \FilesystemIterator::SKIP_DOTS ), \RecursiveIteratorIterator::CHILD_FIRST ) as $entree ) {
+				$entree->isDir() && ! $entree->isLink() ? rmdir( $entree->getPathname() ) : unlink( $entree->getPathname() );
+			}
+			rmdir( $dossier );
 		}
 		parent::tearDown();
 	}
@@ -291,6 +309,78 @@ final class PartUploaderTest extends TestCase {
 			self::assertFalse( $resultat->is_retryable(), $cas );
 		}
 		self::assertSame( [], $this->appels );
+	}
+
+	// ── Jamais à travers un lien ──────────────────────────────────────────────
+
+	/**
+	 * Envoi d'une sauvegarde (partie lue dans le dossier privé seulement) : une partie du dossier
+	 * privé est envoyée ; un fichier hors de lui, ou atteint par `..`, n'est jamais lu.
+	 */
+	public function test_l_envoi_d_une_sauvegarde_ne_lit_que_dans_le_dossier_prive(): void {
+		$prive = $this->dossier_prive();
+		mkdir( $prive . '/job-' . str_repeat( 'a', 32 ) );
+		$partie = $prive . '/job-' . str_repeat( 'a', 32 ) . '/seg-0.seg';
+		file_put_contents( $partie, 'abcdefghij' );
+		file_put_contents( dirname( $prive ) . '/voisin.seg', 'secret!!!!' );
+		$uploader = new PartUploader( false, false, true );
+
+		self::assertSame( PartUploadResult::UPLOADED, $uploader->upload( self::url(), self::HOTE, null, $partie, 0, 10, 30 )->outcome, 'partie du dossier privé : envoyée' );
+		self::assertSame( PartUploadResult::READ_FAILED, $uploader->upload( self::url(), self::HOTE, null, $this->fichier( 'secret!!!!' ), 0, 10, 30 )->outcome, 'hors du dossier privé' );
+		self::assertSame( PartUploadResult::READ_FAILED, $uploader->upload( self::url(), self::HOTE, null, $prive . '/job-' . str_repeat( 'a', 32 ) . '/../../voisin.seg', 0, 10, 30 )->outcome, 'sorti du dossier privé par « .. »' );
+		self::assertCount( 1, $this->appels, 'seule la partie du dossier privé est envoyée' );
+	}
+
+	/**
+	 * Envoi d'une sauvegarde : le dossier de la sauvegarde, ou le dossier privé lui-même, est un
+	 * lien (symbolique, sinon jonction Windows) vers un dossier extérieur qui contient une partie
+	 * au bon nom. Le chemin réel est vérifié avant de lire : rien n'est lu ni envoyé.
+	 */
+	public function test_l_envoi_d_une_sauvegarde_ne_lit_jamais_a_travers_un_dossier_qui_est_un_lien(): void {
+		$prive            = $this->dossier_prive();
+		$exterieur        = dirname( $prive ) . '-dehors';
+		$this->dossiers[] = $exterieur;
+		mkdir( $exterieur . '/job-' . str_repeat( 'b', 32 ), 0777, true );
+		file_put_contents( $exterieur . '/job-' . str_repeat( 'b', 32 ) . '/seg-0.seg', 'secret!!!!' );
+		$uploader = new PartUploader( false, false, true );
+
+		$lien = $prive . '/job-' . str_repeat( 'b', 32 );
+		try {
+			self::lien_vers_un_dossier_ou_ignorer( $exterieur . '/job-' . str_repeat( 'b', 32 ), $lien );
+			self::assertSame( PartUploadResult::READ_FAILED, $uploader->upload( self::url(), self::HOTE, null, $lien . '/seg-0.seg', 0, 10, 30 )->outcome, 'dossier de la sauvegarde qui est un lien' );
+		} finally {
+			self::retirer_lien( $lien );
+		}
+
+		$vrai = $prive . '-vrai';
+		rename( $prive, $vrai );
+		try {
+			self::lien_vers_un_dossier_ou_ignorer( $exterieur, $prive );
+			self::assertSame( PartUploadResult::READ_FAILED, $uploader->upload( self::url(), self::HOTE, null, $prive . '/job-' . str_repeat( 'b', 32 ) . '/seg-0.seg', 0, 10, 30 )->outcome, 'dossier privé qui est un lien' );
+		} finally {
+			self::retirer_lien( $prive );
+			rename( $vrai, $prive );
+		}
+		self::assertSame( [], $this->appels, 'rien envoyé' );
+	}
+
+	/**
+	 * La partie elle-même est un lien vers un fichier lisible (wp-config.php, par exemple) : jamais
+	 * lue, ni par l'envoi d'une sauvegarde, ni par l'envoi sans dossier imposé (banc).
+	 */
+	public function test_une_partie_qui_est_un_lien_n_est_jamais_lue(): void {
+		$prive = $this->dossier_prive();
+		mkdir( $prive . '/job-' . str_repeat( 'c', 32 ) );
+		$cible = $this->fichier( 'secret!!!!' );
+		$lien  = $prive . '/job-' . str_repeat( 'c', 32 ) . '/seg-0.seg';
+		self::lien_vers_un_fichier_ou_ignorer( $cible, $lien );
+		try {
+			self::assertSame( PartUploadResult::READ_FAILED, ( new PartUploader( false, false, true ) )->upload( self::url(), self::HOTE, null, $lien, 0, 10, 30 )->outcome, 'envoi d\'une sauvegarde' );
+			self::assertSame( PartUploadResult::READ_FAILED, ( new PartUploader() )->upload( self::url(), self::HOTE, null, $lien, 0, 10, 30 )->outcome, 'envoi sans dossier imposé' );
+		} finally {
+			unlink( $lien );
+		}
+		self::assertSame( [], $this->appels, 'rien envoyé' );
 	}
 
 	public function test_taille_et_delai_hors_bornes_sont_des_erreurs_de_programmation(): void {
@@ -605,6 +695,21 @@ final class PartUploaderTest extends TestCase {
 	private static function erreur_s3( string $code ): string {
 		return '<?xml version="1.0" encoding="UTF-8"?>' . "\n"
 			. '<Error><Code>' . $code . '</Code><Message>Message du stockage</Message><RequestId>4442587FB7D0A2F9</RequestId></Error>';
+	}
+
+	/**
+	 * Dossier de travail des sauvegardes dans un dossier temporaire (filtre g2rd_connector_backup_dir),
+	 * protections comprises ; rend le dossier privé.
+	 */
+	private function dossier_prive(): string {
+		$racine           = str_replace( '\\', '/', sys_get_temp_dir() ) . '/g2rd-envoi-' . bin2hex( random_bytes( 4 ) );
+		$this->dossiers[] = $racine;
+		Functions\when( 'apply_filters' )->alias( static fn ( string $nom, $valeur ) => 'g2rd_connector_backup_dir' === $nom ? $racine : $valeur );
+		Functions\when( 'wp_salt' )->justReturn( 'sel-de-test' );
+		Functions\when( 'wp_mkdir_p' )->alias( static fn ( string $d ): bool => is_dir( $d ) || mkdir( $d, 0777, true ) );
+		self::assertTrue( WorkDir::ensure() );
+
+		return WorkDir::private_dir();
 	}
 
 	private function fichier( string $contenu ): string {
