@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Tests\Backup\Commands;
 
+use Brain\Monkey\Functions;
 use G2RD\Connector\Backup\Commands\BackupRefused;
+use G2RD\Connector\Backup\Run\WorkDir;
 use G2RD\Connector\Tests\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 
@@ -106,7 +108,9 @@ final class BackupRefusedTest extends TestCase {
 			$message = $refus->getMessage();
 			self::assertSame( 'backup_work_dir_unavailable', $refus->outcome()['error_code'], $cas . ' : code stable inchangé' );
 			self::assertArrayNotHasKey( 'retry_after', $refus->outcome(), $cas );
-			self::assertStringContainsString( 'un raccourci vers un autre emplacement (lien symbolique) a été trouvé dans le dossier de travail des sauvegardes', $message, $cas . ' : dit ce qui se passe' );
+			self::assertStringContainsString( 'un raccourci vers un autre fichier ou dossier (un lien) a été trouvé dans le dossier de travail des sauvegardes (' . WorkDir::display_name() . ')', $message, $cas . ' : dit ce qui se passe, et où' );
+			self::assertStringContainsString( 'si personne ne l’a créé volontairement, faites vérifier la sécurité du site', $message, $cas . ' : cause qui n’est pas anodine' );
+			self::assertStringContainsString( 'faire retirer ce raccourci du dossier ' . WorkDir::display_name() . ' ', $message, $cas );
 			self::assertStringContainsString( 'Tant que ce raccourci reste en place, la sauvegarde sera refusée de la même façon à chaque nouvelle tentative.', $message, $cas . ' : refus répété annoncé' );
 			self::assertStringContainsString( ' Cause probable : ', $message, $cas );
 			self::assertStringContainsString( ' Action : faire retirer ce raccourci', $message, $cas );
@@ -123,6 +127,20 @@ final class BackupRefusedTest extends TestCase {
 		self::assertSame( $en_cours->getMessage(), $en_cours->in_progress()->getMessage(), 'sans effet la seconde fois' );
 		self::assertStringNotContainsString( 'raccourci', ( new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ) )->getMessage(), 'sans lien : phrase d’origine' );
 		self::assertStringNotContainsString( 'raccourci', ( new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ) )->in_progress()->getMessage(), 'sans lien, en cours : phrase d’origine' );
+	}
+
+	/**
+	 * Le dossier nommé par la phrase du lien est le vrai dossier de travail (filtre
+	 * g2rd_connector_backup_dir), sans jamais de chemin complet du serveur.
+	 */
+	public function test_la_phrase_du_lien_nomme_le_vrai_dossier_sans_chemin_complet(): void {
+		Functions\when( 'apply_filters' )->alias( static fn ( string $nom, $valeur ) => 'g2rd_connector_backup_dir' === $nom ? '/srv/clients/site-42/sauvegardes-g2rd' : $valeur );
+		$message = ( new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE, null, BackupRefused::DETAIL_LINK ) )->getMessage();
+
+		self::assertStringContainsString( '(sauvegardes-g2rd)', $message );
+		self::assertStringNotContainsString( '/srv', $message );
+		self::assertStringNotContainsString( 'site-42', $message );
+		self::assertStringNotContainsString( 'wp-content/g2rd-backups', $message, 'jamais un dossier écrit en dur' );
 	}
 
 	/** Décision n° 4 : backup_start de l'identifiant d'une sauvegarde déjà terminée, non réessayable. */

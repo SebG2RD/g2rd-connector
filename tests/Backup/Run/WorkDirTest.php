@@ -676,6 +676,21 @@ final class WorkDirTest extends TestCase {
 		}
 	}
 
+	/**
+	 * Nom du dossier de travail montré dans un message : relatif au dossier qui contient wp-content
+	 * (« wp-content/g2rd-backups » sur un site ordinaire), sinon son seul nom ; jamais un chemin
+	 * complet du serveur.
+	 */
+	public function test_le_dossier_de_travail_se_nomme_sans_chemin_complet(): void {
+		$contenu = rtrim( str_replace( '\\', '/', (string) WP_CONTENT_DIR ), '/' );
+		$this->dossier_de_travail( $contenu . '/g2rd-backups' );
+		self::assertSame( basename( $contenu ) . '/g2rd-backups', WorkDir::display_name() );
+		$this->dossier_de_travail( $contenu . '/uploads/sauvegardes' );
+		self::assertSame( basename( $contenu ) . '/uploads/sauvegardes', WorkDir::display_name() );
+		$this->dossier_de_travail( '/srv/clients/site-42/sauvegardes-g2rd' );
+		self::assertSame( 'sauvegardes-g2rd', WorkDir::display_name(), 'hors du site : son seul nom' );
+	}
+
 	// ── Outils ────────────────────────────────────────────────────────────────
 
 	/**

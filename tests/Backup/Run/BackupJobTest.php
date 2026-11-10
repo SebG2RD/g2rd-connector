@@ -425,7 +425,7 @@ final class BackupJobTest extends BackupTestCase {
 	/** Le refus parle du lien et du refus répété ; jamais des droits de wp-content. */
 	private static function assert_refus_pour_un_lien( BackupRefused $refus, string $debut ): void {
 		self::assertSame( BackupRefused::WORK_DIR_UNAVAILABLE, $refus->reason_code() );
-		self::assertStringStartsWith( $debut . 'un raccourci vers un autre emplacement (lien symbolique) a été trouvé', $refus->getMessage() );
+		self::assertStringStartsWith( $debut . 'un raccourci vers un autre fichier ou dossier (un lien) a été trouvé', $refus->getMessage() );
 		self::assertStringContainsString( 'Tant que ce raccourci reste en place, la sauvegarde sera refusée de la même façon à chaque nouvelle tentative.', $refus->getMessage() );
 		self::assertStringNotContainsString( 'droits du dossier wp-content', $refus->getMessage() );
 	}

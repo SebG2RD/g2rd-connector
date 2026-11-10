@@ -659,6 +659,17 @@ final class WorkDir {
 		rmdir( $dir );
 	}
 
+	/**
+	 * Dossier de travail tel qu'un message peut le nommer : relatif au dossier qui contient
+	 * wp-content (« wp-content/g2rd-backups » sur un site ordinaire, ou là où le filtre
+	 * g2rd_connector_backup_dir le place), sinon son seul nom ; jamais un chemin complet du serveur.
+	 */
+	public static function display_name(): string {
+		$relative = self::relative_to( dirname( rtrim( str_replace( '\\', '/', (string) WP_CONTENT_DIR ), '/' ) ) );
+
+		return null === $relative || '' === $relative ? basename( self::path() ) : $relative;
+	}
+
 	/** Chemin du dossier de travail relatif à $root, ou null s'il n'est pas dessous. */
 	public static function relative_to( string $root ): ?string {
 		$root = rtrim( str_replace( '\\', '/', $root ), '/' );

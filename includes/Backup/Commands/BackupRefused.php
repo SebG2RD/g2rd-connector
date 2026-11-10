@@ -13,6 +13,8 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Backup\Commands;
 
+use G2RD\Connector\Backup\Run\WorkDir;
+
 final class BackupRefused extends \RuntimeException {
 
 	public const SLICE_RUNNING = 'backup_slice_running';
@@ -112,10 +114,12 @@ final class BackupRefused extends \RuntimeException {
 	public const DETAIL_IN_PROGRESS = 'in_progress';
 
 	/**
-	 * Détail de WORK_DIR_UNAVAILABLE quand la cause est un lien (symbolique, même cassé, ou jonction
-	 * Windows) dans le dossier de travail ou à la place du dossier privé (Run\WorkDir::blocked_by_link()) :
-	 * le connecteur n'écrit, ne lit et ne retire jamais rien à travers lui, et la sauvegarde reste
-	 * refusée tant qu'il est là. Seule la phrase change, le code reste backup_work_dir_unavailable.
+	 * Détail de WORK_DIR_UNAVAILABLE quand la cause est un lien (symbolique, même cassé, jonction
+	 * Windows, ou lien physique) dans le dossier de travail, à sa place ou à celle du dossier privé
+	 * (Run\WorkDir::blocked_by_link(), unavailable()) : le connecteur n'écrit, ne lit et ne retire
+	 * jamais rien à travers lui, et la sauvegarde reste refusée tant qu'il est là. La phrase nomme le
+	 * vrai dossier de travail, jamais par un chemin complet (Run\WorkDir::display_name()). Seule la
+	 * phrase change, le code reste backup_work_dir_unavailable.
 	 */
 	public const DETAIL_LINK = 'link';
 
@@ -313,8 +317,16 @@ final class BackupRefused extends \RuntimeException {
 				'' === $detail ? '?' : $detail
 			),
 			self::WORK_DIR_UNAVAILABLE => match ( $detail ) {
-				self::DETAIL_LINK_IN_PROGRESS => __( 'La sauvegarde en cours a été arrêtée et ne sera pas terminée : un raccourci vers un autre emplacement (lien symbolique) a été trouvé dans le dossier de travail des sauvegardes (wp-content/g2rd-backups), et le connecteur n’écrit, ne lit et ne supprime jamais rien à travers un tel raccourci. Elle n’est pas comptée comme réussie, et ce qu’elle avait déjà envoyé au stockage ne compte pas comme une sauvegarde. Tant que ce raccourci reste en place, la sauvegarde sera refusée de la même façon à chaque nouvelle tentative. Cause probable : raccourci créé pendant la sauvegarde par une extension, par un outil de l’hébergeur ou lors d’une migration du site. Action : faire retirer ce raccourci du dossier wp-content/g2rd-backups par l’hébergeur ou par le développeur du site (le raccourci seulement, jamais ce vers quoi il mène), puis relancer la sauvegarde depuis la plateforme.', 'g2rd-connector' ),
-				self::DETAIL_LINK => __( 'La sauvegarde n’a pas été lancée : un raccourci vers un autre emplacement (lien symbolique) a été trouvé dans le dossier de travail des sauvegardes (wp-content/g2rd-backups), et le connecteur n’écrit, ne lit et ne supprime jamais rien à travers un tel raccourci. Rien n’a été modifié. Tant que ce raccourci reste en place, la sauvegarde sera refusée de la même façon à chaque nouvelle tentative. Cause probable : raccourci créé par une extension, par un outil de l’hébergeur ou lors d’une migration du site. Action : faire retirer ce raccourci du dossier wp-content/g2rd-backups par l’hébergeur ou par le développeur du site (le raccourci seulement, jamais ce vers quoi il mène), puis relancer la sauvegarde.', 'g2rd-connector' ),
+				self::DETAIL_LINK_IN_PROGRESS => sprintf(
+					/* translators: %1$s: dossier de travail des sauvegardes, relatif au dossier du site (par exemple « wp-content/g2rd-backups »), jamais un chemin complet. */
+					__( 'La sauvegarde en cours a été arrêtée et ne sera pas terminée : un raccourci vers un autre fichier ou dossier (un lien) a été trouvé dans le dossier de travail des sauvegardes (%1$s), et le connecteur n’écrit, ne lit et ne supprime jamais rien à travers un tel raccourci. Elle n’est pas comptée comme réussie, et ce qu’elle avait déjà envoyé au stockage ne compte pas comme une sauvegarde. Tant que ce raccourci reste en place, la sauvegarde sera refusée de la même façon à chaque nouvelle tentative. Cause probable : raccourci créé pendant la sauvegarde par une extension, par un outil de l’hébergeur ou lors d’une migration du site ; si personne ne l’a créé volontairement, faites vérifier la sécurité du site. Action : faire retirer ce raccourci du dossier %1$s par l’hébergeur ou par le développeur du site (le raccourci seulement, jamais ce vers quoi il mène), puis relancer la sauvegarde depuis la plateforme.', 'g2rd-connector' ),
+					self::work_dir_label()
+				),
+				self::DETAIL_LINK => sprintf(
+					/* translators: %1$s: dossier de travail des sauvegardes, relatif au dossier du site (par exemple « wp-content/g2rd-backups »), jamais un chemin complet. */
+					__( 'La sauvegarde n’a pas été lancée : un raccourci vers un autre fichier ou dossier (un lien) a été trouvé dans le dossier de travail des sauvegardes (%1$s), et le connecteur n’écrit, ne lit et ne supprime jamais rien à travers un tel raccourci. Rien n’a été modifié. Tant que ce raccourci reste en place, la sauvegarde sera refusée de la même façon à chaque nouvelle tentative. Cause probable : raccourci créé par une extension, par un outil de l’hébergeur ou lors d’une migration du site ; si personne ne l’a créé volontairement, faites vérifier la sécurité du site. Action : faire retirer ce raccourci du dossier %1$s par l’hébergeur ou par le développeur du site (le raccourci seulement, jamais ce vers quoi il mène), puis relancer la sauvegarde.', 'g2rd-connector' ),
+					self::work_dir_label()
+				),
 				self::DETAIL_IN_PROGRESS => __( 'La sauvegarde en cours a été arrêtée et ne sera pas terminée : le dossier de travail wp-content/g2rd-backups n’a plus pu être écrit ou relu pendant la sauvegarde. Elle n’est pas comptée comme réussie, et ce qu’elle avait déjà envoyé au stockage ne compte pas comme une sauvegarde. Cause probable : droits du dossier wp-content modifiés, disque plein, ou fichiers de ce dossier retirés par une extension de nettoyage pendant la sauvegarde. Action : rendre wp-content inscriptible par PHP et vérifier l’espace disque, puis relancer la sauvegarde depuis la plateforme.', 'g2rd-connector' ),
 				default => __( 'La sauvegarde n’a pas été lancée : le dossier de travail wp-content/g2rd-backups n’a pas pu être créé, ou n’est pas inscriptible. Rien n’a été modifié. Cause probable : droits du dossier wp-content. Action : rendre wp-content inscriptible par PHP, puis relancer.', 'g2rd-connector' ),
 			},
@@ -339,6 +351,14 @@ final class BackupRefused extends \RuntimeException {
 			self::FILES_ROOT_UNREADABLE => __( 'La sauvegarde a été arrêtée : le dossier racine du site (celui qui contient wp-admin et wp-includes) ne peut pas être parcouru par PHP, et la copie aurait été enregistrée sans les fichiers du site, ou sans une partie d’entre eux. Rien n’est gardé comme sauvegarde. Cause probable : droits de ce dossier modifiés sur l’hébergement (lecture ou traversée retirée à l’utilisateur qui exécute PHP), par exemple lors d’une migration ou d’un durcissement de la sécurité. Action : rendre ce dossier lisible et traversable par l’utilisateur qui exécute PHP (droits 755 ou 750 en général), depuis le gestionnaire de fichiers de l’hébergement ou en le demandant à l’hébergeur, puis relancer la sauvegarde.', 'g2rd-connector' ),
 			default => throw new \InvalidArgumentException( 'Code de refus de sauvegarde sans message : ' . esc_html( $code ) ),
 		};
+	}
+
+	/**
+	 * Dossier de travail des sauvegardes nommé dans la phrase du lien (Run\WorkDir::display_name()) ;
+	 * « wp-content/g2rd-backups » hors de WordPress.
+	 */
+	private static function work_dir_label(): string {
+		return defined( 'WP_CONTENT_DIR' ) ? WorkDir::display_name() : 'wp-content/g2rd-backups';
 	}
 
 	/**
