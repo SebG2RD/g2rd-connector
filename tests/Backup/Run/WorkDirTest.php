@@ -450,6 +450,37 @@ final class WorkDirTest extends TestCase {
 		}
 	}
 
+	// ── Protection qui est un lien : jamais écrite ─────────────────────────────
+
+	/**
+	 * Un fichier de protection (`.htaccess`) du dossier de travail ou du dossier privé est un lien
+	 * cassé vers un fichier extérieur : ensure() ne l'écrit jamais à travers lui (la cible n'est pas
+	 * créée), il refuse ; job() aussi. Le lien reste. Lien vers un fichier : ignoré sans le droit
+	 * de créer des liens symboliques (une jonction Windows ne vise qu'un dossier).
+	 */
+	public function test_une_protection_qui_est_un_lien_casse_n_est_jamais_ecrite(): void {
+		self::assertTrue( WorkDir::ensure() );
+		mkdir( $this->dossier . '/dehors' );
+		foreach ( [ 'dossier de travail' => WorkDir::path(), 'dossier privé' => WorkDir::private_dir() ] as $cas => $dossier ) {
+			$garde = $dossier . '/.htaccess';
+			$cible = $this->dossier . '/dehors/' . md5( $cas ) . '.txt';
+			unlink( $garde );
+			try {
+				self::lien_vers_un_fichier_ou_ignorer( $cible, $garde );
+				self::assertFalse( WorkDir::ensure(), $cas );
+				self::assertNull( WorkDir::job( str_repeat( '9', 32 ) ), $cas );
+				clearstatcache( true );
+				self::assertFileDoesNotExist( $cible, $cas . ' : rien écrit à travers le lien' );
+				self::assertTrue( is_link( $garde ), $cas . ' : le lien reste' );
+			} finally {
+				if ( is_link( $garde ) ) {
+					unlink( $garde );
+				}
+				file_put_contents( $garde, 'protection remise' );
+			}
+		}
+	}
+
 	// ── Outils ────────────────────────────────────────────────────────────────
 
 	/**

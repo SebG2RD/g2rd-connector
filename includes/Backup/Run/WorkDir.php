@@ -62,9 +62,9 @@ final class WorkDir {
 
 	/**
 	 * Crée le dossier, le dossier privé, leurs protections et `baseline/` ; vide un ancien dossier
-	 * privé (sels changés) de ses seuls fichiers du module ; faux si impossible, ou si un lien est
-	 * à la place du dossier privé ou de `baseline/` (rien n'est alors créé ni écrit à travers lui).
-	 * Idempotent.
+	 * privé (sels changés) de ses seuls fichiers du module ; faux si impossible, ou si un lien (même
+	 * cassé) est à la place du dossier privé, de `baseline/` ou d'un fichier de protection (rien
+	 * n'est alors créé ni écrit à travers lui). Idempotent.
 	 */
 	public static function ensure(): bool {
 		$dir     = self::path();
@@ -336,11 +336,21 @@ final class WorkDir {
 	}
 
 	/**
-	 * Un lien est-il là où le module écrit hors des dossiers des sauvegardes : à la place du dossier
-	 * privé (ou entre lui et le dossier de travail), ou de `baseline/` (état local des incrémentales,
-	 * lu, promu et retiré par IncrementalBaseline) ?
+	 * Un lien est-il là où le module écrit hors des dossiers des sauvegardes : à la place d'un
+	 * fichier de protection du dossier de travail ou du dossier privé (un lien cassé serait écrit
+	 * à travers lui, sa cible créée ailleurs), du dossier privé (ou entre lui et le dossier de
+	 * travail), ou de `baseline/` (état local des incrémentales, lu, promu et retiré par
+	 * IncrementalBaseline) ?
 	 */
 	private static function link_in_work_dir(): bool {
+		$dir     = self::path();
+		$private = self::private_dir();
+		foreach ( array_keys( self::GUARDS ) as $guard ) {
+			if ( self::link_between( $dir, $dir . '/' . $guard ) || self::link_between( $dir, $private . '/' . $guard ) ) {
+				return true;
+			}
+		}
+
 		return ! self::within_private( self::baseline_dir() );
 	}
 
