@@ -560,6 +560,69 @@ final class WorkDirTest extends TestCase {
 		self::assertFalse( WorkDir::within_private( WorkDir::private_dir() . "/seg-0\0.part" ) );
 	}
 
+	// ── Dossier de travail (g2rd-backups) qui est lui-même un lien ─────────────
+
+	/** Le dossier de travail devient `$chemin` (filtre g2rd_connector_backup_dir). */
+	private function dossier_de_travail( string $chemin ): void {
+		Functions\when( 'apply_filters' )->alias( static fn ( string $nom, $valeur ) => 'g2rd_connector_backup_dir' === $nom ? $chemin : $valeur );
+	}
+
+	/**
+	 * `wp-content/g2rd-backups` est un lien vers `wp-content/uploads` : ensure() refuse avant d'y
+	 * créer quoi que ce soit (sinon ses protections « Require all denied » mettraient toutes les
+	 * images du site en 403) ; job() refuse et blocked_by_link() le dit ; la désinstallation n'y
+	 * retire rien. Le lien reste.
+	 */
+	public function test_un_dossier_de_travail_qui_est_un_lien_est_refuse_sans_rien_ecrire_dans_sa_cible(): void {
+		$contenu = $this->dossier . '/wp-content';
+		mkdir( $contenu . '/uploads', 0777, true );
+		file_put_contents( $contenu . '/uploads/photo.jpg', 'image' );
+		$lien = $contenu . '/g2rd-backups';
+		$this->dossier_de_travail( $lien );
+		try {
+			self::lien_vers_un_dossier_ou_ignorer( $contenu . '/uploads', $lien );
+			self::assertFalse( WorkDir::ensure() );
+			self::assertNull( WorkDir::job( str_repeat( 'd', 32 ) ) );
+			self::assertTrue( WorkDir::blocked_by_link( str_repeat( 'd', 32 ) ) );
+			WorkDir::remove_all();
+			self::assertSame( [ 'photo.jpg' ], self::contenu( $contenu . '/uploads' ), 'rien écrit ni retiré dans les médias' );
+			self::assertTrue( self::est_un_lien( $lien ), 'le lien reste' );
+		} finally {
+			self::retirer_lien( $lien );
+		}
+	}
+
+	/**
+	 * Seul le dernier élément du dossier de travail est examiné : un wp-content placé derrière un
+	 * lien par l'hébergeur, ou un déploiement `current -> releases/42`, reste accepté (le dossier
+	 * de travail lui-même est un vrai dossier, sous le lien).
+	 */
+	public function test_un_lien_au_dessus_du_dossier_de_travail_reste_accepte(): void {
+		foreach (
+			[
+				'wp-content relié par l\'hébergeur' => [ 'stockage/wp-content', 'site-wp-content', 'site-wp-content/g2rd-backups' ],
+				'déploiement current -> releases'   => [ 'releases/42', 'current', 'current/wp-content/g2rd-backups' ],
+			] as $cas => [ $reel, $nom_du_lien, $travail ]
+		) {
+			mkdir( $this->dossier . '/' . $reel, 0777, true );
+			$lien = $this->dossier . '/' . $nom_du_lien;
+			$this->dossier_de_travail( $this->dossier . '/' . $travail );
+			try {
+				self::lien_vers_un_dossier_ou_ignorer( $this->dossier . '/' . $reel, $lien );
+				self::assertTrue( WorkDir::ensure(), $cas );
+				$job = WorkDir::job( str_repeat( 'e', 32 ) );
+				self::assertIsString( $job, $cas );
+				self::assertFalse( WorkDir::blocked_by_link( str_repeat( 'e', 32 ) ), $cas );
+				self::assertTrue( WorkDir::within_private( $job . '/manifest.jsonl' ), $cas );
+				WorkDir::remove_all();
+				clearstatcache( true );
+				self::assertDirectoryDoesNotExist( $this->dossier . '/' . $travail, $cas . ' : désinstallation faite' );
+			} finally {
+				self::retirer_lien( $lien );
+			}
+		}
+	}
+
 	// ── Outils ────────────────────────────────────────────────────────────────
 
 	/**

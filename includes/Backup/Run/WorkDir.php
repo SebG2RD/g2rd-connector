@@ -63,16 +63,18 @@ final class WorkDir {
 	/**
 	 * Crée le dossier, le dossier privé, leurs protections et `baseline/` ; vide un ancien dossier
 	 * privé (sels changés) de ses seuls fichiers du module ; faux si impossible, ou si un lien (même
-	 * cassé) est à la place du dossier privé, de `baseline/` ou d'un fichier de protection (rien
-	 * n'est alors créé ni écrit à travers lui). Idempotent.
+	 * cassé) est à la place du dossier de travail lui-même, du dossier privé, de `baseline/` ou d'un
+	 * fichier de protection (rien n'est alors créé ni écrit à travers lui). Idempotent.
 	 */
 	public static function ensure(): bool {
 		$dir     = self::path();
 		$private = self::private_dir();
-		if ( ! is_dir( $dir ) && ! wp_mkdir_p( $dir ) ) {
+		// Avant toute création : un dossier de travail qui est un lien (vers wp-content/uploads, par
+		// exemple) recevrait sinon des protections « Require all denied » qui couperaient sa cible.
+		if ( self::link_in_work_dir() ) {
 			return false;
 		}
-		if ( self::link_in_work_dir() ) {
+		if ( ! is_dir( $dir ) && ! wp_mkdir_p( $dir ) ) {
 			return false;
 		}
 		foreach ( [ $dir, $private ] as $folder ) {
@@ -239,11 +241,12 @@ final class WorkDir {
 	/**
 	 * Désinstallation : vide chaque dossier privé (l'actuel et ceux d'anciens sels) de ses fichiers
 	 * du module, puis retire les protections et le dossier s'il ne reste rien d'autre. Un fichier
-	 * étranger n'est jamais touché, ni un dossier privé qui est un lien (clear_private()).
+	 * étranger n'est jamais touché, ni un dossier privé qui est un lien (clear_private()), ni un
+	 * dossier de travail qui en est un : rien n'est alors fait.
 	 */
 	public static function remove_all(): void {
 		$dir = self::path();
-		if ( ! is_dir( $dir ) ) {
+		if ( self::work_dir_is_link() || ! is_dir( $dir ) ) {
 			return;
 		}
 		foreach ( (array) scandir( $dir ) as $name ) {
@@ -380,13 +383,16 @@ final class WorkDir {
 	}
 
 	/**
-	 * Un lien est-il là où le module écrit hors des dossiers des sauvegardes : à la place d'un
-	 * fichier de protection du dossier de travail ou du dossier privé (un lien cassé serait écrit
-	 * à travers lui, sa cible créée ailleurs), du dossier privé (ou entre lui et le dossier de
-	 * travail), ou de `baseline/` (état local des incrémentales, lu, promu et retiré par
-	 * IncrementalBaseline) ?
+	 * Un lien est-il là où le module écrit hors des dossiers des sauvegardes : à la place du dossier
+	 * de travail lui-même (work_dir_is_link()), d'un fichier de protection du dossier de travail ou
+	 * du dossier privé (un lien cassé serait écrit à travers lui, sa cible créée ailleurs), du
+	 * dossier privé (ou entre lui et le dossier de travail), ou de `baseline/` (état local des
+	 * incrémentales, lu, promu et retiré par IncrementalBaseline) ?
 	 */
 	private static function link_in_work_dir(): bool {
+		if ( self::work_dir_is_link() ) {
+			return true;
+		}
 		$dir     = self::path();
 		$private = self::private_dir();
 		foreach ( array_keys( self::GUARDS ) as $guard ) {
@@ -396,6 +402,16 @@ final class WorkDir {
 		}
 
 		return ! self::within_private( self::baseline_dir() );
+	}
+
+	/**
+	 * Le dossier de travail (`wp-content/g2rd-backups`, ou celui du filtre) est-il lui-même un lien ?
+	 * Seul son dernier élément est examiné : un wp-content placé derrière un lien par l'hébergeur, ou
+	 * un déploiement `current -> releases/…`, reste accepté.
+	 */
+	private static function work_dir_is_link(): bool {
+		$dir = PathRules::normalize( self::path() );
+		return str_contains( $dir, "\0" ) || self::is_link_at( dirname( $dir ), basename( $dir ) );
 	}
 
 	/**

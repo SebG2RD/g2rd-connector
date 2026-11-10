@@ -451,6 +451,22 @@ final class BackupJobTest extends BackupTestCase {
 	}
 
 	/**
+	 * Le dossier de travail (`wp-content/g2rd-backups`) est lui-même un lien vers les médias du
+	 * site : le départ est refusé avec la phrase du lien, et rien n'est écrit dans les médias.
+	 */
+	public function test_dossier_de_travail_qui_est_un_lien_refuse_le_depart_et_le_dit(): void {
+		$medias = $this->racine . '/wp-content/uploads';
+		try {
+			self::lien_vers_un_dossier_ou_ignorer( $medias, $this->travail );
+			self::assert_refus_pour_un_lien( $this->refus_au_depart( self::B1 ), 'La sauvegarde n’a pas été lancée : ' );
+			self::assertSame( [ 'b.jpg' ], self::contenu( $medias ), 'rien écrit dans les médias' );
+			self::assertSame( BackupState::IDLE, BackupState::load()['state']['phase'] );
+		} finally {
+			self::retirer_lien( $this->travail );
+		}
+	}
+
+	/**
 	 * Un fichier du module laissé dans le dossier de la sauvegarde est un lien (le nettoyage ne
 	 * touche jamais un lien) : le même numéro est refusé à chaque tentative, et la phrase le dit.
 	 * La cible du lien n'est jamais écrite. Sous Windows, une jonction vers le fichier.
