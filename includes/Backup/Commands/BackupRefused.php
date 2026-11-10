@@ -111,6 +111,17 @@ final class BackupRefused extends \RuntimeException {
 	 */
 	public const DETAIL_IN_PROGRESS = 'in_progress';
 
+	/**
+	 * Détail de WORK_DIR_UNAVAILABLE quand la cause est un lien (symbolique, même cassé, ou jonction
+	 * Windows) dans le dossier de travail ou à la place du dossier privé (Run\WorkDir::blocked_by_link()) :
+	 * le connecteur n'écrit, ne lit et ne retire jamais rien à travers lui, et la sauvegarde reste
+	 * refusée tant qu'il est là. Seule la phrase change, le code reste backup_work_dir_unavailable.
+	 */
+	public const DETAIL_LINK = 'link';
+
+	/** DETAIL_LINK pour une sauvegarde déjà commencée (in_progress()). */
+	private const DETAIL_LINK_IN_PROGRESS = 'link_in_progress';
+
 	/** Codes dont la phrase change pour une sauvegarde déjà commencée (DETAIL_IN_PROGRESS). */
 	private const IN_PROGRESS_CODES = [ self::CRYPTO_UNAVAILABLE, self::WORK_DIR_UNAVAILABLE ];
 
@@ -172,8 +183,8 @@ final class BackupRefused extends \RuntimeException {
 	 * @param string      $reason_code Un des codes de CODES.
 	 * @param int|null    $retry_after Délai conseillé ; ignoré pour un refus non réessayable.
 	 * @param string      $detail      Raison d'une interruption, nom de table, taille, DETAIL_KEY,
-	 *                                 DETAIL_SECONDARY_SITE ou DETAIL_IN_PROGRESS (marqueurs fixes) :
-	 *                                 jamais la valeur d'une clé.
+	 *                                 DETAIL_SECONDARY_SITE, DETAIL_IN_PROGRESS ou DETAIL_LINK
+	 *                                 (marqueurs fixes) : jamais la valeur d'une clé.
 	 * @param string|null $stage       Étape d'un autotest en échec (STAGES) ; ignorée pour un autre code.
 	 * @throws \InvalidArgumentException Code inconnu : erreur de programmation.
 	 */
@@ -208,14 +219,16 @@ final class BackupRefused extends \RuntimeException {
 
 	/**
 	 * Le même refus, dit pour une sauvegarde déjà commencée (IN_PROGRESS_CODES : phrase
-	 * DETAIL_IN_PROGRESS) ; sans effet pour un autre code ou s'il l'est déjà.
+	 * DETAIL_IN_PROGRESS, ou celle d'un lien en cours de sauvegarde pour DETAIL_LINK) ; sans effet
+	 * pour un autre code ou s'il l'est déjà.
 	 */
 	public function in_progress(): self {
-		if ( self::DETAIL_IN_PROGRESS === $this->detail || ! in_array( $this->reason_code, self::IN_PROGRESS_CODES, true ) ) {
+		if ( in_array( $this->detail, [ self::DETAIL_IN_PROGRESS, self::DETAIL_LINK_IN_PROGRESS ], true ) || ! in_array( $this->reason_code, self::IN_PROGRESS_CODES, true ) ) {
 			return $this;
 		}
+		$detail = self::WORK_DIR_UNAVAILABLE === $this->reason_code && self::DETAIL_LINK === $this->detail ? self::DETAIL_LINK_IN_PROGRESS : self::DETAIL_IN_PROGRESS;
 
-		return new self( $this->reason_code, $this->retry, self::DETAIL_IN_PROGRESS, $this->stage );
+		return new self( $this->reason_code, $this->retry, $detail, $this->stage );
 	}
 
 	public function stage(): ?string {
@@ -299,9 +312,12 @@ final class BackupRefused extends \RuntimeException {
 				__( 'La sauvegarde a été arrêtée : il ne reste pas assez d’espace disque sur l’hébergement pour préparer la suite (au moins %s nécessaires). Rien n’est gardé comme sauvegarde. Cause probable : disque de l’hébergement presque plein. Action : libérer de l’espace ou agrandir l’hébergement, puis relancer.', 'g2rd-connector' ),
 				'' === $detail ? '?' : $detail
 			),
-			self::WORK_DIR_UNAVAILABLE => self::DETAIL_IN_PROGRESS === $detail
-				? __( 'La sauvegarde en cours a été arrêtée et ne sera pas terminée : le dossier de travail wp-content/g2rd-backups n’a plus pu être écrit ou relu pendant la sauvegarde. Elle n’est pas comptée comme réussie, et ce qu’elle avait déjà envoyé au stockage ne compte pas comme une sauvegarde. Cause probable : droits du dossier wp-content modifiés, disque plein, ou fichiers de ce dossier retirés par une extension de nettoyage pendant la sauvegarde. Action : rendre wp-content inscriptible par PHP et vérifier l’espace disque, puis relancer la sauvegarde depuis la plateforme.', 'g2rd-connector' )
-				: __( 'La sauvegarde n’a pas été lancée : le dossier de travail wp-content/g2rd-backups n’a pas pu être créé, ou n’est pas inscriptible. Rien n’a été modifié. Cause probable : droits du dossier wp-content. Action : rendre wp-content inscriptible par PHP, puis relancer.', 'g2rd-connector' ),
+			self::WORK_DIR_UNAVAILABLE => match ( $detail ) {
+				self::DETAIL_LINK_IN_PROGRESS => __( 'La sauvegarde en cours a été arrêtée et ne sera pas terminée : un raccourci vers un autre emplacement (lien symbolique) a été trouvé dans le dossier de travail des sauvegardes (wp-content/g2rd-backups), et le connecteur n’écrit, ne lit et ne supprime jamais rien à travers un tel raccourci. Elle n’est pas comptée comme réussie, et ce qu’elle avait déjà envoyé au stockage ne compte pas comme une sauvegarde. Tant que ce raccourci reste en place, la sauvegarde sera refusée de la même façon à chaque nouvelle tentative. Cause probable : raccourci créé pendant la sauvegarde par une extension, par un outil de l’hébergeur ou lors d’une migration du site. Action : faire retirer ce raccourci du dossier wp-content/g2rd-backups par l’hébergeur ou par le développeur du site (le raccourci seulement, jamais ce vers quoi il mène), puis relancer la sauvegarde depuis la plateforme.', 'g2rd-connector' ),
+				self::DETAIL_LINK => __( 'La sauvegarde n’a pas été lancée : un raccourci vers un autre emplacement (lien symbolique) a été trouvé dans le dossier de travail des sauvegardes (wp-content/g2rd-backups), et le connecteur n’écrit, ne lit et ne supprime jamais rien à travers un tel raccourci. Rien n’a été modifié. Tant que ce raccourci reste en place, la sauvegarde sera refusée de la même façon à chaque nouvelle tentative. Cause probable : raccourci créé par une extension, par un outil de l’hébergeur ou lors d’une migration du site. Action : faire retirer ce raccourci du dossier wp-content/g2rd-backups par l’hébergeur ou par le développeur du site (le raccourci seulement, jamais ce vers quoi il mène), puis relancer la sauvegarde.', 'g2rd-connector' ),
+				self::DETAIL_IN_PROGRESS => __( 'La sauvegarde en cours a été arrêtée et ne sera pas terminée : le dossier de travail wp-content/g2rd-backups n’a plus pu être écrit ou relu pendant la sauvegarde. Elle n’est pas comptée comme réussie, et ce qu’elle avait déjà envoyé au stockage ne compte pas comme une sauvegarde. Cause probable : droits du dossier wp-content modifiés, disque plein, ou fichiers de ce dossier retirés par une extension de nettoyage pendant la sauvegarde. Action : rendre wp-content inscriptible par PHP et vérifier l’espace disque, puis relancer la sauvegarde depuis la plateforme.', 'g2rd-connector' ),
+				default => __( 'La sauvegarde n’a pas été lancée : le dossier de travail wp-content/g2rd-backups n’a pas pu être créé, ou n’est pas inscriptible. Rien n’a été modifié. Cause probable : droits du dossier wp-content. Action : rendre wp-content inscriptible par PHP, puis relancer.', 'g2rd-connector' ),
+			},
 			self::TOO_MANY_SEGMENTS => __( 'La sauvegarde a été arrêtée : le site dépasse la taille maximale d’une sauvegarde (4 095 morceaux, environ 256 Gio). Rien n’est gardé comme sauvegarde. Cause probable : site très volumineux, ou dossier de cache ou d’archives à exclure. Action : exclure les dossiers inutiles de la sauvegarde, ou contacter le support G2RD.', 'g2rd-connector' ),
 			self::QUEUE_UNSUPPORTED => __( 'La commande de sauvegarde n’a pas été exécutée : elle est arrivée par la file des commandes, que les sauvegardes n’emploient pas encore. Rien n’a été modifié. Cause probable : plateforme plus récente que ce connecteur. Action : mettre le connecteur à jour ; la plateforme envoie les commandes de sauvegarde directement au site.', 'g2rd-connector' ),
 			self::DB_CHARSET_MISMATCH => sprintf(

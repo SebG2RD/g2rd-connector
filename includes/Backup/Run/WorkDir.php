@@ -170,6 +170,19 @@ final class WorkDir {
 		return $dir;
 	}
 
+	/**
+	 * Un lien (symbolique, même cassé, ou jonction) bloque-t-il le dossier de travail ou celui de
+	 * $backup_id : à la place d'un fichier de protection, du dossier privé, de `baseline/`, du
+	 * dossier de la sauvegarde ou d'un fichier du module qui y est ? C'est alors la cause d'un job()
+	 * à null, et le refus le dit (BackupRefused::DETAIL_LINK) au lieu d'accuser les droits du dossier.
+	 *
+	 * @throws \InvalidArgumentException Identifiant qui n'est pas 32 hex minuscules.
+	 */
+	public static function blocked_by_link( string $backup_id ): bool {
+		self::assert_id( $backup_id );
+		return self::link_in_work_dir() || self::link_in_job( self::private_dir() . '/job-' . $backup_id );
+	}
+
 	/** Retire les fichiers que le module a créés pour $backup_id, puis le dossier s'il est vide. */
 	public static function clear_job( string $backup_id ): void {
 		self::assert_id( $backup_id );

@@ -217,7 +217,7 @@ final class BackupJob {
 		$created = ! WorkDir::job_exists( $backup_id );
 		$job     = WorkDir::job( $backup_id );
 		if ( null === $job ) {
-			throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+			throw self::work_dir_refusal( $backup_id ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
 		}
 		try {
 			$this->assert_disk( $job );
@@ -449,9 +449,11 @@ final class BackupJob {
 		if ( null === $job ) {
 			// Dossier de la sauvegarde perdu, ou impossible à recréer : ses segments et ses journaux
 			// manquent, elle ne peut pas continuer. Close en échec, comme un journal perdu ci-dessous
-			// (statut vrai : jamais laissée active derrière un refus non réessayable).
+			// (statut vrai : jamais laissée active derrière un refus non réessayable). Lien posé dans le
+			// dossier de travail : la phrase le dit (work_dir_refusal()).
+			$refusal = self::work_dir_refusal( $backup_id );
 			$this->close( $loaded['raw'], $state, 'failed', BackupRefused::WORK_DIR_UNAVAILABLE, $now );
-			throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+			throw $refusal; // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
 		}
 		// Choix n° 15 : une ligne ajoutée par une tranche dont l'état n'a pas été enregistré disparaît
 		// ici, avant toute production (sous le verrou des tranches).
@@ -788,7 +790,7 @@ final class BackupJob {
 		// État local de la complète parente remplacé par un lien depuis le départ : jamais lu à travers
 		// lui (une copie extérieure ferait dire inchangés des fichiers qui ne le sont pas) ; arrêtée.
 		if ( null !== $parent && ! WorkDir::within_private( $parent ) ) {
-			throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+			throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE, null, BackupRefused::DETAIL_LINK ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
 		}
 		$reader   = null === $parent ? null : new BaselineReader( $parent, (int) $files['baseline_offset'] );
 		$target   = self::segment_target();
@@ -1321,6 +1323,14 @@ final class BackupJob {
 			WorkDir::discard_new_job( $backup_id );
 		}
 		throw $refusal;
+	}
+
+	/**
+	 * Refus WORK_DIR_UNAVAILABLE quand job() rend null : avec la phrase du lien (DETAIL_LINK) si un
+	 * lien dans le dossier de travail en est la cause, sinon la phrase des droits du dossier.
+	 */
+	private static function work_dir_refusal( string $backup_id ): BackupRefused {
+		return new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE, null, WorkDir::blocked_by_link( $backup_id ) ? BackupRefused::DETAIL_LINK : '' );
 	}
 
 	/**

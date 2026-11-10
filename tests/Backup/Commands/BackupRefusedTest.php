@@ -92,6 +92,39 @@ final class BackupRefusedTest extends TestCase {
 		self::assertSame( $autre, $autre->in_progress(), 'sans effet pour un autre code' );
 	}
 
+	/**
+	 * Lien (symbolique, ou jonction) dans le dossier de travail ou à la place du dossier privé :
+	 * la phrase dit ce qui se passe, la cause probable et l'action, et que la sauvegarde restera
+	 * refusée tant que le lien est là ; jamais « droits du dossier wp-content », qui serait faux.
+	 * Même code stable, au départ comme en cours ; aucun chemin complet.
+	 */
+	public function test_un_lien_dans_le_dossier_de_travail_a_sa_propre_phrase(): void {
+		$depart   = new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE, null, BackupRefused::DETAIL_LINK );
+		$en_cours = $depart->in_progress();
+
+		foreach ( [ 'départ' => $depart, 'en cours' => $en_cours ] as $cas => $refus ) {
+			$message = $refus->getMessage();
+			self::assertSame( 'backup_work_dir_unavailable', $refus->outcome()['error_code'], $cas . ' : code stable inchangé' );
+			self::assertArrayNotHasKey( 'retry_after', $refus->outcome(), $cas );
+			self::assertStringContainsString( 'un raccourci vers un autre emplacement (lien symbolique) a été trouvé dans le dossier de travail des sauvegardes', $message, $cas . ' : dit ce qui se passe' );
+			self::assertStringContainsString( 'Tant que ce raccourci reste en place, la sauvegarde sera refusée de la même façon à chaque nouvelle tentative.', $message, $cas . ' : refus répété annoncé' );
+			self::assertStringContainsString( ' Cause probable : ', $message, $cas );
+			self::assertStringContainsString( ' Action : faire retirer ce raccourci', $message, $cas );
+			self::assertStringNotContainsString( 'droits du dossier wp-content', $message, $cas . ' : jamais la cause fausse' );
+			self::assertStringNotContainsString( 'inscriptible', $message, $cas );
+			self::assertDoesNotMatchRegularExpression( '#(^|[\s(])/|[A-Za-z]:[\\\\/]#', $message, $cas . ' : aucun chemin complet' );
+			self::assertStringEndsWith( '.', $message, $cas );
+		}
+		self::assertStringStartsWith( 'La sauvegarde n’a pas été lancée : ', $depart->getMessage() );
+		self::assertStringContainsString( 'Rien n’a été modifié.', $depart->getMessage() );
+		self::assertStringStartsWith( 'La sauvegarde en cours a été arrêtée et ne sera pas terminée : ', $en_cours->getMessage() );
+		self::assertStringContainsString( 'ce qu’elle avait déjà envoyé au stockage ne compte pas comme une sauvegarde', $en_cours->getMessage() );
+		self::assertStringNotContainsString( 'Rien n’a été modifié', $en_cours->getMessage() );
+		self::assertSame( $en_cours->getMessage(), $en_cours->in_progress()->getMessage(), 'sans effet la seconde fois' );
+		self::assertStringNotContainsString( 'raccourci', ( new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ) )->getMessage(), 'sans lien : phrase d’origine' );
+		self::assertStringNotContainsString( 'raccourci', ( new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ) )->in_progress()->getMessage(), 'sans lien, en cours : phrase d’origine' );
+	}
+
 	/** Décision n° 4 : backup_start de l'identifiant d'une sauvegarde déjà terminée, non réessayable. */
 	public function test_une_sauvegarde_terminee_n_est_pas_relancee(): void {
 		$issue = ( new BackupRefused( BackupRefused::ALREADY_FINISHED ) )->outcome();

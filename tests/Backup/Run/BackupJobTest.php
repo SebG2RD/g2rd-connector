@@ -419,6 +419,83 @@ final class BackupJobTest extends BackupTestCase {
 		self::assertSame( BackupState::IDLE, BackupState::load()['state']['phase'] );
 	}
 
+	// ── Lien dans le dossier de travail : refus qui le dit ───────────────────
+
+	/** Le refus parle du lien et du refus répété ; jamais des droits de wp-content. */
+	private static function assert_refus_pour_un_lien( BackupRefused $refus, string $debut ): void {
+		self::assertSame( BackupRefused::WORK_DIR_UNAVAILABLE, $refus->reason_code() );
+		self::assertStringStartsWith( $debut . 'un raccourci vers un autre emplacement (lien symbolique) a été trouvé', $refus->getMessage() );
+		self::assertStringContainsString( 'Tant que ce raccourci reste en place, la sauvegarde sera refusée de la même façon à chaque nouvelle tentative.', $refus->getMessage() );
+		self::assertStringNotContainsString( 'droits du dossier wp-content', $refus->getMessage() );
+	}
+
+	/**
+	 * Le dossier privé est un lien vers un dossier extérieur vide : le départ est refusé avec la
+	 * phrase du lien, à chaque tentative du même numéro, et rien n'est écrit dehors.
+	 */
+	public function test_dossier_prive_qui_est_un_lien_refuse_le_depart_et_le_dit_a_chaque_tentative(): void {
+		$dehors = dirname( $this->racine ) . '/dehors';
+		mkdir( $dehors );
+		mkdir( $this->travail );
+		$lien = WorkDir::private_dir();
+		try {
+			self::lien_vers_un_dossier_ou_ignorer( $dehors, $lien );
+			foreach ( [ 'première tentative', 'seconde tentative' ] as $cas ) {
+				self::assert_refus_pour_un_lien( $this->refus_au_depart( self::B1 ), 'La sauvegarde n’a pas été lancée : ' );
+				self::assertSame( [], self::contenu( $dehors ), $cas . ' : rien écrit à travers le lien' );
+				self::assertSame( BackupState::IDLE, BackupState::load()['state']['phase'], $cas );
+			}
+		} finally {
+			self::retirer_lien( $lien );
+		}
+	}
+
+	/**
+	 * Un fichier du module laissé dans le dossier de la sauvegarde est un lien (le nettoyage ne
+	 * touche jamais un lien) : le même numéro est refusé à chaque tentative, et la phrase le dit.
+	 * La cible du lien n'est jamais écrite. Lien vers un fichier : ignoré sans le droit de créer
+	 * des liens symboliques.
+	 */
+	public function test_fichier_du_module_qui_est_un_lien_refuse_la_meme_sauvegarde_et_le_dit(): void {
+		self::assertTrue( WorkDir::ensure() );
+		mkdir( $this->dossier( self::B1 ) );
+		$cible = dirname( $this->racine ) . '/wp-config.php';
+		file_put_contents( $cible, "<?php // réglages\n" );
+		self::lien_vers_un_fichier_ou_ignorer( $cible, $this->dossier( self::B1 ) . '/manifest.jsonl' );
+
+		foreach ( [ 'première tentative', 'seconde tentative' ] as $cas ) {
+			self::assert_refus_pour_un_lien( $this->refus_au_depart( self::B1 ), 'La sauvegarde n’a pas été lancée : ' );
+			self::assertSame( "<?php // réglages\n", file_get_contents( $cible ), $cas . ' : cible jamais écrite' );
+			clearstatcache( true );
+			self::assertTrue( is_link( $this->dossier( self::B1 ) . '/manifest.jsonl' ), $cas . ' : le lien reste' );
+		}
+	}
+
+	/**
+	 * `baseline/` remplacé par un lien entre deux tranches : la sauvegarde en cours est arrêtée,
+	 * close en échec, avec la phrase « en cours » du lien ; rien n'est écrit dehors.
+	 */
+	public function test_lien_pose_entre_deux_tranches_arrete_la_sauvegarde_et_le_dit(): void {
+		$job = $this->job();
+		$job->start( self::depart( self::B1 ) );
+		$dehors = dirname( $this->racine ) . '/dehors';
+		mkdir( $dehors );
+		$lien = WorkDir::baseline_dir();
+		rmdir( $lien );
+		try {
+			self::lien_vers_un_dossier_ou_ignorer( $dehors, $lien );
+			$job->step( [ 'backup_id' => self::B1 ] );
+			self::fail( 'Refus attendu.' );
+		} catch ( BackupRefused $refus ) {
+			self::assert_arretee_en_cours( $refus, BackupRefused::WORK_DIR_UNAVAILABLE );
+			self::assert_refus_pour_un_lien( $refus, 'La sauvegarde en cours a été arrêtée et ne sera pas terminée : ' );
+		} finally {
+			self::retirer_lien( $lien );
+		}
+		self::assert_close_en_echec( 'backup_work_dir_unavailable' );
+		self::assertSame( [], self::contenu( $dehors ), 'rien écrit à travers le lien' );
+	}
+
 	public function test_dossier_de_la_sauvegarde_perdu_entre_deux_tranches_l_arrete_et_le_dit(): void {
 		$job = $this->job();
 		$job->start( self::depart( self::B1 ) );
