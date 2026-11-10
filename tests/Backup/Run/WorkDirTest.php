@@ -635,6 +635,39 @@ final class WorkDirTest extends TestCase {
 		self::assertSame( "<?php // réglages\n", file_get_contents( $cible ) );
 	}
 
+	/**
+	 * Fichier neuf d'une protection laissé par un processus tué entre sa création et son rename()
+	 * (`index.php.<16 hex>.tmp`, dans le dossier de travail et dans le dossier privé) : retiré par
+	 * ensure(). Un nom qui n'est pas exactement à ce format reste, et un lien à ce format aussi
+	 * (jamais retiré, sa cible non plus).
+	 */
+	public function test_un_fichier_neuf_de_protection_laisse_par_une_coupure_est_retire(): void {
+		self::assertTrue( WorkDir::ensure() );
+		$dossiers = [ WorkDir::path(), WorkDir::private_dir() ];
+		foreach ( $dossiers as $dossier ) {
+			file_put_contents( $dossier . '/index.php.0123456789abcdef.tmp', 'moitié' );
+			file_put_contents( $dossier . '/.htaccess.0123456789abcdef.tmp', 'moitié' );
+			file_put_contents( $dossier . '/.htaccess.autre.tmp', 'étranger' );
+		}
+		$cible = $this->dossier . '/garde.txt';
+		file_put_contents( $cible, 'à garder' );
+		$lien = WorkDir::path() . '/web.config.fedcba9876543210.tmp';
+		try {
+			self::lien_vers_un_fichier_ou_ignorer( $cible, $lien );
+			self::assertTrue( WorkDir::ensure() );
+			clearstatcache( true );
+			foreach ( $dossiers as $dossier ) {
+				self::assertFileDoesNotExist( $dossier . '/index.php.0123456789abcdef.tmp', 'fichier neuf laissé : retiré' );
+				self::assertFileDoesNotExist( $dossier . '/.htaccess.0123456789abcdef.tmp' );
+				self::assertFileExists( $dossier . '/.htaccess.autre.tmp', 'nom étranger : gardé' );
+			}
+			self::assertTrue( self::est_un_lien( $lien ), 'lien : gardé' );
+			self::assertSame( 'à garder', file_get_contents( $cible ) );
+		} finally {
+			self::retirer_lien( $lien );
+		}
+	}
+
 	// ── Dossier de travail (g2rd-backups) qui est lui-même un lien ─────────────
 
 	/** Le dossier de travail devient `$chemin` (filtre g2rd_connector_backup_dir). */

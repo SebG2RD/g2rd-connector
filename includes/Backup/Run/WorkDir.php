@@ -94,6 +94,7 @@ final class WorkDir {
 			if ( self::link_in_work_dir() || ( ! is_dir( $folder ) && ! wp_mkdir_p( $folder ) ) ) {
 				return false;
 			}
+			self::remove_guard_leftovers( $folder );
 			foreach ( self::GUARDS as $name => $content ) {
 				$file = $folder . '/' . $name;
 				if ( ! file_exists( $file ) && ! self::write_guard( $file, $content ) ) {
@@ -646,6 +647,22 @@ final class WorkDir {
 	}
 
 	/**
+	 * Retire de $dir les fichiers neufs de protection laissés par un processus tué entre leur
+	 * création et leur rename() (write_guard()) : noms exactement `<protection>.<16 hex>.tmp`,
+	 * fichiers ordinaires seulement (lstat() : jamais un lien, ni sa cible). Appelé par ensure(),
+	 * qui ne tourne que sous le verrou des tranches (job(), depuis le départ ou une tranche) : aucun
+	 * autre ensure() n'écrit au même moment une protection que ce balayage retirerait.
+	 */
+	private static function remove_guard_leftovers( string $dir ): void {
+		foreach ( (array) @scandir( $dir ) as $name ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- dossier illisible : rien à retirer.
+			$stat = self::lstat_of( $dir . '/' . $name );
+			if ( 1 === preg_match( '/\A(index\.php|\.htaccess|web\.config)\.[0-9a-f]{16}\.tmp\z/', (string) $name ) && false !== $stat && self::TYPE_FILE === ( $stat['mode'] & self::TYPE_MASK ) ) {
+				wp_delete_file( $dir . '/' . $name );
+			}
+		}
+	}
+
+	/**
 	 * Écrit un fichier de protection absent comme replace_private() : dans un fichier neuf au nom
 	 * aléatoire, à côté (qu'on ne peut deviner pour y poser un lien d'avance), contrôlé juste après
 	 * son ouverture (fichier ordinaire à un seul nom, celui-là même qui est ouvert) ; puis, après une
@@ -704,14 +721,7 @@ final class WorkDir {
 	}
 
 	private static function remove_if_only_guards( string $dir ): void {
-		// Fichier neuf d'une protection laissé par une coupure (write_guard()) : un fichier ordinaire
-		// au format du module seulement, jamais un lien.
-		foreach ( (array) scandir( $dir ) as $name ) {
-			$stat = self::lstat_of( $dir . '/' . $name );
-			if ( 1 === preg_match( '/\A(index\.php|\.htaccess|web\.config)\.[0-9a-f]{16}\.tmp\z/', (string) $name ) && false !== $stat && self::TYPE_FILE === ( $stat['mode'] & self::TYPE_MASK ) ) {
-				wp_delete_file( $dir . '/' . $name );
-			}
-		}
+		self::remove_guard_leftovers( $dir );
 		if ( [] !== array_diff( (array) scandir( $dir ), [ '.', '..', 'index.php', '.htaccess', 'web.config' ] ) ) {
 			return;
 		}
