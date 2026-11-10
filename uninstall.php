@@ -30,7 +30,7 @@ delete_option( 'g2rd_php_errors' );
 delete_option( 'g2rd_php_errors_log_cursor' );
 // Empreintes des fichiers du connecteur à la dernière invalidation d'OPcache (cf. Rest\SnapshotController) :
 // option de réseau, une seule ligne même en multisite (les fichiers sont communs au réseau). La même
-// clé est aussi retirée comme option de blog (ci-dessous) : une version intermédiaire l'y rangeait.
+// clé est aussi retirée comme option de blog (ci-dessous) : un commit intermédiaire, jamais publié, l'y rangeait.
 delete_site_option( 'g2rd_connector_opcache_files' );
 delete_option( 'g2rd_connector_opcache_files' );
 
