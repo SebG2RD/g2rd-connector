@@ -75,7 +75,9 @@ final class WorkDir {
 	 * Crée le dossier, le dossier privé, leurs protections et `baseline/` ; vide un ancien dossier
 	 * privé (sels changés) de ses seuls fichiers du module ; faux si impossible, ou si un lien (même
 	 * cassé) est à la place du dossier de travail lui-même, du dossier privé, de `baseline/` ou d'un
-	 * fichier de protection (rien n'est alors créé ni écrit à travers lui). Idempotent.
+	 * fichier de protection (rien n'est alors créé ni écrit à travers lui). Les liens sont revus avant
+	 * chaque création et à la fin, et chaque protection est écrite par write_guard() : un lien posé
+	 * pendant ensure() ne reçoit aucune protection. Idempotent.
 	 */
 	public static function ensure(): bool {
 		$dir     = self::path();
@@ -89,22 +91,23 @@ final class WorkDir {
 			return false;
 		}
 		foreach ( [ $dir, $private ] as $folder ) {
-			if ( ! is_dir( $folder ) && ! wp_mkdir_p( $folder ) ) {
+			if ( self::link_in_work_dir() || ( ! is_dir( $folder ) && ! wp_mkdir_p( $folder ) ) ) {
 				return false;
 			}
 			foreach ( self::GUARDS as $name => $content ) {
 				$file = $folder . '/' . $name;
-				if ( ! file_exists( $file ) && ! self::write_new( $file, $content ) ) {
+				if ( ! file_exists( $file ) && ! self::write_guard( $file, $content ) ) {
 					return false;
 				}
 			}
 		}
-		if ( ! is_dir( self::baseline_dir() ) && ! wp_mkdir_p( self::baseline_dir() ) ) {
+		if ( self::link_in_work_dir() || ( ! is_dir( self::baseline_dir() ) && ! wp_mkdir_p( self::baseline_dir() ) ) ) {
 			return false;
 		}
 		self::sweep_stale();
+		// Revu à la fin : un lien posé pendant ensure() (protection comprise) refuse aussi.
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- contrôle du dossier de travail avant d'y écrire un segment.
-		return is_writable( $private );
+		return ! self::link_in_work_dir() && is_writable( $private );
 	}
 
 	/**
@@ -205,12 +208,14 @@ final class WorkDir {
 	 * Ouvre un fichier du module rangé dans le dossier privé, jamais à travers un lien ; null sinon
 	 * (rien n'est alors lu ni écrit). Le chemin est vérifié (within_private()), puis le fichier :
 	 * présent, ce doit être un fichier ordinaire à un seul nom (lstat() : ni lien symbolique, ni
-	 * jonction, ni lien physique). Il n'est jamais ouvert d'une façon qui créerait ou viderait une
-	 * cible à travers un lien posé entre-temps : absent, il est créé en exclusif (`xb` refuse tout ce
-	 * qui est déjà là, lien cassé compris) ; présent, il est ouvert sans création (`r+b` ou `rb`).
-	 * Puis le descripteur ouvert est comparé au chemin (fstat() et lstat() : même appareil, même
-	 * inode, un seul nom, le même qu'avant l'ouverture), et le chemin revérifié ; sinon il est fermé
-	 * sans rien écrire. Modes : `xb` fichier neuf (refusé s'il existe), `ab` ajout à la fin (créé
+	 * jonction, ni lien physique) ; un fichier qui n'est pas ordinaire est refusé avant toute
+	 * ouverture. Puis le descripteur ouvert est comparé au chemin (fstat() et lstat() : même
+	 * appareil, même inode, un seul nom, le même qu'avant l'ouverture), et le chemin revérifié ;
+	 * sinon il est fermé sans rien écrire ni lire. C'est ce contrôle après l'ouverture qui protège :
+	 * PHP résout les liens avant d'ouvrir, et suit un lien cassé même en mode `xb`. Limite qui
+	 * reste, inévitable en PHP (ni O_NOFOLLOW ni openat()) : un lien cassé posé entre le lstat() et
+	 * l'ouverture d'un fichier absent fait créer un fichier VIDE à sa cible, aussitôt refermé sans
+	 * rien y écrire ; rien d'autre n'est jamais écrit hors du dossier privé. Modes : `xb` fichier neuf (refusé s'il existe), `ab` ajout à la fin (créé
 	 * au besoin), `cb` réécriture (vidé seulement après ces contrôles), `r+b` fichier existant à
 	 * modifier, `rb` lecture.
 	 *
@@ -528,7 +533,9 @@ final class WorkDir {
 	 * de travail lui-même (work_dir_is_link()), d'un fichier de protection du dossier de travail ou
 	 * du dossier privé (un lien cassé serait écrit à travers lui, sa cible créée ailleurs), du
 	 * dossier privé (ou entre lui et le dossier de travail), ou de `baseline/` (état local des
-	 * incrémentales, lu, promu et retiré par IncrementalBaseline) ?
+	 * incrémentales, lu, promu et retiré par IncrementalBaseline) ? Relu sur le disque à chaque appel.
+	 *
+	 * @phpstan-impure
 	 */
 	private static function link_in_work_dir(): bool {
 		if ( self::work_dir_is_link() ) {
@@ -615,15 +622,40 @@ final class WorkDir {
 		return @lstat( $path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- chemin absent : faux, sans avertissement.
 	}
 
-	/** Écrit un fichier neuf, en exclusif (`xb`) : jamais à travers un lien, même cassé, posé entre-temps. */
-	private static function write_new( string $file, string $content ): bool {
-		$handle = @fopen( $file, 'xb' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- fichier de protection du dossier de travail, créé une fois en exclusif ; échec rendu par la valeur de retour.
+	/**
+	 * Écrit un fichier de protection absent comme replace_private() : dans un fichier neuf au nom
+	 * aléatoire, à côté (qu'on ne peut deviner pour y poser un lien d'avance), contrôlé juste après
+	 * son ouverture (fichier ordinaire à un seul nom, celui-là même qui est ouvert) ; puis, après une
+	 * dernière vérification qu'aucun lien n'est apparu (dossier de travail lui-même, ou entre lui et
+	 * la protection), mis à sa place par rename(), qui remplace un lien posé à ce chemin sans le
+	 * suivre (une jonction Windows ne se remplace pas : refus). `xb` seul ne protège pas : PHP suit
+	 * un lien cassé même dans ce mode. Refus : le fichier neuf est retiré s'il est toujours celui
+	 * créé ici. Limite : un lien posé entre la dernière vérification et rename() n'est pas vu (PHP
+	 * n'offre ni openat() ni renameat()).
+	 */
+	private static function write_guard( string $file, string $content ): bool {
+		$temp   = $file . '.' . bin2hex( random_bytes( 8 ) ) . '.tmp';
+		$handle = @fopen( $temp, 'xb' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- fichier neuf d'une protection, contrôlé après l'ouverture ; échec rendu par la valeur de retour.
 		if ( false === $handle ) {
 			return false;
 		}
-		$written = fwrite( $handle, $content ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- fichier de protection ouvert ci-dessus.
+		$opened = fstat( $handle );
+		$now    = self::lstat_of( $temp );
+		$ok     = false !== $opened && false !== $now && self::plain_file( $opened ) && self::plain_file( $now ) && self::same_file( $opened, $now );
+		if ( $ok ) {
+			$ok = strlen( $content ) === fwrite( $handle, $content ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- fichier neuf contrôlé ci-dessus.
+		}
+		$ok = fclose( $handle ) && $ok; // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- fermeture du fichier neuf.
+		// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.rename_rename -- fichier neuf mis à sa place dans le même dossier ; échec rendu par la valeur de retour.
+		if ( $ok && ! self::work_dir_is_link() && ! self::link_between( self::path(), $file ) && @rename( $temp, $file ) ) {
+			return true;
+		}
+		$left = self::lstat_of( $temp );
+		if ( false !== $opened && false !== $left && self::same_file( $opened, $left ) ) {
+			wp_delete_file( $temp ); // Le fichier neuf créé ici, et lui seul.
+		}
 
-		return fclose( $handle ) && strlen( $content ) === $written; // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- fermeture du fichier écrit.
+		return false;
 	}
 
 	/**
@@ -649,6 +681,14 @@ final class WorkDir {
 	}
 
 	private static function remove_if_only_guards( string $dir ): void {
+		// Fichier neuf d'une protection laissé par une coupure (write_guard()) : un fichier ordinaire
+		// au format du module seulement, jamais un lien.
+		foreach ( (array) scandir( $dir ) as $name ) {
+			$stat = self::lstat_of( $dir . '/' . $name );
+			if ( 1 === preg_match( '/\A(index\.php|\.htaccess|web\.config)\.[0-9a-f]{16}\.tmp\z/', (string) $name ) && false !== $stat && self::TYPE_FILE === ( $stat['mode'] & self::TYPE_MASK ) ) {
+				wp_delete_file( $dir . '/' . $name );
+			}
+		}
 		if ( [] !== array_diff( (array) scandir( $dir ), [ '.', '..', 'index.php', '.htaccess', 'web.config' ] ) ) {
 			return;
 		}

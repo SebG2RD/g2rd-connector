@@ -8,6 +8,7 @@ use Brain\Monkey\Functions;
 use G2RD\Connector\Backup\Run\WorkDir;
 use G2RD\Connector\Tests\Backup\Support\LiensSurDisque;
 use G2RD\Connector\Tests\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 final class WorkDirTest extends TestCase {
 
@@ -642,6 +643,66 @@ final class WorkDirTest extends TestCase {
 			self::assertTrue( self::est_un_lien( $lien ), 'le lien reste' );
 		} finally {
 			self::retirer_lien( $lien );
+		}
+	}
+
+	/**
+	 * @return iterable<string, array{string}>
+	 */
+	public static function liens_poses_pendant_ensure(): iterable {
+		foreach ( [ 'dossier de travail', 'dossier privé', 'protection en lien cassé' ] as $cas ) {
+			yield $cas => [ $cas ];
+		}
+	}
+
+	/**
+	 * Course pendant ensure() : un lien est posé juste après le contrôle des liens, au moment où
+	 * le dossier de travail est créé (point d'injection : wp_mkdir_p, doublure). Lien à la place du
+	 * dossier de travail, lien à la place du dossier privé (vers wp-content/uploads), ou lien cassé
+	 * à la place de la protection `index.php` (vers uploads/.htaccess) : aucune protection n'est
+	 * écrite dans les médias, et rien n'y est créé.
+	 */
+	#[DataProvider( 'liens_poses_pendant_ensure' )]
+	public function test_un_lien_pose_pendant_ensure_ne_recoit_aucune_protection( string $cas ): void {
+		$racine = $this->dossier . '/' . md5( $cas );
+		$medias = $racine . '/wp-content/uploads';
+		mkdir( $medias, 0777, true );
+		file_put_contents( $medias . '/photo.jpg', 'image' );
+		$travail = $racine . '/wp-content/g2rd-backups';
+		$this->dossier_de_travail( $travail );
+		$prive = WorkDir::private_dir();
+		$liens = [];
+		Functions\when( 'wp_mkdir_p' )->alias(
+			static function ( string $d ) use ( $cas, $travail, $prive, $medias, &$liens ): bool {
+				$fait = is_dir( $d ) || mkdir( $d, 0777, true );
+				if ( 'dossier de travail' === $cas && $d === $travail ) {
+					rename( $travail, $travail . '-ancien' );
+					$liens[] = $travail;
+					self::lien_vers_un_dossier( $medias, $travail );
+				} elseif ( 'dossier privé' === $cas && $d === $prive ) {
+					rmdir( $prive );
+					$liens[] = $prive;
+					self::lien_vers_un_dossier( $medias, $prive );
+				} elseif ( 'protection en lien cassé' === $cas && $d === $travail ) {
+					$liens[] = $travail . '/index.php';
+					self::lien_vers_un_fichier( $medias . '/.htaccess', $travail . '/index.php' );
+				}
+				return $fait;
+			}
+		);
+		try {
+			$pret = WorkDir::ensure();
+			clearstatcache( true );
+			self::assertSame( [ 'photo.jpg' ], self::contenu( $medias ), $cas . ' : rien écrit dans les médias' );
+			if ( 'protection en lien cassé' === $cas ) {
+				self::assertSame( ! $pret, self::est_un_lien( $travail . '/index.php' ), $cas . ' : lien remplacé par la vraie protection, sinon refus' );
+			} else {
+				self::assertFalse( $pret, $cas );
+			}
+		} finally {
+			foreach ( $liens as $lien ) {
+				self::retirer_lien( $lien );
+			}
 		}
 	}
 
