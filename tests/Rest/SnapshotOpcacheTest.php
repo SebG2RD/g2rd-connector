@@ -101,7 +101,7 @@ final class SnapshotOpcacheTest extends TestCase {
 
 		self::assertSame( SnapshotController::OPCACHE_OPTION, $this->writes[0][0] );
 		self::assertFalse( $this->writes[0][2], 'Option non autochargée.' );
-		self::assertIsString( $this->writes[0][1] );
+		self::assertIsArray( $this->writes[0][1], 'Une empreinte par serveur.' );
 	}
 
 	public function test_empreinte_inchangee_aucune_invalidation_ni_ecriture(): void {
@@ -212,6 +212,108 @@ final class SnapshotOpcacheTest extends TestCase {
 	public function test_restrict_api_script_inconnu_interdit_l_api(): void {
 		self::assertFalse( SnapshotController::opcache_api_allowed( '/var/www/admin', null ) );
 		self::assertFalse( SnapshotController::opcache_api_allowed( '/var/www/admin', '' ) );
+	}
+
+	private function sync_on( string $server ): void {
+		SnapshotController::sync_opcache(
+			false,
+			function ( string $file ): bool {
+				$this->invalidated[] = $file;
+				return true;
+			},
+			$this->files,
+			api_allowed: true,
+			server: $server
+		);
+	}
+
+	public function test_un_second_serveur_sur_la_meme_base_invalide_a_son_tour(): void {
+		$this->sync_on( 'sA' );
+		$this->invalidated = [];
+
+		$this->sync_on( 'sB' );
+
+		self::assertSame( $this->files, $this->invalidated, "L'OPcache de B est distinct de celui de A." );
+		self::assertSame( [ 'sA', 'sB' ], array_keys( $this->stored[ SnapshotController::OPCACHE_OPTION ] ) );
+	}
+
+	public function test_chaque_serveur_ne_reinvalide_pas_a_chaque_synchro(): void {
+		$this->sync_on( 'sA' );
+		$this->sync_on( 'sB' );
+		$this->invalidated = [];
+		$this->writes      = [];
+
+		$this->sync_on( 'sA' );
+		$this->sync_on( 'sB' );
+
+		self::assertSame( [], $this->invalidated );
+		self::assertSame( [], $this->writes );
+	}
+
+	public function test_un_changement_d_un_serveur_garde_l_empreinte_des_autres(): void {
+		$this->sync_on( 'sA' );
+		$this->sync_on( 'sB' );
+		$before = $this->stored[ SnapshotController::OPCACHE_OPTION ]['sA'];
+
+		touch( $this->files[0], 1_700_000_900 );
+		$this->sync_on( 'sB' );
+
+		self::assertSame( $before, $this->stored[ SnapshotController::OPCACHE_OPTION ]['sA'], "A n'a rien invalidé : son entrée reste celle d'avant." );
+		self::assertNotSame( $before, $this->stored[ SnapshotController::OPCACHE_OPTION ]['sB'] );
+	}
+
+	public function test_le_nombre_de_serveurs_gardes_est_borne_et_le_plus_ancien_est_retire(): void {
+		$max = SnapshotController::OPCACHE_MAX_SERVERS;
+		self::assertSame( 8, $max );
+
+		for ( $i = 1; $i <= $max + 2; $i++ ) {
+			$this->sync_on( 's' . $i );
+		}
+
+		$kept = array_keys( $this->stored[ SnapshotController::OPCACHE_OPTION ] );
+		self::assertCount( $max, $kept );
+		self::assertNotContains( 's1', $kept );
+		self::assertNotContains( 's2', $kept );
+		self::assertSame( 's' . ( $max + 2 ), end( $kept ), 'Le plus récent est gardé.' );
+
+		$this->invalidated = [];
+		$this->sync_on( 's1' );
+		self::assertSame( $this->files, $this->invalidated, 'Un serveur oublié invalide à nouveau, sans danger.' );
+	}
+
+	public function test_un_serveur_deja_connu_redevient_le_plus_recent(): void {
+		$this->sync_on( 'sA' );
+		$this->sync_on( 'sB' );
+		touch( $this->files[0], 1_700_000_900 );
+		$this->sync_on( 'sA' );
+
+		self::assertSame( [ 'sB', 'sA' ], array_keys( $this->stored[ SnapshotController::OPCACHE_OPTION ] ) );
+	}
+
+	public function test_une_valeur_abimee_ou_ancienne_est_lue_comme_vide(): void {
+		$this->stored[ SnapshotController::OPCACHE_OPTION ] = 'a3a074af394dcb8c79258d2c0d8b734b4df4b0c1';
+
+		$this->sync_on( 'sA' );
+
+		self::assertSame( $this->files, $this->invalidated );
+		self::assertSame( [ 'sA' ], array_keys( $this->stored[ SnapshotController::OPCACHE_OPTION ] ) );
+	}
+
+	public function test_l_identite_du_serveur_est_stable_courte_et_sans_nom_d_hote(): void {
+		$id = SnapshotController::opcache_server_id( 'web-12.cluster.interne', 'fpm-fcgi' );
+
+		self::assertSame( $id, SnapshotController::opcache_server_id( 'web-12.cluster.interne', 'fpm-fcgi' ) );
+		self::assertMatchesRegularExpression( '/^s[0-9a-f]{12}$/', $id );
+		self::assertStringNotContainsString( 'web-12', $id );
+		self::assertNotSame( $id, SnapshotController::opcache_server_id( 'web-13.cluster.interne', 'fpm-fcgi' ) );
+		self::assertNotSame( $id, SnapshotController::opcache_server_id( 'web-12.cluster.interne', 'cli' ), "Le SAPI compte : FPM et CLI n'ont pas le même OPcache." );
+	}
+
+	public function test_l_option_ne_contient_aucun_nom_d_hote(): void {
+		$this->sync( false );
+
+		$stored = json_encode( $this->stored[ SnapshotController::OPCACHE_OPTION ] );
+		self::assertStringNotContainsString( (string) php_uname( 'n' ), $stored );
 	}
 
 	public function test_l_empreinte_ne_depend_pas_de_l_ordre_des_fichiers(): void {

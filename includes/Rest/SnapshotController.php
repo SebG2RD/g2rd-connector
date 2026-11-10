@@ -37,11 +37,15 @@ use WP_REST_Server;
 final class SnapshotController {
 
 	/**
-	 * Empreinte des fichiers du connecteur à la dernière invalidation d'OPcache. Option
-	 * NON autochargée (lue seulement sur un serveur à `opcache.validate_timestamps=0`,
-	 * jamais à chaque page) ; retirée à la désinstallation.
+	 * Empreintes des fichiers du connecteur à la dernière invalidation d'OPcache, une par
+	 * serveur PHP (`identité => empreinte`, la plus ancienne en tête). Option NON autochargée
+	 * (lue seulement sur un serveur à `opcache.validate_timestamps=0`, jamais à chaque page) ;
+	 * retirée à la désinstallation.
 	 */
 	public const OPCACHE_OPTION = 'g2rd_connector_opcache_files';
+
+	/** Nombre maximal de serveurs dont l'empreinte est gardée ; au-delà, la plus ancienne part. */
+	public const OPCACHE_MAX_SERVERS = 8;
 
 	public function register(): void {
 		register_rest_route(
@@ -137,8 +141,9 @@ final class SnapshotController {
 	 * @param (\Closure(string): bool)|null $invalidate          Invalidation d'un fichier ; opcache_invalidate() sinon.
 	 * @param list<string>|null             $files               Fichiers du connecteur ; opcache_files() sinon.
 	 * @param bool|null                     $api_allowed         L'API d'OPcache est-elle permise à ce script ; opcache_api_allowed() sinon.
+	 * @param string|null                   $server              Identité du serveur PHP ; opcache_server_id() sinon.
 	 */
-	public static function sync_opcache( ?bool $validate_timestamps = null, ?\Closure $invalidate = null, ?array $files = null, ?bool $api_allowed = null ): void {
+	public static function sync_opcache( ?bool $validate_timestamps = null, ?\Closure $invalidate = null, ?array $files = null, ?bool $api_allowed = null, ?string $server = null ): void {
 		if ( null === $invalidate ) {
 			if ( ! function_exists( 'opcache_invalidate' ) ) {
 				return;
@@ -158,9 +163,16 @@ final class SnapshotController {
 			return;
 		}
 
+		// L'OPcache est propre à chaque serveur PHP, la base peut être commune à plusieurs :
+		// une empreinte par serveur, sinon le premier enregistrerait la sienne et les autres
+		// ne verraient plus jamais de changement.
+		$server ??= self::opcache_server_id();
+		$stored   = get_option( self::OPCACHE_OPTION, [] );
+		$stored   = is_array( $stored ) ? $stored : []; // Valeur absente, abîmée ou d'un ancien format : lue comme vide.
+
 		$files       = $files ?? self::opcache_files();
 		$fingerprint = self::opcache_fingerprint( $files );
-		if ( get_option( self::OPCACHE_OPTION, '' ) === $fingerprint ) {
+		if ( ( $stored[ $server ] ?? null ) === $fingerprint ) {
 			return;
 		}
 
@@ -171,8 +183,24 @@ final class SnapshotController {
 			$all_invalidated = $invalidate( $file ) && $all_invalidated;
 		}
 		if ( $all_invalidated ) {
-			update_option( self::OPCACHE_OPTION, $fingerprint, false );
+			// Ce serveur repasse en dernier (le plus récent) ; au-delà de la borne, le plus ancien part.
+			unset( $stored[ $server ] );
+			$stored[ $server ] = $fingerprint;
+			$stored            = array_slice( $stored, -self::OPCACHE_MAX_SERVERS, null, true );
+			update_option( self::OPCACHE_OPTION, $stored, false );
 		}
+	}
+
+	/**
+	 * Identité stable et non sensible du serveur PHP qui détient l'OPcache : un hachage court
+	 * du nom de la machine et du SAPI (FPM et CLI n'ont pas le même OPcache). Le nom lui-même
+	 * n'est jamais gardé. Préfixée d'une lettre : une clé toute en chiffres deviendrait un entier.
+	 *
+	 * @param string|null $host Nom de la machine ; php_uname( 'n' ) sinon.
+	 * @param string|null $sapi SAPI ; PHP_SAPI sinon.
+	 */
+	public static function opcache_server_id( ?string $host = null, ?string $sapi = null ): string {
+		return 's' . substr( sha1( ( $host ?? php_uname( 'n' ) ) . '|' . ( $sapi ?? PHP_SAPI ) ), 0, 12 );
 	}
 
 	/**
