@@ -11,7 +11,8 @@
  * seulement pour un transient de mise à jour absent, ou sans réponse de wordpress.org
  * depuis plus de 3 h, ou ne couvrant pas ce qui est installé, santé
  * de la base calculée au plus une fois par jour, OPcache invalidé pour le seul
- * connecteur. Les données renvoyées restent celles que WordPress tient pour vraies.
+ * connecteur, et seulement si ses fichiers ont changé sur un serveur qui ne les revoit pas, ou si la
+ * version du disque diffère de celle du code chargé. Les données renvoyées restent celles que WordPress tient pour vraies.
  *
  * @package G2RD\Connector
  */
@@ -36,6 +37,19 @@ use WP_REST_Server;
 
 final class SnapshotController {
 
+	/**
+	 * Empreintes des fichiers du connecteur à la dernière invalidation d'OPcache, une par
+	 * serveur PHP (`identité => empreinte`, la plus ancienne en tête). Option de RÉSEAU
+	 * (get_site_option) : les fichiers et l'OPcache sont communs à tous les blogs d'un
+	 * multisite, une invalidation par blog serait inutile ; sur un site simple, c'est une
+	 * option non autochargée (lue seulement sur un serveur à `opcache.validate_timestamps=0`,
+	 * jamais à chaque page). Retirée à la désinstallation.
+	 */
+	public const OPCACHE_OPTION = 'g2rd_connector_opcache_files';
+
+	/** Nombre maximal de serveurs dont l'empreinte est gardée ; au-delà, la plus ancienne part. */
+	public const OPCACHE_MAX_SERVERS = 8;
+
 	public function register(): void {
 		register_rest_route(
 			G2RD_CONNECTOR_REST_NS,
@@ -56,11 +70,14 @@ final class SnapshotController {
 
 		$now = time();
 
-		// OPcache : seulement les fichiers du connecteur (cf. opcache_files()).
-		if ( function_exists( 'opcache_invalidate' ) ) {
-			foreach ( self::opcache_files() as $file ) {
-				opcache_invalidate( $file, true );
-			}
+		// OPcache : jamais d'invalidation si le serveur revoit lui-même les fichiers modifiés ;
+		// sinon seulement si les fichiers du connecteur ont changé (cf. sync_opcache()).
+		// Une optimisation ne doit jamais casser l'inventaire : l'erreur n'interrompt rien (la
+		// synchronisation suivante réessaie) ; l'action la signale à qui veut la journaliser.
+		try {
+			self::sync_opcache();
+		} catch ( \Throwable $e ) {
+			do_action( 'g2rd_connector_opcache_sync_failed', $e );
 		}
 
 		// Ce que l'inventaire relit, et seulement cela (plus de wp_cache_flush()).
@@ -110,8 +127,199 @@ final class SnapshotController {
 	}
 
 	/**
-	 * Fichiers dont l'OPcache est invalidé à chaque inventaire : ceux du connecteur, et
-	 * eux seuls.
+	 * Invalide l'OPcache des fichiers du connecteur, seulement quand c'est utile.
+	 *
+	 * Avec `opcache.validate_timestamps` actif (le cas des serveurs mutualisés usuels),
+	 * OPcache revoit lui-même les fichiers modifiés, au rythme de `revalidate_freq` : aucune
+	 * invalidation. Invalider à chaque inventaire n'apportait rien et laissait à chaque fois
+	 * de la mémoire « gaspillée » (rendue seulement au redémarrage d'OPcache, qui recompile le
+	 * code de tous les sites du serveur) et une recompilation à la requête suivante.
+	 *
+	 * Avec `validate_timestamps=0`, OPcache ne revoit jamais rien : un connecteur mis à jour
+	 * hors de WordPress (WP-CLI, panneau de l'hébergeur, FTP) continuerait d'annoncer
+	 * l'ancienne version. On compare alors l'empreinte des fichiers (chemin relatif, mtime,
+	 * taille) à celle gardée à la dernière invalidation : inchangée, rien ; changée (ou si la
+	 * version du disque diffère de celle du code chargé), tous les
+	 * fichiers sont invalidés ensemble (n'en invalider qu'un mêlerait du code neuf et ancien),
+	 * puis la nouvelle empreinte est gardée (une seule écriture, seulement en cas de
+	 * changement), mais seulement si TOUTES les invalidations ont réussi. Si OPcache en refuse
+	 * une (API restreinte, OPcache inactif), rien n'est gardé : le prochain inventaire réessaie.
+	 *
+	 * Les paramètres sont injectables pour les tests ; par défaut, la configuration réelle.
+	 *
+	 * @param bool|null                     $validate_timestamps Valeur de `opcache.validate_timestamps`.
+	 * @param (\Closure(string): bool)|null $invalidate          Invalidation d'un fichier ; opcache_invalidate() sinon.
+	 * @param list<string>|null             $files               Fichiers du connecteur ; opcache_files() sinon.
+	 * @param bool|null                     $api_allowed         L'API d'OPcache est-elle permise à ce script ; opcache_api_allowed() sinon.
+	 * @param string|null                   $server              Identité du serveur PHP ; opcache_server_id() sinon.
+	 * @param string|null                   $disk_version        Version dans l'en-tête du fichier principal sur le disque ; opcache_disk_version() sinon.
+	 */
+	public static function sync_opcache( ?bool $validate_timestamps = null, ?\Closure $invalidate = null, ?array $files = null, ?bool $api_allowed = null, ?string $server = null, ?string $disk_version = null ): void {
+		if ( null === $invalidate ) {
+			if ( ! function_exists( 'opcache_invalidate' ) ) {
+				return;
+			}
+			$invalidate = static fn ( string $file ): bool => (bool) opcache_invalidate( $file, true );
+		}
+
+		$validate_timestamps ??= filter_var( ini_get( 'opcache.validate_timestamps' ), FILTER_VALIDATE_BOOLEAN );
+		if ( $validate_timestamps ) {
+			return;
+		}
+
+		// `opcache.restrict_api` : hors du chemin permis, opcache_invalidate() émet un
+		// avertissement et n'invalide rien. On ne l'appelle pas, et aucune empreinte n'est gardée.
+		$api_allowed ??= self::opcache_api_allowed();
+		if ( ! $api_allowed ) {
+			return;
+		}
+
+		// L'OPcache est propre à chaque serveur PHP, la base peut être commune à plusieurs :
+		// une empreinte par serveur, sinon le premier enregistrerait la sienne et les autres
+		// ne verraient plus jamais de changement.
+		$server ??= self::opcache_server_id();
+		$stored   = get_site_option( self::OPCACHE_OPTION, [] );
+		$stored   = is_array( $stored ) ? $stored : []; // Valeur absente, abîmée ou d'un ancien format : lue comme vide.
+
+		$files       = $files ?? self::opcache_files();
+		$fingerprint = self::opcache_fingerprint( $files );
+
+		// Filet : l'empreinte peut dire « déjà invalidé » alors que l'OPcache sert un autre code
+		// (fichiers ET base restaurés avec leurs dates : l'empreinte d'avant revient). La version
+		// du code en mémoire (la constante) doit être celle du disque ; sinon on invalide, quoi
+		// que dise l'empreinte. Disque illisible : rien n'est forcé.
+		$disk_version ??= self::opcache_disk_version();
+		$stale_code     = '' !== $disk_version && defined( 'G2RD_CONNECTOR_VERSION' ) && G2RD_CONNECTOR_VERSION !== $disk_version;
+
+		if ( ! $stale_code && ( $stored[ $server ] ?? null ) === $fingerprint ) {
+			return;
+		}
+
+		// Tous les fichiers sont tentés (même après un échec), mais l'empreinte n'est gardée
+		// que si TOUTES les invalidations ont réussi : sinon le prochain inventaire réessaie.
+		$all_invalidated = true;
+		foreach ( $files as $file ) {
+			$all_invalidated = $invalidate( $file ) && $all_invalidated;
+		}
+		if ( $all_invalidated ) {
+			// Ce serveur repasse en dernier (le plus récent) ; au-delà de la borne, le plus ancien part.
+			unset( $stored[ $server ] );
+			$stored[ $server ] = $fingerprint;
+			$stored            = array_slice( $stored, -self::OPCACHE_MAX_SERVERS, null, true );
+			update_site_option( self::OPCACHE_OPTION, $stored );
+		}
+	}
+
+	/**
+	 * Identité stable et non sensible du serveur PHP qui détient l'OPcache : un hachage court
+	 * du nom de la machine, du SAPI et de la version de PHP (FPM et CLI, lsphp 8.1 et 8.2 sur
+	 * une même machine n'ont pas le même OPcache). Le nom lui-même n'est jamais gardé. Préfixée d'une lettre : une clé toute en chiffres deviendrait un entier.
+	 *
+	 * @param string|null $host Nom de la machine ; opcache_host() sinon.
+	 * @param string|null $sapi SAPI ; PHP_SAPI sinon.
+	 * @param string|null $php_version Version de PHP ; PHP_VERSION sinon.
+	 */
+	public static function opcache_server_id( ?string $host = null, ?string $sapi = null, ?string $php_version = null ): string {
+		return 's' . substr( sha1( ( $host ?? self::opcache_host() ) . '|' . ( $sapi ?? PHP_SAPI ) . '|' . ( $php_version ?? PHP_VERSION ) ), 0, 12 );
+	}
+
+	/**
+	 * Version du connecteur inscrite dans l'en-tête de son fichier principal, sur le disque
+	 * (chaîne vide si illisible). get_file_data() (wp-includes/functions.php) est toujours
+	 * chargée, y compris en REST ; à défaut, lecture équivalente bornée aux 8 premiers Ko.
+	 *
+	 * @param string|null $file Fichier principal ; G2RD_CONNECTOR_FILE sinon.
+	 */
+	public static function opcache_disk_version( ?string $file = null ): string {
+		$file ??= defined( 'G2RD_CONNECTOR_FILE' ) ? (string) G2RD_CONNECTOR_FILE : '';
+		if ( '' === $file || ! is_file( $file ) ) {
+			return '';
+		}
+
+		if ( function_exists( 'get_file_data' ) ) {
+			return trim( (string) ( get_file_data( $file, [ 'Version' => 'Version' ] )['Version'] ?? '' ) );
+		}
+
+		$head = file_get_contents( $file, false, null, 0, 8192 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- fichier local du plugin.
+		return is_string( $head ) && 1 === preg_match( '/^[ \t\/*#@]*Version:(.*)$/mi', $head, $m ) ? trim( $m[1] ) : '';
+	}
+
+	/**
+	 * Nom de la machine, sans jamais supposer que php_uname() existe : elle est souvent dans
+	 * `disable_functions` sur un hébergement mutualisé (l'appeler serait une erreur fatale, donc
+	 * un 500 à chaque inventaire). Repli sur gethostname(), puis chaîne vide : l'identité reste
+	 * valable, moins précise.
+	 *
+	 * @param bool|null $has_uname       php_uname() est-elle disponible ; testé sinon.
+	 * @param bool|null $has_gethostname gethostname() est-elle disponible ; testé sinon.
+	 */
+	public static function opcache_host( ?bool $has_uname = null, ?bool $has_gethostname = null ): string {
+		if ( $has_uname ?? function_exists( 'php_uname' ) ) {
+			return php_uname( 'n' );
+		}
+		if ( $has_gethostname ?? function_exists( 'gethostname' ) ) {
+			return (string) gethostname();
+		}
+		return '';
+	}
+
+	/**
+	 * Le script en cours a-t-il le droit d'appeler l'API d'OPcache ?
+	 *
+	 * Avec `opcache.restrict_api` (un chemin), PHP n'accepte opcache_invalidate() que depuis
+	 * un script dont le chemin commence par cette valeur (comparaison d'octets, sur le script
+	 * principal de la requête, SCRIPT_FILENAME) ; sinon il émet un avertissement. Directive vide : permis.
+	 * Script inconnu alors qu'une restriction existe : refusé, comme PHP.
+	 *
+	 * @param string|null $restrict_api Valeur de la directive ; lue dans la configuration sinon.
+	 * @param string|null $script       Script principal de la requête ; lu dans $_SERVER sinon.
+	 */
+	public static function opcache_api_allowed( ?string $restrict_api = null, ?string $script = null ): bool {
+		$restrict_api ??= (string) ini_get( 'opcache.restrict_api' );
+		if ( '' === $restrict_api ) {
+			return true;
+		}
+
+		if ( null === $script ) {
+			// WordPress ajoute des barres obliques à $_SERVER (wp_magic_quotes) : un chemin avec « \ » ou
+			// « ' » ne correspondrait plus à la directive. Valeur comparée à une configuration, jamais affichée.
+			// PATH_TRANSLATED n'est qu'un repli : sous FPM et CGI, c'est la traduction de PATH_INFO, pas le script.
+			// En CLI, PHP compare le chemin réel, qui peut diverger : sans effet ici, l'inventaire passe par HTTP.
+			// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- comparaison seule.
+			$script = (string) wp_unslash( $_SERVER['SCRIPT_FILENAME'] ?? $_SERVER['PATH_TRANSLATED'] ?? '' );
+		}
+
+		return '' !== $script && str_starts_with( $script, $restrict_api );
+	}
+
+	/**
+	 * Empreinte des fichiers : chemin relatif au dossier du connecteur, date de modification
+	 * et taille de chacun, triés par chemin (l'ordre du disque n'est pas stable).
+	 *
+	 * @param list<string> $files
+	 */
+	private static function opcache_fingerprint( array $files ): string {
+		clearstatcache( true );
+
+		$root  = defined( 'G2RD_CONNECTOR_DIR' ) ? str_replace( '\\', '/', (string) G2RD_CONNECTOR_DIR ) : '';
+		$lines = [];
+		foreach ( $files as $file ) {
+			$path = str_replace( '\\', '/', $file );
+			if ( '' !== $root && str_starts_with( $path, $root ) ) {
+				$path = substr( $path, strlen( $root ) );
+			}
+			$mtime   = @filemtime( $file ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- fichier disparu : empreinte à 0, pas d'avertissement.
+			$size    = @filesize( $file ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- idem.
+			$lines[] = $path . '|' . (int) $mtime . '|' . (int) $size;
+		}
+		sort( $lines, SORT_STRING );
+
+		return sha1( implode( "\n", $lines ) );
+	}
+
+	/**
+	 * Fichiers du connecteur dont l'OPcache est invalidé quand ils ont changé (cf.
+	 * sync_opcache()) : ceux du connecteur, et eux seuls.
 	 *
 	 * Les versions des extensions et des thèmes n'en dépendent pas : elles sont lues
 	 * par get_file_data() (file_get_contents() des 8 premiers Ko, wp-includes/functions.php),

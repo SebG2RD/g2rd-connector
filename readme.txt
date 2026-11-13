@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.16.0
+Stable tag: 1.16.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -79,7 +79,7 @@ Disconnect from the plugin settings (button **Disconnect from manager**), or rev
 
 = What happens on uninstall? =
 
-All plugin options (`g2rd_connector_settings`, restore point index, signature state) are removed, as are the records of the commands run in the background (`g2rd_cmdrun_*` options, finished or not, on every site of a multisite network) and the PHP errors kept for the manager (`g2rd_php_errors`, `g2rd_php_errors_log_cursor`, on every site of a multisite network); the cron jobs are unscheduled, the restore point archives the plugin created in `wp-content/g2rd-snapshots/` are deleted (nothing else in that folder is touched), and the site stops sending anything. The manager-side record is preserved until you delete it from the dashboard.
+All plugin options (`g2rd_connector_settings`, restore point index, signature state) are removed, as are the records of the commands run in the background (`g2rd_cmdrun_*` options, finished or not, on every site of a multisite network) and the PHP errors kept for the manager (`g2rd_php_errors`, `g2rd_php_errors_log_cursor`, on every site of a multisite network), as is the fingerprint of the connector's files kept to spare OPcache (`g2rd_connector_opcache_files`); the cron jobs are unscheduled, the restore point archives the plugin created in `wp-content/g2rd-snapshots/` are deleted (nothing else in that folder is touched), and the site stops sending anything. The manager-side record is preserved until you delete it from the dashboard.
 
 == Screenshots ==
 
@@ -88,6 +88,22 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 
 == Changelog ==
 
+= 1.16.1 =
+
+* **Performance: the site inventory no longer invalidates the connector's OPcache files on every
+  sync.** With `opcache.validate_timestamps` on, OPcache already notices modified files, so nothing
+  is invalidated any more. Each invalidation left about 1 MB of wasted OPcache memory, and that
+  memory is shared with the other sites served by the same PHP/OPcache instance. It also forced a
+  recompilation on the next request. With it off, the files are invalidated, all together, only
+  when they changed since the last invalidation on that server, or when the version in the plugin
+  header differs from the code OPcache holds.
+* **Fix: no more PHP warning on every sync when `opcache.restrict_api` forbids the call.** The
+  plugin checks beforehand whether the script may use the OPcache API, and invalidates nothing
+  otherwise.
+* **Storage: the option `g2rd_connector_opcache_files` is not autoloaded.** It holds one
+  fingerprint of the connector's files per PHP server (8 servers at most), each server identified
+  by a short hash of the machine name, the SAPI and the PHP version: no machine name is stored.
+  It is a single row per network on a multisite, and is removed when the plugin is deleted.
 = 1.16.0 =
 
 Stable release of the 1.16 line, piloted on one site for a week (as 1.16.0-rc.1, 1.16.0-rc.2,
