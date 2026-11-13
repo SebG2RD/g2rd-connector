@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.16.0-rc.2
+Stable tag: 1.16.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -87,6 +87,28 @@ All plugin options (`g2rd_connector_settings`, restore point index, signature st
 2. Theme-integrated "Manager G2RD" tab in the G2RD theme console (requires `g2rd-theme` >= 1.19 as the theme or its parent theme).
 
 == Changelog ==
+
+= 1.16.0 =
+
+Stable release of the 1.16 line, piloted on one site for a week (as 1.16.0-rc.1, 1.16.0-rc.2,
+then with the same code inside the 1.17.0-rc.1 pre-release; details in the entries below). No
+code change since 1.16.0-rc.2.
+
+* **New: PHP error monitoring (`php_errors`), off by default.** When it is turned on for a site
+  (signed command `set_php_errors_capture` from the manager, or the "Relevé des erreurs PHP"
+  setting), the plugin records the PHP fatal errors raised after it has loaded, filters their
+  message on the site, groups them and keeps them 7 days; the `/snapshot` answer carries them.
+  Optional reading of the end of the PHP error log, off by default.
+* **New: how PHP and WordPress log errors, in the inventory (`php_logging` block)**, without
+  any path.
+* **Security: the cause of an interrupted background command no longer contains server paths
+  nor the call stack, and the PHP error filter also masks the database password by its value.**
+* **Fix: this readme lists every data sent to the manager.**
+* **Fix: a background command acceptance resent by the host's CDN is recognised only for the
+  exact method and route.**
+* **Performance: purging background command records reads only the start of each record, and
+  a site failing on every request no longer pays for the component version lookup and the lock
+  before the one-write-per-minute rule applies.**
 
 = 1.16.0-rc.2 =
 
