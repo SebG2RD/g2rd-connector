@@ -1235,6 +1235,9 @@ final class BackupJobTest extends BackupTestCase {
 	public function test_etat_local_reecrit_a_taille_egale_en_cours_d_incrementale_l_arrete(): void {
 		foreach ( [ 'date changée', 'autre fichier, même date' ] as $cas ) {
 			$this->etat_local_de_l_arbre();
+			// Date fixe, bien avant « maintenant » : sous Patchwork une date posée par touch() se relit avec
+			// une seconde de plus (FileArchiverTest::date_lue()), la copie ne doit pas être arrêtée par sa date.
+			touch( WorkDir::baseline_dir() . '/' . self::B1 . '.jsonl', self::NOW - 7200 );
 			$job = $this->job();
 			$id  = 'date changée' === $cas ? self::B2 : str_repeat( '3', 32 );
 			$job->start( self::depart( $id, 'files', 'incremental', self::B1 ) );
@@ -1245,7 +1248,7 @@ final class BackupJobTest extends BackupTestCase {
 				touch( $etat_local, $date - 100 );
 			} else {
 				copy( $etat_local, $etat_local . '.copie' );
-				touch( $etat_local . '.copie', $date );
+				touch( $etat_local . '.copie', self::NOW - 7200 );
 				rename( $etat_local . '.copie', $etat_local );
 			}
 			try {
