@@ -149,11 +149,32 @@ final class BackupRefusedTest extends TestCase {
 			self::assertStringContainsString( $quoi, $message, $detail );
 			self::assertStringContainsString( 'ce qu’elle avait déjà envoyé au stockage ne compte pas comme une sauvegarde', $message, $detail );
 			self::assertStringContainsString( ' Cause probable : ', $message, $detail );
-			self::assertStringContainsString( ' Action : aucune ; la prochaine sauvegarde ', $message, $detail );
+			self::assertMatchesRegularExpression( '/ Action : aucune( pour cette fois)? ; la prochaine sauvegarde /u', $message, $detail );
 			self::assertStringNotContainsString( 'droits du dossier', $message, $detail );
 			self::assertStringNotContainsString( 'raccourci', $message, $detail );
 			self::assertStringEndsWith( '.', $message, $detail );
 		}
+	}
+
+	/**
+	 * Liste de la dernière complète perdue une fois : aucune action, la sauvegarde suivante se
+	 * rattrape seule. Perdue à chaque incrémentale (extension de nettoyage qui repasse : une
+	 * incrémentale sur deux échoue) : la phrase dit quoi vérifier, en nommant le vrai dossier de
+	 * travail, jamais un chemin complet du serveur.
+	 */
+	public function test_l_etat_local_perdu_dit_quoi_verifier_si_l_arret_se_repete(): void {
+		$message = ( new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE, null, BackupRefused::DETAIL_BASELINE_LOST ) )->getMessage();
+
+		self::assertStringContainsString( ' Action : aucune pour cette fois ; la prochaine sauvegarde revérifiera cette liste et sera complète si elle n’est plus intacte.', $message );
+		self::assertStringContainsString( ' Si l’arrêt se répète, vérifier qu’aucune extension de nettoyage ni aucun outil de l’hébergeur ne touche au dossier de travail des sauvegardes (' . WorkDir::display_name() . '),', $message );
+		self::assertDoesNotMatchRegularExpression( '#(^|[\s(])/|[A-Za-z]:[\\\\/]#', $message, 'aucun chemin complet' );
+		self::assertStringEndsWith( '.', $message );
+
+		Functions\when( 'apply_filters' )->alias( static fn ( string $nom, $valeur ) => 'g2rd_connector_backup_dir' === $nom ? '/srv/clients/site-42/sauvegardes-g2rd' : $valeur );
+		$ailleurs = ( new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE, null, BackupRefused::DETAIL_BASELINE_LOST ) )->getMessage();
+		self::assertStringContainsString( '(sauvegardes-g2rd)', $ailleurs, 'dossier de travail déplacé : son nom' );
+		self::assertStringNotContainsString( '/srv', $ailleurs );
+		self::assertStringNotContainsString( 'site-42', $ailleurs );
 	}
 
 	/**
