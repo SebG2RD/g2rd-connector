@@ -80,7 +80,7 @@ Disconnect from the plugin settings (button **Disconnect from manager**), or rev
 
 = What happens on uninstall? =
 
-All plugin options (`g2rd_connector_settings`, restore point index, signature state) are removed, as are the records of the commands run in the background (`g2rd_cmdrun_*` options, finished or not, on every site of a multisite network) and the PHP errors kept for the manager (`g2rd_php_errors`, `g2rd_php_errors_log_cursor`, on every site of a multisite network); the cron jobs are unscheduled, the restore point archives the plugin created in `wp-content/g2rd-snapshots/` are deleted (nothing else in that folder is touched), the encrypted backup settings, state and keys of the site (`g2rd_backup_*`) are removed together with the files the plugin prepared in `wp-content/g2rd-backups/` (again, nothing else in that folder is touched), and the site stops sending anything. A reinstalled plugin creates a new signing key, which must be approved again in the manager. The manager-side record is preserved until you delete it from the dashboard.
+All plugin options (`g2rd_connector_settings`, restore point index, signature state) are removed, as are the records of the commands run in the background (`g2rd_cmdrun_*` options, finished or not, on every site of a multisite network) and the PHP errors kept for the manager (`g2rd_php_errors`, `g2rd_php_errors_log_cursor`, on every site of a multisite network), as is the fingerprint of the connector's files kept to spare OPcache (`g2rd_connector_opcache_files`); the cron jobs are unscheduled, the restore point archives the plugin created in `wp-content/g2rd-snapshots/` are deleted (nothing else in that folder is touched), the encrypted backup settings, state and keys of the site (`g2rd_backup_*`) are removed together with the files the plugin prepared in `wp-content/g2rd-backups/` (again, nothing else in that folder is touched), and the site stops sending anything. A reinstalled plugin creates a new signing key, which must be approved again in the manager. The manager-side record is preserved until you delete it from the dashboard.
 
 = Who can turn on encrypted backups on a multisite network? =
 
@@ -111,6 +111,44 @@ Backups are prepared in wp-content/g2rd-backups, inside a folder whose name is d
   whole network.
 * Uninstalling the plugin now also removes the encrypted backup options and the files it prepared in
   `wp-content/g2rd-backups/`; see "What is sent, when" in the External service section.
+
+= 1.16.1 =
+
+* **Performance: the site inventory no longer invalidates the connector's OPcache files on every
+  sync.** With `opcache.validate_timestamps` on, OPcache already notices modified files, so nothing
+  is invalidated any more. Each invalidation left about 1 MB of wasted OPcache memory, and that
+  memory is shared with the other sites served by the same PHP/OPcache instance. It also forced a
+  recompilation on the next request. With it off, the files are invalidated, all together, only
+  when they changed since the last invalidation on that server, or when the version in the plugin
+  header differs from the code OPcache holds.
+* **Fix: no more PHP warning on every sync when `opcache.restrict_api` forbids the call.** The
+  plugin checks beforehand whether the script may use the OPcache API, and invalidates nothing
+  otherwise.
+* **Storage: the option `g2rd_connector_opcache_files` is not autoloaded.** It holds one
+  fingerprint of the connector's files per PHP server (8 servers at most), each server identified
+  by a short hash of the machine name, the SAPI and the PHP version: no machine name is stored.
+  It is a single row per network on a multisite, and is removed when the plugin is deleted.
+= 1.16.0 =
+
+Stable release of the 1.16 line, piloted on one site for a week (as 1.16.0-rc.1, 1.16.0-rc.2,
+then with the same code inside the 1.17.0-rc.1 pre-release; details in the entries below). No
+code change since 1.16.0-rc.2.
+
+* **New: PHP error monitoring (`php_errors`), off by default.** When it is turned on for a site
+  (signed command `set_php_errors_capture` from the manager, or the "Relevé des erreurs PHP"
+  setting), the plugin records the PHP fatal errors raised after it has loaded, filters their
+  message on the site, groups them and keeps them 7 days; the `/snapshot` answer carries them.
+  Optional reading of the end of the PHP error log, off by default.
+* **New: how PHP and WordPress log errors, in the inventory (`php_logging` block)**, without
+  any path.
+* **Security: the cause of an interrupted background command no longer contains server paths
+  nor the call stack, and the PHP error filter also masks the database password by its value.**
+* **Fix: this readme lists every data sent to the manager.**
+* **Fix: a background command acceptance resent by the host's CDN is recognised only for the
+  exact method and route.**
+* **Performance: purging background command records reads only the start of each record, and
+  a site failing on every request no longer pays for the component version lookup and the lock
+  before the one-write-per-minute rule applies.**
 
 = 1.16.0-rc.2 =
 
