@@ -127,11 +127,12 @@ final class BackupJobTest extends BackupTestCase {
 	 * @param (\Closure(): int)|null $ms     Horloge monotone (millisecondes) ; l'horloge réelle par défaut.
 	 * @param string|null            $root   Racine copiée ; $this->racine par défaut.
 	 * @param Sodium|null            $sodium Moteur ; celui du poste par défaut.
+	 * @param (\Closure(): int)|null $clock  Heure de PHP (secondes Unix) ; NOW, figée, par défaut.
 	 */
-	private function job( ?object $wpdb = null, ?\Closure $ms = null, ?string $root = null, ?Sodium $sodium = null ): BackupJob {
+	private function job( ?object $wpdb = null, ?\Closure $ms = null, ?string $root = null, ?Sodium $sodium = null, ?\Closure $clock = null ): BackupJob {
 		return new BackupJob(
 			$sodium ?? new Sodium(),
-			static fn (): int => self::NOW,
+			$clock ?? static fn (): int => self::NOW,
 			$ms,
 			function ( string $url, string $host, ?int $port, string $file, int $offset, int $length, int $timeout ): PartUploadResult {
 				unset( $host, $port, $file );
@@ -1152,6 +1153,49 @@ final class BackupJobTest extends BackupTestCase {
 		$r2     = $this->jouer( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
 		$lignes = array_column( array_filter( $this->manifeste( $r2['segments'] ), static fn ( array $l ): bool => 'file' === $l['t'] ), null, 'path' );
 
+		self::assertSame( 'stored', $lignes['wp-content/a.txt']['state'], 'même taille, même date, autre contenu : recopié' );
+		self::assertSame( hash( 'sha256', 'BONJOUR' ), $lignes['wp-content/a.txt']['sha256'], 'empreinte du contenu réel' );
+		self::assertSame( 'unchanged', $lignes['wp-content/uploads/b.jpg']['state'], 'fichier ancien : inchangé' );
+	}
+
+	/**
+	 * Angle mort de la « même seconde » quand l'horloge du système de fichiers retarde sur celle de
+	 * PHP (serveur de fichiers NFS, par exemple) : PHP est ici 60 s en avance. `a.txt`, écrit juste
+	 * avant la complète d'après l'horloge du disque, est lu par elle puis réécrit à taille égale
+	 * dans la même seconde : sa date ne change pas. Avec l'heure de PHP pour départ de la complète,
+	 * cette date paraissait antérieure de plus de 2 s, et chaque incrémentale le disait inchangé
+	 * avec l'ancienne empreinte. Le départ gardé est le plus tôt de l'heure de PHP et de la date que
+	 * le disque a posée sur le journal du manifeste à ce départ : `a.txt` est recopié. La date de la
+	 * sauvegarde annoncée par l'index reste l'heure de PHP.
+	 */
+	public function test_depart_de_la_complete_a_l_horloge_du_disque_quand_elle_retarde_sur_php(): void {
+		$php     = time() + 60;
+		$horloge = static fn (): int => $php;
+		$fichier = $this->racine . '/wp-content/a.txt';
+		// Date posée par touch() avant la complète comme après la réécriture : la même des deux
+		// côtés, quelle que soit la façon dont la plateforme arrondit une date posée puis relue.
+		$date = time();
+		touch( $fichier, $date );
+
+		$job = $this->job( null, null, null, null, $horloge );
+		$job->start( self::depart( self::B1 ) );
+		clearstatcache();
+		$disque = (int) filemtime( $this->dossier( self::B1 ) . '/manifest.jsonl' );
+		self::assertLessThan( $php - IncrementalBaseline::SAME_SECOND_MARGIN, $disque, 'le disque retarde sur PHP' );
+		$r1 = $this->jouer_la_suite( $job, self::B1 );
+
+		self::assertSame( gmdate( 'Y-m-d\TH:i:s\Z', $php ), $this->assert_index_valide( $r1 )['created_at'], 'date de la sauvegarde : heure de PHP, inchangée' );
+		self::assertSame( $disque, ( new IncrementalBaseline( WorkDir::baseline_dir() ) )->current()['created_at'] ?? null, 'départ de la complète : la date du disque, plus tôt' );
+
+		file_put_contents( $fichier, 'BONJOUR' );
+		touch( $fichier, $date );
+		clearstatcache();
+		$job = $this->job( null, null, null, null, $horloge );
+		$job->start( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
+		$r2     = $this->jouer_la_suite( $job, self::B2 );
+		$lignes = array_column( array_filter( $this->manifeste( $r2['segments'] ), static fn ( array $l ): bool => 'file' === $l['t'] ), null, 'path' );
+
+		self::assertSame( 'incremental', $this->assert_index_valide( $r2 )['type'] );
 		self::assertSame( 'stored', $lignes['wp-content/a.txt']['state'], 'même taille, même date, autre contenu : recopié' );
 		self::assertSame( hash( 'sha256', 'BONJOUR' ), $lignes['wp-content/a.txt']['sha256'], 'empreinte du contenu réel' );
 		self::assertSame( 'unchanged', $lignes['wp-content/uploads/b.jpg']['state'], 'fichier ancien : inchangé' );

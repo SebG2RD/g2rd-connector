@@ -33,7 +33,9 @@ final class IncrementalBaseline {
 
 	/**
 	 * Marge (secondes) sous le départ de la complète parente en deçà de laquelle une date de l'état
-	 * local vaut « antérieure à la lecture » (same()) : dates à la seconde, horloges grossières, NFS.
+	 * local vaut « antérieure à la lecture » (same()) : dates à la seconde, horloges grossières. Un
+	 * retard plus grand de l'horloge du disque (NFS) est couvert par le départ lui-même, pris à
+	 * l'horloge la plus en retard (Run\BackupJob::full_started_at()).
 	 */
 	public const SAME_SECOND_MARGIN = 2;
 
@@ -150,8 +152,11 @@ final class IncrementalBaseline {
 	 * SAME_SECOND_MARGIN secondes.
 	 *
 	 * Raisonnement : la complète lit chaque entrée après son départ. Une date antérieure à ce départ
-	 * (marge comprise : dates à la seconde, horloges grossières, NFS) précède donc forcément la
-	 * seconde de lecture, et toute réécriture ultérieure, même à taille égale, donne une autre date.
+	 * (marge comprise : dates à la seconde, horloges grossières) précède donc forcément la seconde de
+	 * lecture, et toute réécriture ultérieure, même à taille égale, donne une autre date. Les dates
+	 * des entrées sont posées par le système de fichiers, pas par PHP : le départ est le plus tôt de
+	 * l'heure de PHP et de la date que le disque a posée sur le journal du manifeste à ce départ
+	 * (Run\BackupJob::full_started_at() ; horloge d'un serveur NFS en retard sur celle de PHP).
 	 * Une entrée dont la date tombe pendant la complète, ou juste avant son départ, a pu être
 	 * réécrite à taille égale dans la même seconde que sa lecture sans que sa date change : jamais
 	 * dite inchangée, elle est recopiée (sans dépendre du filtre de vérification des empreintes). Le
@@ -162,7 +167,7 @@ final class IncrementalBaseline {
 	 *
 	 * @param array{path: string, type: string, size: int, mtime: int, mode: int, target: string|null} $entry
 	 * @param array{path: string, type: string, size: int, mtime: int, sha256: string|null}          $base
-	 * @param int|null                                                                                $parent_started_at Départ de la complète parente (secondes Unix).
+	 * @param int|null                                                                                $parent_started_at Départ de la complète parente (secondes Unix, à l'horloge la plus en retard de PHP et du disque).
 	 */
 	public static function same( array $entry, array $base, ?int $parent_started_at ): bool {
 		return null !== $parent_started_at

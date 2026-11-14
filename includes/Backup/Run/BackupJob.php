@@ -301,7 +301,14 @@ final class BackupJob {
 		} catch ( BackupRefused $refusal ) {
 			self::refuse_after_create( $refusal, $backup_id, $created );
 		}
-		$new['journals'] = WorkDir::journal_sizes( $job );
+		// Départ de la sauvegarde à l'horloge du disque : le plus tôt de l'heure de PHP et de la date
+		// que le système de fichiers vient de poser sur le journal du manifeste (serveur de fichiers
+		// NFS dont l'horloge retarde sur celle de PHP : les dates des fichiers copiés sont les
+		// siennes). Promu avec l'état local d'une complète, il sert de référence à
+		// IncrementalBaseline::same() (full_started_at()). created_at reste l'heure de PHP : date du
+		// manifeste et de l'index, second filet des mises à jour.
+		$new['disk_started_at'] = min( $now, self::disk_time( $job . '/manifest.jsonl' ) ?? $now );
+		$new['journals']        = WorkDir::journal_sizes( $job );
 		if ( null === BackupState::save( $loaded['raw'], $new ) ) {
 			WorkDir::clear_job( $backup_id );
 			throw new BackupRefused( BackupRefused::UPDATE_IN_PROGRESS ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
@@ -1205,7 +1212,7 @@ final class BackupJob {
 	 */
 	private function finish( string $raw, array $state, string $job, int $now ): array {
 		if ( 'full' === $state['type'] && 'db' !== $state['scope'] && is_file( $job . '/baseline-new.jsonl' ) ) {
-			( new IncrementalBaseline( WorkDir::baseline_dir() ) )->promote( $job . '/baseline-new.jsonl', (string) $state['backup_id'], (int) $state['created_at'] );
+			( new IncrementalBaseline( WorkDir::baseline_dir() ) )->promote( $job . '/baseline-new.jsonl', (string) $state['backup_id'], self::full_started_at( $state ) );
 		}
 		$this->close( $raw, $state, 'done', null, $now );
 
@@ -1215,6 +1222,37 @@ final class BackupJob {
 			'finished'  => true,
 			'totals'    => (array) $state['totals'],
 		];
+	}
+
+	/**
+	 * Départ de la complète promu avec son état local, référence de IncrementalBaseline::same() :
+	 * `disk_started_at` (le plus tôt de l'heure de PHP et de l'horloge du disque au départ) ;
+	 * sauvegarde commencée par une version précédente du connecteur, sans lui : `created_at`, comme
+	 * alors.
+	 *
+	 * @param array<string, mixed> $state
+	 */
+	private static function full_started_at( array $state ): int {
+		$created = (int) $state['created_at'];
+		$disk    = $state['disk_started_at'] ?? null;
+
+		return is_int( $disk ) ? min( $created, $disk ) : $created;
+	}
+
+	/**
+	 * Date posée par le système de fichiers sur un fichier du module qui vient d'être écrit : fstat()
+	 * du fichier ouvert par WorkDir::open_private(), jamais à travers un lien ; null s'il ne s'ouvre
+	 * pas ou si sa date n'est pas plausible (0 ou moins).
+	 */
+	private static function disk_time( string $file ): ?int {
+		$handle = WorkDir::open_private( $file, 'rb' );
+		if ( null === $handle ) {
+			return null;
+		}
+		$stat = fstat( $handle );
+		fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- fichier ouvert seulement pour sa date.
+
+		return false === $stat || $stat['mtime'] <= 0 ? null : (int) $stat['mtime'];
 	}
 
 	/**
