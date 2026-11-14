@@ -909,12 +909,19 @@ final class BackupJob {
 				$files['done'] = true;
 			}
 		);
+		// État local revérifié après le segment, sur le fichier resté ouvert (BaselineReader::intact()) :
+		// tronqué, réécrit ou remplacé pendant le segment, il a pu être lu en partie seulement, et sa
+		// fin prise pour une fin normale (lignes jamais comparées, suppressions oubliées).
+		$intact = null === $reader || $reader->intact( (int) $files['baseline_size'], (int) $files['baseline_mtime'], (int) $files['baseline_ino'] );
 		if ( null !== $reader ) {
 			$reader->close();
 		}
 		// Après la production, quel que soit le chemin de sortie du remplissage : le segment produit
 		// n'est pas enregistré, close() retire le dossier de la sauvegarde.
 		self::refuse_unlisted_root( $walker );
+		if ( ! $intact ) {
+			throw new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE, null, BackupRefused::DETAIL_BASELINE_LOST ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message construit par BackupRefused (phrase traduite, code constant).
+		}
 		// Dossiers refusés que ce parcours n'a pas rendus : chacun est découvert par un seul parcours
 		// (le curseur passe ensuite au-delà de lui), donc compté une seule fois.
 		$totals['unreadable'] = (int) $totals['unreadable'] + count( array_diff_key( array_flip( $walker->unlisted() ), $refused ) );
@@ -1363,11 +1370,16 @@ final class BackupJob {
 	 * par WorkDir::open_private() (jamais à travers un lien), le même fichier que celui vérifié au
 	 * départ (taille, date et inode lus par fstat(), fiables sous Linux comme sous Windows), puis placé
 	 * au décalage de reprise gardé dans l'état. Disparu, changé de taille ou de date, remplacé par un
-	 * autre fichier, ou décalage au-delà de sa fin : la sauvegarde s'arrête. Une incrémentale sans son
-	 * état local oublierait les suppressions (une restauration ressusciterait un fichier supprimé) :
-	 * jamais dite réussie. Phrase du refus : celle d'un lien s'il en est la cause, sinon
-	 * DETAIL_BASELINE_LOST (liste disparue ou changée) ou DETAIL_BASELINE_STATE (avancement gardé
-	 * dans l'état incomplet ou incohérent).
+	 * autre fichier, ou décalage au-delà de sa fin : la sauvegarde s'arrête. Ce contrôle d'ouverture
+	 * ne couvre pas le segment lui-même : files_segment() revérifie le fichier resté ouvert après le
+	 * segment (BaselineReader::intact() : taille, date et inode par fstat(), et fin lue à sa taille),
+	 * avant de l'enregistrer ; tronqué, réécrit ou remplacé pendant le segment, même le dernier, il
+	 * arrête la sauvegarde de la même façon (DETAIL_BASELINE_LOST). Une incrémentale sans son état
+	 * local entier oublierait des suppressions (une restauration ressusciterait un fichier
+	 * supprimé) : jamais dite réussie, sauf un état local réécrit sur place à taille égale puis remis
+	 * à sa date d'origine, que fstat() ne distingue pas (limite de BaselineReader::intact()). Phrase
+	 * du refus : celle d'un lien s'il en est la cause, sinon DETAIL_BASELINE_LOST (liste disparue ou
+	 * changée) ou DETAIL_BASELINE_STATE (avancement gardé dans l'état incomplet ou incohérent).
 	 *
 	 * @param array<string, mixed> $files État `files` de la sauvegarde.
 	 * @throws BackupRefused WORK_DIR_UNAVAILABLE (phrase du lien si un lien en est la cause).

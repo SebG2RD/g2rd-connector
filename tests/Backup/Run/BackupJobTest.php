@@ -1228,6 +1228,190 @@ final class BackupJobTest extends BackupTestCase {
 	}
 
 	/**
+	 * Arbre de $fichiers fichiers aux noms longs (pour 300, un état local d'environ 40 Kio, bien plus
+	 * grand que le tampon de lecture de PHP, 8 Kio) et `wp-content/zzz-supprime.txt` ; état local de
+	 * la complète B1 écrit d'après cet arbre, puis ce fichier supprimé : l'incrémentale doit le dire
+	 * `deleted`. Rend le chemin de l'état local.
+	 */
+	private function etat_local_long_avec_un_fichier_supprime( int $fichiers = 300 ): string {
+		for ( $i = 0; $i < $fichiers; $i++ ) {
+			$f = $this->racine . sprintf( '/wp-content/f%03d-un-nom-assez-long-pour-grossir-chaque-ligne-de-l-etat-local.txt', $i );
+			file_put_contents( $f, 'x' );
+			touch( $f, self::NOW - 3600 );
+		}
+		$supprime = $this->racine . '/wp-content/zzz-supprime.txt';
+		file_put_contents( $supprime, 'à supprimer' );
+		touch( $supprime, self::NOW - 3600 );
+		$this->etat_local_de_l_arbre();
+		unlink( $supprime );
+		clearstatcache();
+
+		return WorkDir::baseline_dir() . '/' . self::B1 . '.jsonl';
+	}
+
+	/**
+	 * Horloge monotone réelle qui, aux lectures dont le numéro est une clé de $actions (pendant le
+	 * parcours du segment de fichiers : l'horloge est lue après chaque entrée), touche à l'état
+	 * local par l'action correspondante.
+	 *
+	 * @param array<int, \Closure(): void> $actions Numéro de lecture → action.
+	 * @param int                          $appels  Lectures faites (rendu pour vérifier que l'action a eu lieu).
+	 * @return \Closure(): int
+	 */
+	private static function horloge_qui_touche_l_etat_local( array $actions, int &$appels ): \Closure {
+		$appels = 0;
+
+		return static function () use ( $actions, &$appels ): int {
+			++$appels;
+			if ( isset( $actions[ $appels ] ) ) {
+				$actions[ $appels ]();
+			}
+			return (int) ( hrtime( true ) / 1000000 );
+		};
+	}
+
+	/**
+	 * État local de la complète parente tronqué sur place (même fichier, même inode) pendant le
+	 * dernier segment de fichiers d'une incrémentale — pour une petite incrémentale, presque toute la
+	 * sauvegarde. Le lecteur prenait la fin du fichier pour une fin normale : les lignes restantes
+	 * n'étaient jamais comparées, le fichier supprimé qu'elles décrivent n'était pas noté, et
+	 * l'incrémentale finissait « réussie » (une restauration l'aurait fait revenir). Revérifié après
+	 * le segment : arrêtée en échec, phrase de l'état local perdu, jamais `done`.
+	 */
+	public function test_etat_local_tronque_sur_place_pendant_le_dernier_segment_arrete_l_incrementale(): void {
+		$etat_local = $this->etat_local_long_avec_un_fichier_supprime();
+		$appels     = 0;
+		$ms         = self::horloge_qui_touche_l_etat_local(
+			[
+				20 => static function () use ( $etat_local ): void {
+					$h = fopen( $etat_local, 'r+b' );
+					ftruncate( $h, 0 );
+					fclose( $h );
+				},
+			],
+			$appels
+		);
+		$job = $this->job( null, $ms );
+		$job->start( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
+		self::assertSame( 'incremental', BackupState::load()['state']['type'], 'état local utilisable au départ' );
+
+		$this->assert_incrementale_arretee_sans_son_etat_local( $job, 'perdu' );
+		self::assertGreaterThanOrEqual( 20, $appels, 'état local tronqué pendant le segment' );
+	}
+
+	/**
+	 * Même arrêt quand l'état local est réécrit sur place à taille égale pendant le segment (même
+	 * inode, même taille, date changée) : la fin du fichier, rendue illisible, était sautée sans être
+	 * comparée, et le fichier supprimé qu'elle décrit oublié.
+	 */
+	public function test_etat_local_reecrit_sur_place_a_taille_egale_pendant_le_segment_arrete_l_incrementale(): void {
+		$etat_local = $this->etat_local_long_avec_un_fichier_supprime();
+		// Date reculée avant le départ (contenu intact, l'empreinte est la même) : la réécriture ne
+		// peut pas tomber dans la même seconde qu'elle.
+		touch( $etat_local, self::NOW - 7200 );
+		clearstatcache();
+		$taille = (int) filesize( $etat_local );
+		$appels = 0;
+		$ms     = self::horloge_qui_touche_l_etat_local(
+			[
+				20 => static function () use ( $etat_local, $taille ): void {
+					$h = fopen( $etat_local, 'r+b' );
+					fseek( $h, 16384 );
+					fwrite( $h, str_repeat( ' ', $taille - 16384 - 1 ) );
+					fclose( $h );
+				},
+			],
+			$appels
+		);
+		$job = $this->job( null, $ms );
+		$job->start( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
+		self::assertSame( 'incremental', BackupState::load()['state']['type'], 'état local utilisable au départ' );
+
+		$this->assert_incrementale_arretee_sans_son_etat_local( $job, 'perdu' );
+		self::assertGreaterThanOrEqual( 20, $appels, 'état local réécrit pendant le segment' );
+		clearstatcache();
+		self::assertSame( $taille, filesize( $etat_local ), 'taille égale' );
+	}
+
+	/**
+	 * Tronqué puis remis à l'identique pendant le segment (même contenu, même taille, même date,
+	 * même inode) : à la fin du segment, rien ne le distingue plus du fichier vérifié au départ,
+	 * mais le lecteur a pris la troncature pour la fin du fichier, avant sa taille. Arrêt, phrase de
+	 * l'état local perdu.
+	 */
+	public function test_etat_local_tronque_puis_remis_en_etat_pendant_le_segment_arrete_l_incrementale(): void {
+		$etat_local = $this->etat_local_long_avec_un_fichier_supprime();
+		$contenu    = (string) file_get_contents( $etat_local );
+		// Date posée par touch() avant le départ comme à la remise en état : la même des deux côtés,
+		// quelle que soit la façon dont la plateforme arrondit une date posée puis relue.
+		touch( $etat_local, self::NOW - 7200 );
+		clearstatcache();
+		$date   = (int) filemtime( $etat_local );
+		$appels = 0;
+		$ms         = self::horloge_qui_touche_l_etat_local(
+			[
+				20  => static function () use ( $etat_local ): void {
+					$h = fopen( $etat_local, 'r+b' );
+					ftruncate( $h, 0 );
+					fclose( $h );
+				},
+				// Bien après la fin du tampon déjà lu (8 Kio, une soixantaine de lignes) : le lecteur a
+				// déjà buté sur la fin du fichier tronqué.
+				200 => static function () use ( $etat_local, $contenu ): void {
+					$h = fopen( $etat_local, 'r+b' );
+					fwrite( $h, $contenu );
+					fclose( $h );
+					touch( $etat_local, self::NOW - 7200 );
+				},
+			],
+			$appels
+		);
+		$job = $this->job( null, $ms );
+		$job->start( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
+
+		$this->assert_incrementale_arretee_sans_son_etat_local( $job, 'perdu' );
+		self::assertGreaterThanOrEqual( 200, $appels, 'état local remis en état pendant le segment' );
+		clearstatcache();
+		self::assertSame( [ $contenu, $date ], [ (string) file_get_contents( $etat_local ), (int) filemtime( $etat_local ) ], 'remis à l’identique' );
+	}
+
+	/**
+	 * La revérification de l'état local après chaque segment n'arrête jamais une incrémentale
+	 * normale : le lire ne change ni sa taille, ni sa date, ni son inode. Incrémentale de plusieurs
+	 * segments de fichiers (chaque lecture de l'horloge avance de 1,5 s : une tranche de 20 s ne
+	 * parcourt que quelques entrées), état local rouvert à chaque segment et lu jusqu'à sa fin :
+	 * finie, suppression notée, date de l'état local inchangée.
+	 */
+	public function test_incrementale_sur_plusieurs_segments_jamais_arretee_par_la_reverification_de_l_etat_local(): void {
+		$etat_local = $this->etat_local_long_avec_un_fichier_supprime( 40 );
+		$date       = (int) filemtime( $etat_local );
+		file_put_contents( $this->racine . '/wp-content/a.txt', 'bonsoir !' );
+		$horloge = 0;
+		$job     = $this->job(
+			null,
+			static function () use ( &$horloge ): int {
+				$horloge += 1500;
+				return $horloge;
+			}
+		);
+		$job->start( self::depart( self::B2, 'files', 'incremental', self::B1 ) );
+
+		$r      = $this->jouer_la_suite( $job, self::B2 );
+		$champs = $this->assert_index_valide( $r );
+
+		self::assertSame( 'incremental', $champs['type'] );
+		self::assertGreaterThan( 1, count( array_filter( $champs['segments'], static fn ( array $s ): bool => 'files' === $s['kind'] ) ), 'plusieurs segments de fichiers' );
+		self::assertTrue( $r['fin']['finished'] );
+		self::assertSame( 'done', BackupState::load()['state']['last']['outcome'] );
+		$lignes = array_column( array_filter( $this->manifeste( $r['segments'] ), static fn ( array $l ): bool => 'file' === $l['t'] ), null, 'path' );
+		self::assertSame( [ 'wp-content/zzz-supprime.txt' ], array_keys( array_filter( $lignes, static fn ( array $l ): bool => 'deleted' === $l['state'] ) ), 'le fichier supprimé, et lui seul' );
+		self::assertSame( 'stored', $lignes['wp-content/a.txt']['state'] );
+		self::assertSame( 'unchanged', $lignes['wp-content/f039-un-nom-assez-long-pour-grossir-chaque-ligne-de-l-etat-local.txt']['state'] );
+		clearstatcache();
+		self::assertSame( $date, filemtime( $etat_local ), 'lu, jamais réécrit : date inchangée' );
+	}
+
+	/**
 	 * Incrémentale commencée par une version précédente du connecteur (état sans la taille, la date
 	 * ni l'inode de l'état local, ni le départ de la complète) : arrêtée avec la phrase de l'état ;
 	 * l'état local, intact, sert encore : l'incrémentale suivante sur la même complète reste une

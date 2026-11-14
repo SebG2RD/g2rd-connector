@@ -5,7 +5,10 @@
  * illisible est sautée (elle compte alors comme un fichier nouveau ou supprimé : jamais comme
  * inchangé). Il reçoit le fichier déjà ouvert et placé au décalage de reprise : c'est l'appelant
  * qui l'ouvre sans lien et vérifie qu'il est bien là, de la bonne taille (Run\BackupJob) ; un état
- * local absent ne donne jamais un lecteur vide, qui ferait oublier les suppressions.
+ * local absent ne donne jamais un lecteur vide, qui ferait oublier les suppressions. Une fin de
+ * fichier n'est qu'une fin lue, jamais la preuve que tout a été lu : après chaque segment,
+ * l'appelant revérifie le fichier ouvert par intact() (même taille, même date, même inode, et lu
+ * jusqu'à sa taille si la fin a été atteinte).
  *
  * @package G2RD\Connector
  */
@@ -48,6 +51,28 @@ final class BaselineReader {
 	/** Décalage de la ligne courante (celle que rend peek()) : là où reprendre. */
 	public function offset(): int {
 		return $this->offset;
+	}
+
+	/**
+	 * Le fichier lu est-il toujours celui vérifié au départ, et lu sans trou ? Taille, date et inode
+	 * relus par fstat() du descripteur ouvert (jamais par son chemin, que l'on pourrait avoir
+	 * remplacé), comparés à ceux du départ ; fin du fichier atteinte (peek() nul), elle doit tomber
+	 * à sa taille. Un fichier tronqué ou réécrit sur place pendant la lecture donnait une fin
+	 * prématurée, prise pour une fin normale : les lignes restantes n'étaient jamais comparées.
+	 * Lire ne change ni la taille, ni la date, ni l'inode : jamais faux pour un état local intact.
+	 * Limite : réécrit sur place à taille égale puis remis à sa date d'origine, sans troncature,
+	 * il passerait (geste délibéré, pas celui d'une extension de nettoyage).
+	 */
+	public function intact( int $size, int $mtime, int $ino ): bool {
+		if ( null === $this->handle ) {
+			return false;
+		}
+		$stat = fstat( $this->handle );
+		if ( false === $stat || $size !== $stat['size'] || $mtime !== $stat['mtime'] || $ino !== $stat['ino'] ) {
+			return false;
+		}
+
+		return null !== $this->current || $this->offset === $size;
 	}
 
 	public function close(): void {

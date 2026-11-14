@@ -139,7 +139,8 @@ final class BackupRefused extends \RuntimeException {
 	/**
 	 * Détail de WORK_DIR_UNAVAILABLE quand une incrémentale s'arrête parce que l'état local de la
 	 * complète parente (la liste de ses fichiers, gardée sur le site) a disparu ou changé pendant la
-	 * sauvegarde (Run\BackupJob::baseline_reader()). Toujours une sauvegarde en cours : la phrase
+	 * sauvegarde (Run\BackupJob::baseline_reader() à l'ouverture de chaque segment, puis
+	 * Content\BaselineReader::intact() après lui). Toujours une sauvegarde en cours : la phrase
 	 * l'est d'emblée. La prochaine sauvegarde revérifie cette liste par son empreinte
 	 * (IncrementalBaseline::usable_for()) et devient une complète si elle n'est plus intacte. Seule
 	 * la phrase change.
