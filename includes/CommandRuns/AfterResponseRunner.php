@@ -127,6 +127,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\CommandRuns;
 
+use G2RD\Connector\Backup\Commands\BackupRefused;
 use G2RD\Connector\Backup\Gate\UpdateGate;
 use G2RD\Connector\Commands\CommandExecutor;
 use G2RD\Connector\PhpErrors\Normalizer;
@@ -850,7 +851,7 @@ final class AfterResponseRunner {
 	/**
 	 * Issue de la commande → résultat enregistré, de la forme de la réponse de `/command`
 	 * (CommandController::handle()) : {command, status, result, error, at, stray_output?,
-	 * error_code?, retry_after?, stage?}, sans `signature_check` (signature toujours exigée sur
+	 * error_code?, retry_after?, stage?, error_detail?}, sans `signature_check` (signature toujours exigée sur
 	 * ces routes). `status` vaut « done » ou « failed », comme l'état que RunLifecycle::finish()
 	 * en tire. Les trois derniers champs, ceux d'un refus à code stable (porte des mises à jour,
 	 * sauvegarde), suivent les bornes de CommandController::refusal_fields().
@@ -894,6 +895,10 @@ final class AfterResponseRunner {
 			$stage = $executed['stage'] ?? null;
 			if ( is_string( $stage ) && 1 === preg_match( '/^[a-z_]{1,32}$/D', $stage ) ) {
 				$outcome['stage'] = $stage;
+			}
+			$detail = $executed['error_detail'] ?? null;
+			if ( is_string( $detail ) && in_array( $detail, BackupRefused::ERROR_DETAILS, true ) ) {
+				$outcome['error_detail'] = $detail;
 			}
 		}
 

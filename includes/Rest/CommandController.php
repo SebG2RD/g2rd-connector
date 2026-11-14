@@ -17,6 +17,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Rest;
 
+use G2RD\Connector\Backup\Commands\BackupRefused;
 use G2RD\Connector\Commands\CommandExecutor;
 use WP_Error;
 use WP_REST_Request;
@@ -107,7 +108,7 @@ final class CommandController {
 
 	/**
 	 * Champs d'un refus à code stable recopiés dans la réponse de /command : `error_code`, puis
-	 * `retry_after` (1 à 3 600) et `stage` (étape d'un autotest en échec) s'ils sont présents et bien
+	 * `retry_after` (1 à 3 600), `stage` (étape d'un autotest en échec) et `error_detail` (cause précise d'un backup_work_dir_unavailable) s'ils sont présents et bien
 	 * formés ; rien pour tout autre échec. Publique pour les tests.
 	 *
 	 * @param array<string, mixed> $outcome Issue de CommandExecutor::run().
@@ -126,6 +127,10 @@ final class CommandController {
 		$stage = $outcome['stage'] ?? null;
 		if ( is_string( $stage ) && 1 === preg_match( '/^[a-z_]{1,32}$/D', $stage ) ) {
 			$fields['stage'] = $stage;
+		}
+		$detail = $outcome['error_detail'] ?? null;
+		if ( is_string( $detail ) && in_array( $detail, BackupRefused::ERROR_DETAILS, true ) ) {
+			$fields['error_detail'] = $detail;
 		}
 
 		return $fields;

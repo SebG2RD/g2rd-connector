@@ -10,6 +10,7 @@ use G2RD\Connector\CommandRuns\Refusal;
 use G2RD\Connector\Cron\HeartbeatJob;
 use G2RD\Connector\Rest\CommandController;
 use G2RD\Connector\Tests\Backup\BackupTestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 use WP_REST_Request;
 
 /**
@@ -103,6 +104,56 @@ final class RefusalContractTest extends BackupTestCase {
 			],
 			HeartbeatJob::result_of( ( new BackupRefused( BackupRefused::SELF_TEST_FAILED, null, '', 'index' ) )->outcome() )
 		);
+	}
+
+	public function test_detail_d_un_dossier_de_travail_indisponible_au_contrat(): void {
+		self::assertSame( BackupRefused::ERROR_DETAILS, $this->contrat['error_detail']['values'] );
+		self::assertSame( BackupRefused::WORK_DIR_UNAVAILABLE, $this->contrat['error_detail']['when_error_code'] );
+		self::assertTrue( $this->contrat['error_detail']['optional'] );
+	}
+
+	/**
+	 * @return array<string, array{0: string}>
+	 */
+	public static function causes_du_dossier_de_travail(): array {
+		return [
+			'lien'                 => [ BackupRefused::DETAIL_LINK ],
+			'dossier lui-même'     => [ BackupRefused::DETAIL_WORK_DIR_LINK ],
+			'état local perdu'     => [ BackupRefused::DETAIL_BASELINE_LOST ],
+			'avancement de l’état' => [ BackupRefused::DETAIL_BASELINE_STATE ],
+		];
+	}
+
+	#[DataProvider( 'causes_du_dossier_de_travail' )]
+	public function test_detail_present_au_depart_et_en_cours_sur_les_deux_chemins( string $detail ): void {
+		$depart   = ( new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE, null, $detail ) )->outcome();
+		$en_cours = ( new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE, null, $detail ) )->in_progress()->outcome();
+
+		foreach ( [
+			'départ' => $depart,
+			'en cours' => $en_cours,
+		] as $moment => $issue ) {
+			self::assertSame( $detail, $issue['error_detail'], $moment . ' : issue' );
+			self::assertSame( $detail, CommandController::refusal_fields( $issue )['error_detail'], $moment . ' : /command' );
+			self::assertSame( $detail, HeartbeatJob::result_of( $issue )['error_detail'], $moment . ' : file' );
+		}
+	}
+
+	public function test_detail_absent_hors_des_quatre_causes(): void {
+		$refus = [
+			'droits (sans détail)' => new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ),
+			'sans détail, en cours' => ( new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE ) )->in_progress(),
+			'autre détail'         => new BackupRefused( BackupRefused::WORK_DIR_UNAVAILABLE, null, 'inconnu' ),
+			'DETAIL_KEY'           => new BackupRefused( BackupRefused::STORE_UNAVAILABLE, null, BackupRefused::DETAIL_KEY ),
+			'DETAIL_SECONDARY_SITE' => new BackupRefused( BackupRefused::DISABLED, null, BackupRefused::DETAIL_SECONDARY_SITE ),
+			'autre code, même détail' => new BackupRefused( BackupRefused::UPDATE_IN_PROGRESS, null, BackupRefused::DETAIL_LINK ),
+		];
+		foreach ( $refus as $nom => $refus_i ) {
+			$issue = $refus_i->outcome();
+			self::assertArrayNotHasKey( 'error_detail', $issue, $nom . ' : issue' );
+			self::assertArrayNotHasKey( 'error_detail', CommandController::refusal_fields( $issue ), $nom . ' : /command' );
+			self::assertArrayNotHasKey( 'error_detail', (array) HeartbeatJob::result_of( $issue ), $nom . ' : file' );
+		}
 	}
 
 	/**

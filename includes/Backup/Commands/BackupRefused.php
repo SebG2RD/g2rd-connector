@@ -221,6 +221,13 @@ final class BackupRefused extends \RuntimeException {
 	public const STAGES = [ 'start', 'segment', 'index' ];
 
 	/**
+	 * Causes précises d'un WORK_DIR_UNAVAILABLE, dites à la plateforme dans `error_detail` (facultatif,
+	 * absent pour les droits ou la création du dossier). Même valeur au départ et en cours de sauvegarde :
+	 * la plateforme sait quelle commande elle a envoyée.
+	 */
+	public const ERROR_DETAILS = [ self::DETAIL_LINK, self::DETAIL_WORK_DIR_LINK, self::DETAIL_BASELINE_LOST, self::DETAIL_BASELINE_STATE ];
+
+	/**
 	 * @param string      $reason_code Un des codes de CODES.
 	 * @param int|null    $retry_after Délai conseillé ; ignoré pour un refus non réessayable.
 	 * @param string      $detail      Raison d'une interruption, nom de table, taille, DETAIL_KEY,
@@ -287,7 +294,7 @@ final class BackupRefused extends \RuntimeException {
 	/**
 	 * Issue d'une commande refusée, de la forme de CommandExecutor::run().
 	 *
-	 * @return array{status: string, error: string, error_code: string, retry_after?: int, stage?: string}
+	 * @return array{status: string, error: string, error_code: string, retry_after?: int, stage?: string, error_detail?: string}
 	 */
 	public function outcome(): array {
 		$outcome = [
@@ -300,6 +307,14 @@ final class BackupRefused extends \RuntimeException {
 		}
 		if ( null !== $this->stage ) {
 			$outcome['stage'] = $this->stage;
+		}
+		if ( self::WORK_DIR_UNAVAILABLE === $this->reason_code ) {
+			// Les variantes « en cours » des liens redonnent la valeur de base.
+			$base = array_search( $this->detail, self::LINK_IN_PROGRESS, true );
+			$cause = false === $base ? $this->detail : $base;
+			if ( in_array( $cause, self::ERROR_DETAILS, true ) ) {
+				$outcome['error_detail'] = $cause;
+			}
 		}
 
 		return $outcome;

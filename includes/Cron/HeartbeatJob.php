@@ -273,7 +273,7 @@ final class HeartbeatJob {
 
 	/**
 	 * `result` du compte rendu envoyé à la plateforme : celui de la commande ; pour un échec qui
-	 * porte un code stable (porte des mises à jour, sauvegarde), le code et le délai (contrat
+	 * porte un code stable (porte des mises à jour, sauvegarde), le code, le délai, l'étape et la cause précise (contrat
 	 * backup-refusal-v1.json, `queue_result`, lus au lot 5-D) ; sinon null, comme aujourd'hui.
 	 * Publique pour les tests.
 	 *
@@ -297,6 +297,10 @@ final class HeartbeatJob {
 		$stage = $outcome['stage'] ?? null;
 		if ( is_string( $stage ) && 1 === preg_match( '/^[a-z_]{1,32}$/D', $stage ) ) {
 			$fields['stage'] = $stage;
+		}
+		$detail = $outcome['error_detail'] ?? null;
+		if ( is_string( $detail ) && in_array( $detail, BackupRefused::ERROR_DETAILS, true ) ) {
+			$fields['error_detail'] = $detail;
 		}
 
 		return $fields;

@@ -88,6 +88,7 @@ final class NoWiringTest extends TestCase {
 	 */
 	private const FICHIERS_AUTORISES = [
 		'includes/Commands/CommandExecutor.php',
+		'includes/Rest/CommandController.php',
 		'includes/Rest/CommandRunsController.php',
 		'includes/CommandRuns/AfterResponseRunner.php',
 		'includes/Plugin.php',
