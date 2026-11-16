@@ -542,6 +542,29 @@ final class ConnectorPanelTest extends TestCase {
 	}
 
 	/**
+	 * Revue UX/UI du banc (16/11) : sous la constante, l'interrupteur « Sauvegardes chiffrées » est
+	 * décoché ET grisé ; à l'œil il ne devait pas ressembler à un interrupteur simplement éteint.
+	 * La ligne porte donc une mention visible « Bloqué par wp-config.php » (avec une icône de
+	 * cadenas), reliée à l'interrupteur par aria-describedby, et un style grisé (classe is-locked,
+	 * comme la case grisée de la page de secours). Le comportement ne change pas.
+	 */
+	public function test_constante_d_arret_l_interrupteur_bloque_se_distingue_d_un_interrupteur_eteint(): void {
+		$panneau = self::panneau();
+		$css     = self::sans_commentaires( self::source( 'assets/admin/src/style.css' ) );
+
+		self::assertMatchesRegularExpression( '/lockedNote=\{\s*state\.backup\.disabledByConstant\s*\?\s*["\x27]Bloqué par wp-config\.php["\x27]\s*:\s*undefined\s*\}/', $panneau, 'mention de blocage passée à la seule ligne des sauvegardes, seulement sous la constante' );
+		self::assertSame( 1, substr_count( $panneau, 'lockedNote={' ), 'une seule ligne porte la mention' );
+		self::assertStringContainsString( "' is-locked'", $panneau, 'la ligne bloquée reçoit la classe is-locked' );
+		self::assertMatchesRegularExpression( '/aria-describedby=\{\s*lockedNote\s*\?\s*`\$\{ id \}-desc \$\{ id \}-lock`\s*:\s*`\$\{ id \}-desc`\s*\}/', $panneau, 'mention reliée à l’interrupteur en plus de la description' );
+		self::assertStringContainsString( 'id={ `${ id }-lock` }', $panneau, 'la mention porte l’identifiant cité par aria-describedby' );
+		self::assertStringContainsString( "'lock'", $panneau . self::source( 'assets/admin/src/icons.tsx' ), 'icône de cadenas' );
+		self::assertStringContainsString( 'setting-row.is-locked', $css, 'style grisé de la ligne bloquée' );
+		self::assertStringContainsString( 'g2rd-connector-setting-lock', $css, 'mise en page de la mention' );
+		self::assertMatchesRegularExpression( '/className="g2rd-connector-setting-lock".*cx\(\s*\x27chip\x27,\s*\x27chip--muted\x27\s*\)/s', $panneau, 'mention rendue avec la pastille existante (chip--muted), pas un motif nouveau' );
+		self::assertSame( 0, preg_match( '/(?<![\w-])is-locked/', self::sans_commentaires( self::source( 'includes/Admin/Page.php' ) ) ), 'la page de secours garde sa case grisée native' );
+	}
+
+	/**
 	 * Décision n° 5 du point de contrôle n° 2 de la phase 4 : constante d'arrêt posée, la case
 	 * « Sauvegardes chiffrées » est grisée ET décochée (la valeur enregistrée, envoyée telle quelle
 	 * par settingsPayload(), est gardée), avec la phrase de la page de secours, qui dit pourquoi et

@@ -161,5 +161,8 @@ relevés). Chaque relevé est `bN-<cible>.txt` ; `fpm` sur `/command`, `ols` sur
   deux écrans. Reste vu le 16/11 : dans le panneau, l'interrupteur bloqué par la constante
   (`disabled`) ne se distingue pas à l'œil d'un interrupteur simplement éteint (seul le texte le dit),
   alors que la page de secours grise la case ; à revoir à la revue UX/UI de la 1.17.0.
+  **Corrigé depuis** (commit « corrige(admin): interrupteur des sauvegardes bloqué par la constante distinct d'un
+  interrupteur éteint ») : la ligne est grisée, avec une pastille visible « Bloqué par wp-config.php » (cadenas),
+  citée par `aria-describedby`. La capture « constante » du panneau est à refaire au prochain passage du banc.
 - `update_theme` rend `done` avec `reason` `upgrade_failed` quand le thème n'a pas de mise à jour et que
   WordPress ne peut pas interroger wordpress.org : à relire du côté des statuts vrais (hors module).

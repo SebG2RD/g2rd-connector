@@ -812,6 +812,11 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 							state.backup.disabledByConstant ||
 							state.backup.lock !== null
 						}
+						lockedNote={
+							state.backup.disabledByConstant
+								? 'Bloqué par wp-config.php'
+								: undefined
+						}
 					/>
 					<SettingRow
 						cx={ cx }
@@ -1046,21 +1051,38 @@ interface SettingRowProps {
 	checked: boolean;
 	onChange: ( checked: boolean ) => void;
 	disabled: boolean;
+	/** Mention visible quand la configuration du site bloque le réglage. */
+	lockedNote?: string;
 }
 
 /**
  * Ligne de réglage : icône, titre et description à gauche, interrupteur à
  * droite. Le titre est le libellé de l'interrupteur (cliquable), la description
- * lui est rattachée pour les lecteurs d'écran.
+ * lui est rattachée pour les lecteurs d'écran. Quand le réglage est bloqué par
+ * la configuration du site (« lockedNote »), la ligne est grisée, une mention
+ * visible avec un cadenas est posée sous la description, et l'interrupteur la
+ * cite aussi dans « aria-describedby » : l'état bloqué se voit et s'entend, et
+ * ne se confond pas avec un interrupteur simplement éteint.
  *
  * @param props Propriétés de la ligne.
  */
 function SettingRow( props: SettingRowProps ): JSX.Element {
-	const { cx, id, icon, title, description, checked, onChange, disabled } =
-		props;
+	const {
+		cx,
+		id,
+		icon,
+		title,
+		description,
+		checked,
+		onChange,
+		disabled,
+		lockedNote,
+	} = props;
 	return (
 		<div
-			className={ `${ cx( 'setting-row' ) }${ checked ? ' is-on' : '' }` }
+			className={ `${ cx( 'setting-row' ) }${ checked ? ' is-on' : '' }${
+				lockedNote ? ' is-locked' : ''
+			}` }
 		>
 			<span className={ cx( 'setting-row__icon' ) }>
 				<Icon name={ icon } />
@@ -1075,6 +1097,17 @@ function SettingRow( props: SettingRowProps ): JSX.Element {
 				>
 					{ description }
 				</p>
+				{ lockedNote && (
+					<p className="g2rd-connector-setting-lock">
+						<span
+							className={ cx( 'chip', 'chip--muted' ) }
+							id={ `${ id }-lock` }
+						>
+							<Icon name="lock" />
+							{ lockedNote }
+						</span>
+					</p>
+				) }
 			</div>
 			<div className={ cx( 'setting-row__control' ) }>
 				<FormToggle
@@ -1085,7 +1118,11 @@ function SettingRow( props: SettingRowProps ): JSX.Element {
 					onChange={ ( event: { target: HTMLInputElement } ) =>
 						onChange( event.target.checked )
 					}
-					aria-describedby={ `${ id }-desc` }
+					aria-describedby={
+						lockedNote
+							? `${ id }-desc ${ id }-lock`
+							: `${ id }-desc`
+					}
 				/>
 			</div>
 		</div>

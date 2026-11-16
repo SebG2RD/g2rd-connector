@@ -204,6 +204,44 @@
     line-height: 1.45;
 }
 
+.g2rd-connector-panel--autonome .g2rd-connector-setting-row.is-locked {
+    background: #f0f0f1;
+    box-shadow: inset 0 0 0 1px #dcdcde;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-setting-row.is-locked .g2rd-connector-setting-row__icon {
+    background: #f0f0f1;
+    color: #8c8f94;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-setting-row.is-locked .g2rd-connector-setting-row__title {
+    color: #646970;
+    cursor: default;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-setting-row.is-locked .g2rd-connector-toggle {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.g2rd-connector-panel--autonome .g2rd-connector-setting-row.is-locked .g2rd-connector-chip--muted {
+    color: #1e1e1e;
+    font-weight: 600;
+}
+
+/* Mention de blocage sous la description d'une ligne de réglage (les deux modes) : cadenas et pastille. */
+.g2rd-connector-setting-lock {
+    display: flex;
+    align-items: center;
+    margin: 6px 0 0;
+}
+
+.g2rd-connector-setting-lock > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
 .g2rd-connector-panel--autonome .g2rd-connector-setting-row__control {
     display: flex;
     flex-shrink: 0;

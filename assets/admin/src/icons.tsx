@@ -5,7 +5,14 @@
  */
 
 export type IconName =
-	'pulse' | 'bolt' | 'terminal' | 'globe' | 'login' | 'shield' | 'alert';
+	| 'pulse'
+	| 'bolt'
+	| 'terminal'
+	| 'globe'
+	| 'login'
+	| 'shield'
+	| 'alert'
+	| 'lock';
 
 const PATHS: Record< IconName, JSX.Element > = {
 	// Signe de vie horaire : tracé de pouls.
@@ -46,6 +53,13 @@ const PATHS: Record< IconName, JSX.Element > = {
 	),
 	// Exiger des commandes signées : bouclier (même tracé que la console).
 	shield: <path d="M12 3l7 3v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6z" />,
+	// Réglage bloqué par la configuration du site : cadenas.
+	lock: (
+		<>
+			<rect x="5" y="11" width="14" height="9" rx="2" />
+			<path d="M8 11V8a4 4 0 0 1 8 0v3" />
+		</>
+	),
 };
 
 export function Icon( { name }: { name: IconName } ): JSX.Element {
