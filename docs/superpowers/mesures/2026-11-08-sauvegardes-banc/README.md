@@ -69,7 +69,9 @@ du banc par émulateur de 10 Gio.
 
 ## Résultats
 
-« fpm » et « ols » : relevé complet dans `eNN-fpm.txt` et `eNN-ols.txt`.
+« fpm » et « ols » : relevé complet dans `eNN-fpm.txt` et `eNN-ols.txt`. Exception : `e20-fpm.txt` et
+`e20-ols.txt` restent le relevé du 08/11 (écrans d'alors, empreintes du premier banc) ; E20 a été
+refait le 16/11 avec les captures seules (ligne E20 ci-dessous).
 
 | N° | Obtenu |
 | --- | --- |
@@ -154,5 +156,10 @@ relevés). Chaque relevé est `bN-<cible>.txt` ; `fpm` sur `/command`, `ols` sur
 - Écrans (revue UX/UI de la tâche 32) : avec la constante, l'interrupteur « Sauvegardes chiffrées »
   s'affiche **actif et grisé** alors que le texte dit « Désactivées » (panneau et page de secours) ;
   la page de secours montre l'empreinte même case décochée, le panneau seulement case cochée.
+  **Corrigé depuis** (c6378a2, 83834fa ; captures du 16/11) : sous la constante, la case est décochée
+  et la phrase de blocage remplace l'aide ; l'empreinte n'apparaît que case cochée et réglable, sur les
+  deux écrans. Reste vu le 16/11 : dans le panneau, l'interrupteur bloqué par la constante
+  (`disabled`) ne se distingue pas à l'œil d'un interrupteur simplement éteint (seul le texte le dit),
+  alors que la page de secours grise la case ; à revoir à la revue UX/UI de la 1.17.0.
 - `update_theme` rend `done` avec `reason` `upgrade_failed` quand le thème n'a pas de mise à jour et que
   WordPress ne peut pas interroger wordpress.org : à relire du côté des statuts vrais (hors module).
