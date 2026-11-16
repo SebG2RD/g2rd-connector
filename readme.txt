@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.17.0-rc.1
+Stable tag: 1.17.0-rc.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -97,6 +97,27 @@ Backups are prepared in wp-content/g2rd-backups, inside a folder whose name is d
 
 == Changelog ==
 
+= 1.17.0-rc.2 =
+
+Second pre-release of the 1.17 line: hardening of the encrypted backups, which stay off by default
+(the manager does not start backups yet), plus the changes of 1.16.0 and 1.16.1 (entries below).
+
+* **Backups: links are never followed in the backup folders.** A symbolic link or a Windows
+  junction found in `wp-content/g2rd-backups/`, or in its place, stops the backup with a message
+  that names it and says what to do; nothing is read, written or removed through it. Each file is
+  opened without following links at the moment it is opened, and the state files are written to a
+  new file, then moved into place.
+* **Incremental backups: the record of the last full backup is re-checked during the backup.** If
+  it disappears or changes (size, date or inode) while an incremental runs, the incremental stops
+  as failed instead of reporting success with missing deletions. A file rewritten with the same
+  size in the same second as the start of the full backup is no longer taken as unchanged, and
+  that start is the earlier of the PHP clock and the disk clock.
+* **Refusals carry an optional `error_detail`** for `backup_work_dir_unavailable` (`link`,
+  `work_dir_link`, `baseline_lost`, `baseline_state`), so the manager can show the real cause
+  instead of a message about folder permissions.
+* Temporary files left by a killed PHP process are removed on the next run, and a backup start
+  refused after its folder was created no longer leaves that folder behind.
+
 = 1.17.0-rc.1 =
 
 * **New: encrypted backups, off by default.** With the "Sauvegardes chiffrées" option on, G2RD WP
@@ -128,6 +149,7 @@ Backups are prepared in wp-content/g2rd-backups, inside a folder whose name is d
   fingerprint of the connector's files per PHP server (8 servers at most), each server identified
   by a short hash of the machine name, the SAPI and the PHP version: no machine name is stored.
   It is a single row per network on a multisite, and is removed when the plugin is deleted.
+
 = 1.16.0 =
 
 Stable release of the 1.16 line, piloted on one site for a week (as 1.16.0-rc.1, 1.16.0-rc.2,
