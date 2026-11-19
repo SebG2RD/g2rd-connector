@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.17.0-rc.2
+Stable tag: 1.17.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -96,6 +96,22 @@ Backups are prepared in wp-content/g2rd-backups, inside a folder whose name is d
 2. Theme-integrated "Manager G2RD" tab in the G2RD theme console (requires `g2rd-theme` >= 1.19 as the theme or its parent theme).
 
 == Changelog ==
+
+= 1.17.0 =
+
+Stable release of the 1.17 line, piloted on one site since 16 November as 1.17.0-rc.2 (details in
+the entries below). Encrypted backups stay off by default and the manager does not start backups
+yet: with the option off, nothing is sent and updates run exactly as before.
+
+* **New: encrypted backups (site side), off by default**, with the `G2RD_CONNECTOR_DISABLE_BACKUP`
+  constant, the "IPv4 vers le stockage des sauvegardes" option and multisite support (1.17.0-rc.1),
+  hardened in 1.17.0-rc.2 (links never followed in the backup folders, the last full backup
+  re-checked during an incremental, optional `error_detail` on refusals).
+* **Admin screen: the backup switch locked by `G2RD_CONNECTOR_DISABLE_BACKUP` no longer looks like a
+  switch that is simply off.** The row shows "Bloqué par wp-config.php" with a lock icon (and is
+  greyed out in the standalone panel); the note is attached to the switch for screen readers.
+  Behaviour is unchanged.
+* npm packages updated; the WordPress packages stay provided by WordPress itself.
 
 = 1.17.0-rc.2 =
 
