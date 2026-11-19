@@ -21,6 +21,8 @@ use G2RD\Connector\Backup\Commands\BackupCommands;
 use G2RD\Connector\Backup\Commands\BackupRefused;
 use G2RD\Connector\Commands\CommandExecutor;
 use G2RD\Connector\Outbound\ManagerClient;
+use G2RD\Connector\ReleaseNotes\ReleaseNotesCommand;
+use G2RD\Connector\ReleaseNotes\ReleaseNotesRefused;
 use G2RD\Connector\Security\QueueSignature;
 use G2RD\Connector\Security\RequestSignature;
 use G2RD\Connector\Security\SignatureState;
@@ -257,8 +259,9 @@ final class HeartbeatJob {
 
 	/**
 	 * Exécution d'une commande tirée de la file. Les commandes de sauvegarde n'y passent pas avant la
-	 * file signée E8 (lot 5-D) : refus `backup_queue_unsupported`, rien d'exécuté. Publique pour les
-	 * tests.
+	 * file signée E8 (lot 5-D) : refus `backup_queue_unsupported`, rien d'exécuté. `get_release_notes`
+	 * n'y passe jamais (spécification « Notes de version », § 5.3 : par `/command` seulement) : refus
+	 * `release_notes_queue_unsupported`, rien de lu. Publique pour les tests.
 	 *
 	 * @param array<string, mixed>|null $payload
 	 * @return array<string, mixed>|null Issue de CommandExecutor::run(), ou du refus ; null si la commande est inconnue.
@@ -266,6 +269,9 @@ final class HeartbeatJob {
 	public static function queue_outcome( string $kind, ?array $payload ): ?array {
 		if ( BackupCommands::is_backup_command( $kind ) ) {
 			return ( new BackupRefused( BackupRefused::QUEUE_UNSUPPORTED ) )->outcome();
+		}
+		if ( ReleaseNotesCommand::NAME === $kind ) {
+			return ( new ReleaseNotesRefused( ReleaseNotesRefused::QUEUE_UNSUPPORTED ) )->outcome();
 		}
 
 		return CommandExecutor::run( $kind, $payload );

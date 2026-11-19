@@ -122,7 +122,7 @@ final class SnapshotEnvironmentTest extends SnapshotTestCase {
 			],
 			$snapshot['server']
 		);
-		self::assertSame( [ 'signed_commands', 'direct_login', 'php_errors' ], $snapshot['capabilities'], 'seule capacité nouvelle : php_errors (1.16)' );
+		self::assertSame( [ 'signed_commands', 'direct_login', 'php_errors', 'release_notes' ], $snapshot['capabilities'], 'capacités nouvelles : php_errors (1.16), release_notes (1.18)' );
 
 		$collected_at = $snapshot['db_health']['collected_at'];
 		self::assertSame(

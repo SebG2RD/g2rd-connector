@@ -49,7 +49,7 @@ final class AucunBranchementTest extends TestCase {
 		'force_ipv4_to_storage'   => false,
 	];
 
-	/** CommandExecutor::ALLOWED d'origin/main, dans son ordre, et les quatre commandes de sauvegarde de la phase 4 (tâche 30). */
+	/** CommandExecutor::ALLOWED d'origin/main, dans son ordre, les quatre commandes de sauvegarde de la phase 4 (tâche 30), puis get_release_notes (1.18.0). */
 	private const COMMANDES_D_ORIGINE = [
 		'clear_cache',
 		'check_updates',
@@ -70,9 +70,10 @@ final class AucunBranchementTest extends TestCase {
 		'backup_start',
 		'backup_step',
 		'backup_abort',
+		'get_release_notes',
 	];
 
-	/** CommandExecutor::SIGNED_ONLY d'origin/main, dans son ordre, et les quatre commandes de sauvegarde de la phase 4 (tâche 30). */
+	/** CommandExecutor::SIGNED_ONLY d'origin/main, dans son ordre, les quatre commandes de sauvegarde de la phase 4 (tâche 30), puis get_release_notes (1.18.0). */
 	private const COMMANDES_SIGNEES_D_ORIGINE = [
 		'rollback_plugin',
 		'delete_restore_point',
@@ -82,6 +83,7 @@ final class AucunBranchementTest extends TestCase {
 		'backup_start',
 		'backup_step',
 		'backup_abort',
+		'get_release_notes',
 	];
 
 	/**

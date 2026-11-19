@@ -25,6 +25,8 @@ use G2RD\Connector\Backup\Commands\BackupCommands;
 use G2RD\Connector\Backup\Commands\BackupRefused;
 use G2RD\Connector\Backup\Gate\UpdateGate;
 use G2RD\Connector\PhpErrors\CaptureCommand;
+use G2RD\Connector\ReleaseNotes\ReleaseNotesCommand;
+use G2RD\Connector\ReleaseNotes\ReleaseNotesRefused;
 use G2RD\Connector\Rest\DbHealth;
 use G2RD\Connector\Rollback\ProtectedUpdate;
 use G2RD\Connector\Rollback\RestoreCommands;
@@ -56,6 +58,7 @@ final class CommandExecutor {
 		'backup_start',
 		'backup_step',
 		'backup_abort',
+		'get_release_notes',
 	];
 
 	/**
@@ -66,7 +69,8 @@ final class CommandExecutor {
 	 * sans signature. `set_php_errors_capture` (1.16) : activer le relevé des erreurs
 	 * PHP fait envoyer des données du site. Les quatre commandes `backup_*` (sauvegardes
 	 * chiffrées, Backup\Commands\BackupCommands) reçoivent une clé, copient et envoient le
-	 * site.
+	 * site. `get_release_notes` (1.18.0, ReleaseNotes\ReleaseNotesCommand) fait appeler par le
+	 * site le serveur d'un éditeur ou wordpress.org.
 	 *
 	 * @var list<string>
 	 */
@@ -79,6 +83,7 @@ final class CommandExecutor {
 		'backup_start',
 		'backup_step',
 		'backup_abort',
+		'get_release_notes',
 	];
 
 	/** Longueur maximale de la sortie parasite remontée au manager (diagnostic). */
@@ -126,7 +131,8 @@ final class CommandExecutor {
 	 * Exécute une commande. Retourne :
 	 *   - [ 'status' => 'done', 'result' => array<string, mixed> ]
 	 *   - [ 'status' => 'failed', 'error' => string ] (+ `error_code` et `retry_after` pour un refus
-	 *     à code stable : porte des mises à jour, sauvegarde ; contrat backup-refusal-v1.json)
+	 *     à code stable : porte des mises à jour, sauvegarde ; contrat backup-refusal-v1.json ;
+	 *     `error_code` seul pour les notes de version, contrat release-notes-command-v1.json)
 	 *   - null si la commande est inconnue.
 	 *
 	 * Le `$payload` est optionnel pour les commandes legacy (clear_cache,
@@ -188,12 +194,15 @@ final class CommandExecutor {
 				'set_signature_policy'      => ( new RestoreCommands( Services::make() ) )->set_signature_policy( (array) ( $payload ?? [] ) ),
 				'set_php_errors_capture'    => ( new CaptureCommand() )->run( (array) ( $payload ?? [] ) ),
 				'backup_set_key', 'backup_start', 'backup_step', 'backup_abort' => BackupCommands::run( $command, (array) ( $payload ?? [] ) ),
+				'get_release_notes'         => ( new ReleaseNotesCommand() )->run( (array) ( $payload ?? [] ) ),
 			};
 			$outcome = [
 				'status' => 'done',
 				'result' => $result,
 			];
 		} catch ( BackupRefused $e ) {
+			$outcome = $e->outcome();
+		} catch ( ReleaseNotesRefused $e ) {
 			$outcome = $e->outcome();
 		} catch ( \Throwable $e ) {
 			$outcome = [
