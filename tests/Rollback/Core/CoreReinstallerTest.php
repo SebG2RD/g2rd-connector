@@ -60,6 +60,53 @@ final class CoreReinstallerTest extends CoreRollbackTestCase {
 		self::assertFileDoesNotExist( $this->downloads[0] );
 	}
 
+	/**
+	 * Une extension lève sur `upgrader_process_complete` APRÈS la copie : la version d'avant est en
+	 * place, les empreintes tranchent, et le verrou `core_updater` (rendu par WordPress seulement après
+	 * ce crochet) est rendu.
+	 */
+	public function test_exception_apres_la_copie_fichiers_controles(): void {
+		$this->upgrade_throws( true, '7.1.4' );
+
+		$locale = CoreReinstaller::reinstall( '7.1.4', 'en_US' );
+
+		self::assertSame( 'en_US', $locale );
+		self::assertSame( '7.1.4', $this->version_on_disk() );
+		self::assertArrayNotHasKey( 'core_updater.lock', $this->options, 'verrou de WordPress rendu' );
+		self::assertFileDoesNotExist( $this->downloads[0] );
+	}
+
+	public function test_exception_apres_la_copie_fichiers_non_conformes(): void {
+		$this->upgrade_throws( true, '7.1.4' );
+		$this->wporg['https://api.wordpress.org/core/checksums/1.0/?version=7.1.4&locale=en_US']['body'] = (string) json_encode( [ 'checksums' => [ 'wp-settings.php' => md5( 'autre contenu' ) ] ] );
+
+		try {
+			CoreReinstaller::reinstall( '7.1.4', 'en_US' );
+			self::fail( 'refus attendu' );
+		} catch ( CoreRollbackRefused $refused ) {
+			self::assertSame( CoreRollbackRefused::INTEGRITY, $refused->error_code() );
+		}
+		self::assertArrayNotHasKey( 'core_updater.lock', $this->options );
+	}
+
+	/**
+	 * Exception AVANT la fin de la copie : échec à code stable ; seule la classe de l'exception est
+	 * reprise (son texte peut porter un chemin du serveur, comme un avertissement converti).
+	 */
+	public function test_exception_avant_la_copie(): void {
+		$this->upgrade_throws( false, '7.1.4' );
+
+		try {
+			CoreReinstaller::reinstall( '7.1.4', 'en_US' );
+			self::fail( 'refus attendu' );
+		} catch ( CoreRollbackRefused $refused ) {
+			self::assertSame( CoreRollbackRefused::FAILED, $refused->error_code() );
+			self::assertStringEndsWith( '(RuntimeException)', $refused->getMessage() );
+			self::assertStringNotContainsString( 'Fatal in upgrader_process_complete', $refused->getMessage() );
+		}
+		self::assertFileDoesNotExist( $this->downloads[0] );
+	}
+
 	public function test_fichiers_installes_differents_des_empreintes(): void {
 		Core_Upgrader::$on_upgrade = static function (): void {
 			file_put_contents( ABSPATH . 'wp-settings.php', "<?php // copie incomplète\n" );

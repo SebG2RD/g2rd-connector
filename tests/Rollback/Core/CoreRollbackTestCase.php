@@ -231,4 +231,43 @@ abstract class CoreRollbackTestCase extends TestCase {
 			]
 		);
 	}
+
+	/**
+	 * Core_Upgrader simulé qui lève pendant l'installation des versions `$versions`, comme une
+	 * extension sur `upgrader_process_complete` (même crochet, type `core`, pour la mise à jour et pour
+	 * la réinstallation) : une fois la copie faite (`_core_updated_successfully` émise) si `$after_copy`,
+	 * sinon avant ; verrou `core_updater` pris comme WP_Upgrader::create_lock(). Les autres versions
+	 * s'installent normalement.
+	 */
+	protected function upgrade_throws( bool $after_copy, string ...$versions ): void {
+		$marker = null;
+		Functions\when( 'add_action' )->alias(
+			static function ( string $hook, $callback ) use ( &$marker ): bool {
+				if ( '_core_updated_successfully' === $hook ) {
+					$marker = $callback;
+				}
+				return true;
+			}
+		);
+		Functions\when( 'remove_action' )->alias(
+			static function ( string $hook ) use ( &$marker ): bool {
+				if ( '_core_updated_successfully' === $hook ) {
+					$marker = null;
+				}
+				return true;
+			}
+		);
+		Core_Upgrader::$on_upgrade = function ( object $offer ) use ( $after_copy, $versions, &$marker ): void {
+			if ( ! in_array( $offer->version, $versions, true ) ) {
+				$this->install( (string) $offer->version );
+				return;
+			}
+			$this->options['core_updater.lock'] = time();
+			if ( $after_copy ) {
+				$this->install( (string) $offer->version );
+				( $marker )( $offer->version );
+			}
+			throw new \RuntimeException( 'Fatal in upgrader_process_complete' );
+		};
+	}
 }

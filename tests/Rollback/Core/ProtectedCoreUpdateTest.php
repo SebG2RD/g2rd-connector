@@ -358,7 +358,7 @@ final class ProtectedCoreUpdateTest extends CoreRollbackTestCase {
 	 */
 	public function test_exception_apres_la_copie_controle_puis_retour_automatique(): void {
 		$this->breaks_on = '7.1.5';
-		$this->upgrade_throws( true );
+		$this->upgrade_throws( true, '7.1.5' );
 
 		$result = ( new ProtectedCoreUpdate( $this->health ) )->run( self::PAYLOAD, self::perform_core_upgrade( true ) );
 
@@ -372,8 +372,28 @@ final class ProtectedCoreUpdateTest extends CoreRollbackTestCase {
 		self::assertArrayNotHasKey( UpdateTransaction::OPTION_KEY, $this->options );
 	}
 
+	/**
+	 * La même extension lève aussi pendant la réinstallation de 7.1.4, après sa copie : le retour a eu
+	 * lieu (empreintes conformes), il n'est pas dit échoué, et le verrou `core_updater` est rendu.
+	 */
+	public function test_exception_apres_la_copie_aussi_pendant_la_reinstallation(): void {
+		$this->breaks_on = '7.1.5';
+		$this->upgrade_throws( true, '7.1.5', '7.1.4' );
+
+		$result = ( new ProtectedCoreUpdate( $this->health ) )->run( self::PAYLOAD, self::perform_core_upgrade( true ) );
+
+		self::assertTrue( $result['rolled_back'] );
+		self::assertSame( '7.1.4', $result['version_after'] );
+		self::assertSame( 'en_US', $result['locale'] );
+		self::assertArrayNotHasKey( 'error_code', $result );
+		self::assertSame( '7.1.4', $this->version_on_disk() );
+		self::assertCount( 2, Core_Upgrader::$calls );
+		self::assertArrayNotHasKey( 'core_updater.lock', $this->options, 'verrou de WordPress rendu' );
+		self::assertArrayNotHasKey( UpdateTransaction::OPTION_KEY, $this->options );
+	}
+
 	public function test_exception_apres_la_copie_site_sain_mise_a_jour_faite(): void {
-		$this->upgrade_throws( true );
+		$this->upgrade_throws( true, '7.1.5' );
 
 		$result = ( new ProtectedCoreUpdate( $this->health ) )->run( self::PAYLOAD, self::perform_core_upgrade( true ) );
 
@@ -397,7 +417,7 @@ final class ProtectedCoreUpdateTest extends CoreRollbackTestCase {
 
 	#[DataProvider( 'exception_that_propagates' )]
 	public function test_exception_remontee( bool $after_copy, bool $is_protected ): void {
-		$this->upgrade_throws( $after_copy );
+		$this->upgrade_throws( $after_copy, '7.1.5' );
 
 		$this->expectExceptionMessage( 'Fatal in upgrader_process_complete' );
 		if ( $is_protected ) {
@@ -414,44 +434,6 @@ final class ProtectedCoreUpdateTest extends CoreRollbackTestCase {
 	 */
 	private static function perform_core_upgrade( bool $is_protected ): callable {
 		return static fn (): array => ( new \ReflectionMethod( CommandExecutor::class, 'perform_core_upgrade' ) )->invoke( null, $is_protected );
-	}
-
-	/**
-	 * Core_Upgrader simulé qui lève pendant la mise à jour vers 7.1.5, comme une extension sur
-	 * `upgrader_process_complete`, une fois la copie faite (`_core_updated_successfully` émise) ou
-	 * avant ; verrou `core_updater` pris comme WP_Upgrader::create_lock(). La réinstallation de
-	 * 7.1.4 se passe normalement.
-	 */
-	private function upgrade_throws( bool $after_copy ): void {
-		$marker = null;
-		Functions\when( 'add_action' )->alias(
-			static function ( string $hook, $callback ) use ( &$marker ): bool {
-				if ( '_core_updated_successfully' === $hook ) {
-					$marker = $callback;
-				}
-				return true;
-			}
-		);
-		Functions\when( 'remove_action' )->alias(
-			static function ( string $hook ) use ( &$marker ): bool {
-				if ( '_core_updated_successfully' === $hook ) {
-					$marker = null;
-				}
-				return true;
-			}
-		);
-		Core_Upgrader::$on_upgrade = function ( object $offer ) use ( $after_copy, &$marker ): void {
-			if ( '7.1.5' !== $offer->version ) {
-				$this->install( (string) $offer->version );
-				return;
-			}
-			$this->options['core_updater.lock'] = time();
-			if ( $after_copy ) {
-				$this->install( '7.1.5' );
-				( $marker )( '7.1.5' );
-			}
-			throw new \RuntimeException( 'Fatal in upgrader_process_complete' );
-		};
 	}
 
 	/**

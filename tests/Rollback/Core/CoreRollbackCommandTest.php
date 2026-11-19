@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Tests\Rollback\Core;
 
+use Brain\Monkey\Functions;
 use Core_Upgrader;
 use G2RD\Connector\Rollback\AutoUpdateGuard;
 use G2RD\Connector\Rollback\Core\CoreRollbackCommand;
@@ -178,6 +179,69 @@ final class CoreRollbackCommandTest extends CoreRollbackTestCase {
 		self::assertSame( $blocked ? [ AutoUpdateGuard::CORE => '7.1.5' ] : [], AutoUpdateGuard::all() );
 		$txn = $this->options[ UpdateTransaction::OPTION_KEY ] ?? null;
 		self::assertTrue( null === $txn || isset( $txn['recovery_token'] ) || 'akismet/akismet.php' === ( $txn['plugin_file'] ?? null ), 'transaction de la commande rendue, celle d\'un autre processus laissée' );
+	}
+
+	/**
+	 * Une extension lève sur `upgrader_process_complete` après la copie de 7.1.4 : le retour a eu
+	 * lieu, il est dit réussi (santé mesurée, informations gardées effacées, verrou de WordPress rendu).
+	 */
+	public function test_exception_apres_la_copie_retour_reussi(): void {
+		$this->upgrade_throws( true, '7.1.4' );
+
+		$result = ( new CoreRollbackCommand( $this->health ) )->run( self::PAYLOAD );
+
+		self::assertSame( 'rollback_success', $result['outcome'] );
+		self::assertSame( '7.1.4', $result['version_after'] );
+		self::assertSame( 'healthy', $result['health']['verdict'] );
+		self::assertSame( '7.1.4', $this->version_on_disk() );
+		self::assertArrayNotHasKey( ProtectedCoreUpdate::RECORD_OPTION, $this->options );
+		self::assertArrayNotHasKey( 'core_updater.lock', $this->options, 'verrou de WordPress rendu' );
+		self::assertArrayNotHasKey( UpdateTransaction::OPTION_KEY, $this->options );
+	}
+
+	/**
+	 * Exception imprévue, pendant la réinstallation (avant la copie) ou ailleurs (lecture des
+	 * informations gardées) : résultat `core_rollback_failed`, jamais le texte de l'exception (il peut
+	 * porter un chemin du serveur), transaction rendue, informations gardées intactes.
+	 *
+	 * @return iterable<string, array{\Closure(self): void}>
+	 */
+	public static function unexpected_exceptions(): iterable {
+		yield 'pendant la réinstallation, avant la copie' => [
+			static function ( self $test ): void {
+				$test->upgrade_throws( false, '7.1.4' );
+			},
+		];
+		yield 'hors de la réinstallation' => [
+			static function ( self $test ): void {
+				$get_option = static fn ( string $key, $fallback = false ) => array_key_exists( $key, $test->options ) ? $test->options[ $key ] : $fallback;
+				Functions\when( 'get_option' )->alias(
+					static function ( string $key, $fallback = false ) use ( $get_option ) {
+						if ( ProtectedCoreUpdate::RECORD_OPTION === $key ) {
+							throw new \ErrorException( 'unserialize(): Error at offset 0 of 12 bytes in /home/site/public_html/wp-includes/functions.php' );
+						}
+						return $get_option( $key, $fallback );
+					}
+				);
+			},
+		];
+	}
+
+	#[DataProvider( 'unexpected_exceptions' )]
+	public function test_exception_imprevue( \Closure $setup ): void {
+		$setup( $this );
+		$kept = $this->options[ ProtectedCoreUpdate::RECORD_OPTION ];
+
+		$result = ( new CoreRollbackCommand( $this->health ) )->run( self::PAYLOAD );
+
+		self::assertSame( 'core_rollback_failed', $result['outcome'] );
+		self::assertSame( 'core_rollback_failed', $result['error_code'] );
+		self::assertStringNotContainsString( '/home/', $result['error'] );
+		self::assertStringNotContainsString( 'Fatal in upgrader_process_complete', $result['error'] );
+		self::assertMatchesRegularExpression( '/\((RuntimeException|ErrorException)\)$/', $result['error'] );
+		self::assertSame( '7.1.5', $result['version_after'] );
+		self::assertSame( $kept, $this->options[ ProtectedCoreUpdate::RECORD_OPTION ], 'retour redemandable' );
+		self::assertArrayNotHasKey( UpdateTransaction::OPTION_KEY, $this->options );
 	}
 
 	/**

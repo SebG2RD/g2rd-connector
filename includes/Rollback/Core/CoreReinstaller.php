@@ -19,6 +19,7 @@ namespace G2RD\Connector\Rollback\Core;
 use Automatic_Upgrader_Skin;
 use Core_Upgrader;
 use G2RD\Connector\Rollback\UpdateTransaction;
+use WP_Upgrader;
 
 final class CoreReinstaller {
 
@@ -37,11 +38,31 @@ final class CoreReinstaller {
 		// plus) : la copie repart avec 10 minutes devant elle avant qu'une reprise tienne la transaction
 		// pour morte (UpdateTransaction::STALE_AFTER_SECONDS). Sans effet hors transaction.
 		UpdateTransaction::touch();
+		// Marqueur « fichiers copiés », comme CommandExecutor::perform_core_upgrade() : update_core()
+		// émet `_core_updated_successfully` une fois la copie faite, avant `upgrader_process_complete`.
+		$copied      = false;
+		$mark_copied = static function () use ( &$copied ): void {
+			$copied = true;
+		};
+		add_action( '_core_updated_successfully', $mark_copied, PHP_INT_MIN );
 		try {
 			$upgrader = new Core_Upgrader( new Automatic_Upgrader_Skin() );
 			// pre_check_md5 à faux : il ne sert qu'à choisir un paquet partiel, exclu pour `reinstall`.
 			$result = $upgrader->upgrade( self::offer( $version, $package['locale'], $package['path'] ), [ 'pre_check_md5' => false ] );
+		} catch ( \Throwable $e ) {
+			/** @var bool $copied Passé à vrai par référence, dans $mark_copied. */
+			if ( ! $copied ) {
+				// Classe seulement : le texte d'une exception peut porter un chemin du serveur.
+				throw CoreRollbackRefused::because( CoreRollbackRefused::FAILED, get_class( $e ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- phrase fixe (CoreRollbackRefused), détail court, jamais affichée en HTML.
+			}
+			// Exception APRÈS la copie (crochet d'une extension sur `upgrader_process_complete`) : la
+			// version d'avant est en place, les empreintes tranchent. Verrou `core_updater` rendu ici,
+			// WordPress ne le rendant qu'après ce crochet (sinon `locked` pendant 15 minutes) ; il
+			// appartient à cet upgrade(), qui vient de le prendre.
+			WP_Upgrader::release_lock( 'core_updater' );
+			$result = $version;
 		} finally {
+			remove_action( '_core_updated_successfully', $mark_copied, PHP_INT_MIN );
 			// Supprimé par WP_Upgrader::unpack_package() une fois décompressé ; reste quand
 			// Core_Upgrader s'arrête avant (verrou, système de fichiers).
 			if ( file_exists( $package['path'] ) ) {

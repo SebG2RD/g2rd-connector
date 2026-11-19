@@ -16,7 +16,8 @@
  * des informations gardées.
  *
  * Comme rollback_plugin, les cas prévus sont des RÉSULTATS (`outcome`), pas des exceptions : le
- * manager les lit sur le chemin direct comme en arrière-plan.
+ * manager les lit sur le chemin direct comme en arrière-plan. Une exception imprévue aussi
+ * (`core_rollback_failed`, avec sa classe seulement) : aucun texte tiers ne part au manager.
  *
  * @package G2RD\Connector
  */
@@ -66,7 +67,9 @@ final class CoreRollbackCommand {
 			} finally {
 				UpdateTransaction::close();
 			}
-		} catch ( CoreRollbackRefused $refused ) {
+		} catch ( \Throwable $e ) {
+			// Exception imprévue : code stable, et sa classe seulement (son texte peut porter un chemin du serveur).
+			$refused = $e instanceof CoreRollbackRefused ? $e : CoreRollbackRefused::because( CoreRollbackRefused::FAILED, get_class( $e ) );
 			return [
 				'outcome'        => $refused->error_code(),
 				'error_code'     => $refused->error_code(),
