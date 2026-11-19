@@ -162,5 +162,19 @@ final class CorePackageTest extends CoreRollbackTestCase {
 		unlink( ABSPATH . 'wp-includes/version.php' );
 		self::assertSame( [ 'wp-settings.php', 'wp-includes/version.php' ], CorePackage::mismatched_files( $checksums, ABSPATH ) );
 		self::assertSame( [ '../wp-config.php' ], CorePackage::mismatched_files( [ '../wp-config.php' => md5( '' ) ], ABSPATH ), 'jamais lu' );
+
+		// Retirés par une extension de sécurité après la copie (All-In-One Security) : jamais un échec.
+		$extras = [
+			'readme.html'          => md5( 'readme' ),
+			'license.txt'          => md5( 'license' ),
+			'wp-config-sample.php' => md5( 'sample' ),
+		];
+		self::assertSame( [], CorePackage::mismatched_files( $extras, ABSPATH ), 'absents tolérés' );
+		file_put_contents( ABSPATH . 'wp-config-sample.php', "<?php // modifié\n" );
+		try {
+			self::assertSame( [ 'wp-config-sample.php' ], CorePackage::mismatched_files( $extras, ABSPATH ), 'présent mais modifié' );
+		} finally {
+			unlink( ABSPATH . 'wp-config-sample.php' );
+		}
 	}
 }

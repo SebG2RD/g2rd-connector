@@ -110,9 +110,9 @@ final class CorePackage {
 	}
 
 	/**
-	 * Fichiers du cœur absents ou différents de leur empreinte, `wp-content/` exclu (comme
-	 * Core_Upgrader::check_files()). Une entrée dont le chemin remonte (`..`) ou part de la racine
-	 * compte comme différente, sans être lue.
+	 * Fichiers du cœur absents ou différents de leur empreinte, `wp-content/` exclu (comme le
+	 * contrôle de update_core() après la copie). Une entrée dont le chemin remonte (`..`) ou part de
+	 * la racine compte comme différente, sans être lue.
 	 *
 	 * @param array<string, string> $checksums Chemin relatif ⇒ md5.
 	 * @return list<string>
@@ -122,6 +122,13 @@ final class CorePackage {
 		$bad  = [];
 		foreach ( $checksums as $file => $md5 ) {
 			if ( str_starts_with( $file, 'wp-content/' ) ) {
+				continue;
+			}
+			// Comme update_core() : .html/.txt de la racine jamais contrôlés ; wp-config-sample.php absent toléré, car des extensions de sécurité les suppriment sur upgrader_process_complete (All-In-One Security).
+			if ( ! str_contains( $file, '/' ) && in_array( pathinfo( $file, PATHINFO_EXTENSION ), [ 'html', 'txt' ], true ) ) {
+				continue;
+			}
+			if ( 'wp-config-sample.php' === $file && ! file_exists( $root . $file ) ) {
 				continue;
 			}
 			if ( str_contains( $file, '..' ) || str_starts_with( $file, '/' ) || ! is_file( $root . $file ) || md5_file( $root . $file ) !== $md5 ) {
