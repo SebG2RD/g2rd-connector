@@ -273,6 +273,63 @@ aujourd'hui toute version ≥ 2 pour la version 2.
   ou sur mesure : faux. Aucun appel réseau de plus. Le champ est omis quand ce transient n'a pas
   de réponse de wordpress.org (réseau coupé) : le manager garde alors son ancien calcul.
 
+### Provenance des mises à jour dans l'inventaire (1.18)
+
+- **`plugins[].update_source`** et **`themes[].update_source`** : `wporg` si l'entrée de mise à
+  jour vue par l'inventaire (transient `update_plugins` ou `update_themes` après le rejeu de la
+  capture des mises à jour tierces ; entrée `response` d'abord, sinon `no_update`) vient de
+  wordpress.org — `id` en `w.org/`, ou fiche ou paquet sur wordpress.org ou l'un de ses
+  sous-domaines, et aucune fiche ni aucun paquet ailleurs ; `vendor` si une entrée existe et n'en
+  vient pas (updater de l'éditeur, en-tête `Update URI`, rejeu de la capture) ; `null` sans entrée.
+  Aucun appel réseau. Code : `Updates\UpdateSource`, qui porte aussi la règle du champ `wporg` des
+  thèmes.
+- **`wporg` et `update_source` peuvent se contredire pour un thème** : `wporg` (1.14) regarde
+  `response` et `no_update` ensemble, `update_source` prend `response` d'abord. Un thème premium
+  annoncé par son éditeur dans `response`, avec un homonyme de wordpress.org dans `no_update`, a
+  `wporg: true` et `update_source: "vendor"`. Le manager préfère `update_source` quand il est présent.
+
+### Notes de version (1.18)
+
+Commande signée `get_release_notes` (signature exigée quelle que soit la politique), par
+`POST /wp-json/g2rd/v1/command` seulement : refusée par la file des commandes
+(`release_notes_queue_unsupported`) et par la route en arrière-plan (`command_not_async`), absente
+quand « Commandes à distance » est coupé (404 `rest_no_route`). Capacité `release_notes` dans
+l'inventaire.
+
+- Charge : `{"kind": "plugin", "file": "dossier/fichier.php"}` ou `{"kind": "theme",
+  "stylesheet": "dossier"}`, cherchés parmi les extensions et thèmes installés.
+- Provenance : celle de l'inventaire — transient lu tel quel, complété pour une entrée absente de
+  `response` par la capture des mises à jour tierces (`PremiumUpdatesBridge::replay_entry()`,
+  lecture seule). Pour un composant dont la provenance n'est pas `wporg`, wordpress.org n'est jamais
+  interrogé quand aucun éditeur n'a répondu.
+- Lecture : `plugins_api( 'plugin_information' )` ou `themes_api( 'theme_information' )` avec les
+  sections, comme le lien « Afficher les détails de la version » ; l'éditeur répond par son propre
+  filtre.
+- Bornes (`ReleaseNotes\HttpLimits`) : 15 s pour l'ensemble des appels faits pendant la commande,
+  redirections comprises (3 au plus par appel ; l'action `requests-requests.before_redirect` ramène
+  chaque saut au temps qui reste ou, budget épuisé, le détourne vers une adresse non HTTP que
+  Requests refuse, `nonhttp`, sans exception dans l'action), 8 Mio par réponse, `reject_unsafe_urls`
+  (adresses non publiques au sens de WordPress — privées, de bouclage, lien local… selon la version —,
+  ports autres que 80, 443 et 8080 et hôtes non résolus refusés) ; `notes_html` à 256 Kio,
+  coupé avant d'être rendu valide, jamais au milieu d'un caractère ni d'une balise (`truncated`) ;
+  `homepage` en https, sans requête ni fragment.
+- Limites connues : un éditeur qui appelle cURL lui-même, ou un site dont le transport HTTP est
+  `fsockopen` (délai par lecture, pas de délai total), échappe au budget ; la résolution DNS faite
+  par `wp_http_validate_url()` n'est pas bornée ; un updater qui ne s'enregistre pas en REST
+  (SEOPress PRO mesuré) ne répond pas : `release_notes_not_provided` ; la plupart des thèmes premium
+  ne répondent pas à `themes_api()` (WordPress ouvre l'adresse `url` de leur entrée).
+- Écritures : le code de la commande n'écrit rien (liste fermée des appels :
+  `tests/ReleaseNotes/ReadOnlyTest.php`) ; WordPress (cache d'objets, transient `theme_roots`), le
+  module de mise à jour du connecteur (cache de la dernière version GitHub, `Updater\GitHubUpdater`,
+  quand la cible est le connecteur) et celui de l'éditeur peuvent rafraîchir leurs caches, comme
+  sur l'écran des extensions.
+- Réponse : `{"notes_html": "…", "truncated": false, "version": "6.8.11", "homepage": "https://…"}`
+  (`version` et `homepage` peuvent être `null`) ; refus à code stable (`error_code`, HTTP 500) :
+  `release_notes_invalid_request`, `release_notes_not_installed`, `release_notes_not_provided`,
+  `release_notes_source_unavailable`.
+- Contrat commun avec le manager : `tests/fixtures/release-notes-command-v1.json`, identique à
+  l'octet à `backend/tests/fixtures/release-notes-command-v1.json` du manager.
+
 ### Signature des requêtes du manager
 
 En plus du Bearer, le manager signe chaque requête (HMAC-SHA256, clé dérivée du SiteToken,
@@ -293,7 +350,8 @@ Politique, réglable dans la page d'administration (« Exiger des commandes sign
   `signature_check`, en-tête `X-G2RD-Signature-Check`), mais une requête non signée reste acceptée ;
 - `required` : toute requête non signée ou mal signée est refusée (401).
 
-Les commandes `rollback_plugin`, `delete_restore_point`, `set_signature_policy` et `set_php_errors_capture` exigent une
+Les commandes `rollback_plugin`, `delete_restore_point`, `set_signature_policy`, `set_php_errors_capture`,
+`backup_set_key`, `backup_start`, `backup_step`, `backup_abort` et `get_release_notes` exigent une
 signature valide quelle que soit la politique.
 
 #### Registre anti-rejeu
@@ -645,7 +703,8 @@ est celle de `/command` pour chaque commande.
   `rollback_plugin`, `optimize_database`, `delete_spam_comments`, `delete_post_revisions`,
   `empty_trashed_posts`, `delete_expired_transients`, et la sonde `async_probe` (ci-dessous).
 - Commandes instantanées, refusées ici : elles restent sur `/command` (`clear_cache`,
-  `check_updates`, `delete_restore_point`, `set_signature_policy`, `set_php_errors_capture`).
+  `check_updates`, `delete_restore_point`, `set_signature_policy`, `set_php_errors_capture`,
+  `get_release_notes`).
 
 | Situation à l'arrivée | Réponse | Exécution |
 | --- | --- | --- |
