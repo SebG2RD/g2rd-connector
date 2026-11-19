@@ -14,8 +14,9 @@
  * Même règle pour le cœur de WordPress (connecteur 1.18.0, clé CORE, filtre
  * `auto_update_core`), bloqué par Rollback\Core après un retour à la version
  * d'avant : WordPress installe seul les versions mineures par défaut et
- * réinstallerait la version retirée au passage suivant du cron (sous 12 h). Pas
- * dans la même requête : le verrou `core_updater`, tenu jusqu'après
+ * réinstallerait la version retirée au passage suivant du cron (sous 12 h). Le
+ * blocage du cœur ne tombe que sur une version plus récente de la MÊME branche
+ * (cf. filter_core()). Pas dans la même requête : le verrou `core_updater`, tenu jusqu'après
  * wp_version_check( $stats ) (class-core-upgrader.php, WordPress 6.4.0
  * l. 259/262), y fait échouer la mise à jour automatique en `locked`, sautée
  * sans nouvel essai (class-wp-automatic-updater.php 6.4.0 l. 468-477).
@@ -95,6 +96,13 @@ final class AutoUpdateGuard {
 	 * wp-admin/includes/class-wp-automatic-updater.php, WordPress 6.4.0 et 7.1.5
 	 * l. 268) : l'offre porte la version proposée dans `current` (l. 221).
 	 *
+	 * find_core_auto_update() (wp-admin/includes/update.php 7.1.5 l. 108-117) passe ici
+	 * CHAQUE offre `autoupdate` (une par branche, la plus récente d'abord), même celles
+	 * que WordPress n'installera pas (majeure refusée par défaut, PHP ou MySQL trop
+	 * anciens, contrôlés après ce filtre) : seule une offre plus récente de la MÊME
+	 * branche lève le blocage. wordpress.org ne proposant que la dernière version de
+	 * chaque branche, elle prouve que la version bloquée n'est plus proposée.
+	 *
 	 * @param mixed $update Décision courante (bool|null).
 	 * @param mixed $item   Offre de mise à jour du cœur (->current).
 	 * @return mixed
@@ -103,7 +111,17 @@ final class AutoUpdateGuard {
 		if ( ! is_object( $item ) || ! isset( $item->current ) ) {
 			return $update;
 		}
-		return self::decide( $update, self::CORE, (string) $item->current );
+		$offered = (string) $item->current;
+		$blocked = self::all()[ self::CORE ] ?? null;
+		if ( null !== $blocked && self::branch( $offered ) !== self::branch( $blocked ) ) {
+			return $update;
+		}
+		return self::decide( $update, self::CORE, $offered );
+	}
+
+	/** Branche `x.y`, découpée comme Core_Upgrader::should_update_to_version(). */
+	private static function branch( string $version ): string {
+		return implode( '.', array_slice( (array) preg_split( '/[.-]/', $version ), 0, 2 ) );
 	}
 
 	/**

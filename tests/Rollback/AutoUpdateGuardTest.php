@@ -66,6 +66,23 @@ final class AutoUpdateGuardTest extends TestCase {
 		self::assertTrue( ( new AutoUpdateGuard() )->filter_core( true, $this->core_offer( '7.1.5' ) ) );
 	}
 
+	/**
+	 * find_core_auto_update() passe au filtre CHAQUE offre `autoupdate`, une par branche, la plus
+	 * récente d'abord (7.2.0 puis 7.1.5), même une majeure que WordPress refuse (`$update` faux) :
+	 * elle ne doit pas lever le blocage, sinon 7.1.5 serait réinstallée dans le même passage.
+	 */
+	public function test_a_newer_core_offer_of_another_branch_keeps_the_block(): void {
+		AutoUpdateGuard::block( AutoUpdateGuard::CORE, '7.1.5' );
+
+		self::assertFalse( ( new AutoUpdateGuard() )->filter_core( false, $this->core_offer( '7.2.0' ) ) );
+		self::assertSame( [ AutoUpdateGuard::CORE => '7.1.5' ], AutoUpdateGuard::all() );
+		self::assertFalse( ( new AutoUpdateGuard() )->filter_core( true, $this->core_offer( '7.1.5' ) ) );
+
+		AutoUpdateGuard::block( AutoUpdateGuard::CORE, '7.2' );
+		self::assertTrue( ( new AutoUpdateGuard() )->filter_core( true, $this->core_offer( '7.2.1' ) ), 'une majeure bloquée tombe sur la mineure suivante de sa branche' );
+		self::assertSame( [], AutoUpdateGuard::all() );
+	}
+
 	public function test_core_and_plugins_are_blocked_apart(): void {
 		AutoUpdateGuard::block( 'akismet/akismet.php', '7.1.5' );
 		self::assertTrue( ( new AutoUpdateGuard() )->filter_core( true, $this->core_offer( '7.1.5' ) ), 'le blocage d\'une extension ne touche pas le cœur' );
