@@ -69,7 +69,7 @@ final class CoreRollbackCommandTest extends CoreRollbackTestCase {
 	}
 
 	/**
-	 * @return iterable<string, array{\Closure(self): void, string}>
+	 * @return iterable<string, array{\Closure(self): void, string, bool}>
 	 */
 	public static function refusals(): iterable {
 		yield 'plus d\'information gardée' => [
@@ -77,36 +77,42 @@ final class CoreRollbackCommandTest extends CoreRollbackTestCase {
 				unset( $test->options[ ProtectedCoreUpdate::RECORD_OPTION ] );
 			},
 			'core_rollback_expired',
+			false,
 		];
 		yield 'échéance passée' => [
 			static function ( self $test ): void {
 				$test->options[ ProtectedCoreUpdate::RECORD_OPTION ]['until'] = time() - 1;
 			},
 			'core_rollback_expired',
+			false,
 		];
 		yield 'informations d\'une autre mise à jour' => [
 			static function ( self $test ): void {
 				$test->options[ ProtectedCoreUpdate::RECORD_OPTION ]['version_before'] = '7.1.3';
 			},
 			'core_rollback_expired',
+			false,
 		];
 		yield 'WordPress mis à jour entre-temps' => [
 			static function ( self $test ): void {
 				$test->loaded_version = '7.1.6';
 			},
 			'core_rollback_version_changed',
+			false,
 		];
 		yield 'base modifiée' => [
 			static function ( self $test ): void {
 				$test->table->rows['db_version']['value'] = '61900';
 			},
 			'core_rollback_db_changed',
+			false,
 		];
 		yield 'base illisible' => [
 			static function ( self $test ): void {
 				$test->table->read_fails = true;
 			},
 			'core_rollback_db_changed',
+			false,
 		];
 		yield 'autre mise à jour protégée en cours' => [
 			static function (): void {
@@ -114,6 +120,7 @@ final class CoreRollbackCommandTest extends CoreRollbackTestCase {
 				( new \ReflectionProperty( UpdateTransaction::class, 'held' ) )->setValue( null, null );
 			},
 			'core_rollback_busy',
+			false,
 		];
 		yield 'transaction reprise par un autre processus pendant la mesure' => [
 			static function ( self $test ): void {
@@ -124,6 +131,7 @@ final class CoreRollbackCommandTest extends CoreRollbackTestCase {
 				};
 			},
 			'core_rollback_busy',
+			false,
 		];
 		yield 'verrou de WordPress tenu' => [
 			static function (): void {
@@ -131,12 +139,14 @@ final class CoreRollbackCommandTest extends CoreRollbackTestCase {
 				Core_Upgrader::$next_result = new WP_Error( 'locked', 'Another update is currently in progress.' );
 			},
 			'core_rollback_busy',
+			true,
 		];
 		yield 'wordpress.org injoignable' => [
 			static function ( self $test ): void {
 				$test->wporg = [];
 			},
 			'core_rollback_wporg_unreachable',
+			true,
 		];
 		yield 'fichiers non conformes' => [
 			static function (): void {
@@ -145,12 +155,14 @@ final class CoreRollbackCommandTest extends CoreRollbackTestCase {
 				};
 			},
 			'core_rollback_integrity',
+			true,
 		];
 	}
 
 	#[DataProvider( 'refusals' )]
-	public function test_refus_a_code_stable( \Closure $setup, string $code ): void {
+	public function test_refus_a_code_stable( \Closure $setup, string $code, bool $blocked ): void {
 		$setup( $this );
+		$kept = $this->options[ ProtectedCoreUpdate::RECORD_OPTION ] ?? null;
 
 		$result = ( new CoreRollbackCommand( $this->health ) )->run( self::PAYLOAD );
 
@@ -162,6 +174,10 @@ final class CoreRollbackCommandTest extends CoreRollbackTestCase {
 		if ( 'core_rollback_integrity' !== $code ) {
 			self::assertSame( '7.1.5', $this->version_on_disk(), 'rien n\'a été modifié' );
 		}
+		self::assertSame( $kept, $this->options[ ProtectedCoreUpdate::RECORD_OPTION ] ?? null, 'informations gardées intactes : retour redemandable' );
+		self::assertSame( $blocked ? [ AutoUpdateGuard::CORE => '7.1.5' ] : [], AutoUpdateGuard::all() );
+		$txn = $this->options[ UpdateTransaction::OPTION_KEY ] ?? null;
+		self::assertTrue( null === $txn || isset( $txn['recovery_token'] ) || 'akismet/akismet.php' === ( $txn['plugin_file'] ?? null ), 'transaction de la commande rendue, celle d\'un autre processus laissée' );
 	}
 
 	/**
