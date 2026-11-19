@@ -571,6 +571,38 @@ final class PremiumUpdatesBridge {
 		return $value;
 	}
 
+	/**
+	 * Entrée que le rejeu ajouterait à `response` pour cette extension ou ce thème (cf.
+	 * plugin_extras(), theme_extras()) : celle de la capture, si elle annonce une version plus
+	 * récente que celle installée ; null sinon. LECTURE SEULE : une lecture de la capture et de
+	 * l'en-tête du fichier installé, aucune écriture, aucun filtre posé, aucun rafraîchissement.
+	 * Pour la commande get_release_notes (1.18.0), qui doit voir la même provenance que
+	 * l'inventaire sans toucher aux transients.
+	 *
+	 * @param string $section 'plugins' | 'themes'.
+	 * @param string $key     Fichier de l'extension ou feuille de style du thème.
+	 * @return array<string, mixed>|null
+	 */
+	public static function replay_entry( string $section, string $key ): ?array {
+		$entry = self::cached_section( self::cached_payload(), $section )[ $key ] ?? null;
+		if ( 'plugins' === $section ) {
+			$kept = self::whitelist_plugin_entry( $entry );
+			if ( null === $kept ) {
+				return null;
+			}
+			$fields    = get_object_vars( $kept );
+			$installed = self::installed_plugin_version( $key );
+		} else {
+			$fields = self::whitelist_theme_entry( $entry );
+			if ( null === $fields ) {
+				return null;
+			}
+			$installed = self::installed_theme_version( $key );
+		}
+
+		return '' !== $installed && version_compare( (string) $fields['new_version'], $installed, '>' ) ? $fields : null;
+	}
+
 	private static function install_replay_filters(): void {
 		if ( self::$filters_installed ) {
 			return;
