@@ -375,7 +375,7 @@ final class Page {
 								<input type="checkbox" aria-labelledby="g2rd_remote_commands_enabled_titre" aria-describedby="g2rd_remote_commands_enabled_aide"
 									name="g2rd_remote_commands_enabled" value="1"
 									<?php checked( (bool) $settings['remote_commands_enabled'] ); ?>>
-								<span id="g2rd_remote_commands_enabled_aide"><?php echo esc_html__( 'Autorise le manager à lancer des opérations sur ce site : mises à jour, restaurations d’extensions, vidage du cache, nettoyage de la base de données. Celles qu’il met en file sont relevées avec le signe de vie horaire.', 'g2rd-connector' ); ?></span>
+								<span id="g2rd_remote_commands_enabled_aide"><?php echo esc_html__( 'Autorise le manager à lancer des opérations sur ce site : mises à jour, restaurations d’extensions, vidage du cache, nettoyage de la base de données, lecture des notes de version d’une mise à jour (le site interroge alors le serveur de l’éditeur ou wordpress.org). Celles qu’il met en file sont relevées avec le signe de vie horaire.', 'g2rd-connector' ); ?></span>
 							</label>
 						</td>
 					</tr>

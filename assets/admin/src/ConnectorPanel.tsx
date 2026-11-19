@@ -759,7 +759,7 @@ export function ConnectorPanel( { data, onDataChange }: Props ): JSX.Element {
 						id="g2rd-connector-commands"
 						icon="terminal"
 						title="Commandes à distance"
-						description="Autorise le manager à lancer des opérations sur ce site : mises à jour, restaurations d’extensions, vidage du cache, nettoyage de la base de données. Celles qu’il met en file sont relevées avec le signe de vie horaire."
+						description="Autorise le manager à lancer des opérations sur ce site : mises à jour, restaurations d’extensions, vidage du cache, nettoyage de la base de données, lecture des notes de version d’une mise à jour (le site interroge alors le serveur de l’éditeur ou wordpress.org). Celles qu’il met en file sont relevées avec le signe de vie horaire."
 						checked={ state.remoteCommandsEnabled }
 						onChange={ ( remoteCommandsEnabled ) =>
 							update( { remoteCommandsEnabled } )
