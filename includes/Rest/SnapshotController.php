@@ -34,6 +34,7 @@ use G2RD\Connector\Rollback\RestorePointInventory;
 use G2RD\Connector\Rollback\Services;
 use G2RD\Connector\Settings;
 use G2RD\Connector\Updates\PremiumUpdatesBridge;
+use G2RD\Connector\Updates\UpdateSource;
 use WP_REST_Response;
 use WP_REST_Server;
 
@@ -622,6 +623,8 @@ final class SnapshotController {
 				'has_update'        => $has_update,
 				'plugin_uri'        => (string) ( $data['PluginURI'] ?? '' ),
 				'author'            => (string) ( $data['Author'] ?? '' ),
+				// Provenance des mises à jour (1.18.0, cf. Updates\UpdateSource) : `wporg`, `vendor` ou null.
+				'update_source'     => UpdateSource::of( $updates, (string) $file ),
 			];
 		}
 
@@ -702,7 +705,12 @@ final class SnapshotController {
 			if ( null !== $wporg ) {
 				$row['wporg'] = isset( $wporg[ (string) $stylesheet ] );
 			}
-			$out[] = $row;
+			// Provenance des mises à jour (1.18.0, cf. Updates\UpdateSource) : `wporg`, `vendor` ou null,
+			// présente même sans réponse de wordpress.org (elle dit alors ce que les entrées savent).
+			// Elle peut contredire `wporg` (réponse d'éditeur dans `response`, homonyme de wordpress.org
+			// dans `no_update`) : le manager préfère `update_source`.
+			$row['update_source'] = UpdateSource::of( $updates, (string) $stylesheet );
+			$out[]                = $row;
 		}
 
 		return $out;
@@ -719,7 +727,8 @@ final class SnapshotController {
 	 * Un updater tiers peut ajouter sa propre entrée dans `response` (filtre
 	 * `pre_set_site_transient_update_themes`, en-tête `Update URI`, rejeu de la
 	 * capture) : seule une entrée dont la fiche et le paquet sont sur wordpress.org
-	 * (ou un sous-domaine, downloads.wordpress.org) compte.
+	 * (ou un sous-domaine, downloads.wordpress.org) compte (cf. UpdateSource::is_wporg_entry(),
+	 * règle commune avec `update_source` depuis la 1.18.0).
 	 *
 	 * @param mixed $updates Transient `update_themes`.
 	 * @return array<string, true>|null Feuilles de style connues de wordpress.org ;
@@ -741,38 +750,12 @@ final class SnapshotController {
 		$response = isset( $updates->response ) && is_array( $updates->response ) ? $updates->response : [];
 		foreach ( [ $response, $updates->no_update ] as $entries ) {
 			foreach ( $entries as $stylesheet => $entry ) {
-				if ( self::is_wporg_entry( $entry ) ) {
+				if ( UpdateSource::is_wporg_entry( $entry ) ) {
 					$known[ (string) $stylesheet ] = true;
 				}
 			}
 		}
 		return $known;
-	}
-
-	/**
-	 * Entrée venue de wordpress.org : fiche (`url`) et paquet (`package`) sur
-	 * wordpress.org ou l'un de ses sous-domaines, au moins l'un des deux renseigné.
-	 *
-	 * @param mixed $entry Entrée de `response` ou `no_update` (tableau ; objet toléré).
-	 */
-	private static function is_wporg_entry( $entry ): bool {
-		if ( ! is_array( $entry ) && ! is_object( $entry ) ) {
-			return false;
-		}
-		$entry = (array) $entry;
-		$found = false;
-		foreach ( [ 'url', 'package' ] as $key ) {
-			$address = isset( $entry[ $key ] ) && is_string( $entry[ $key ] ) ? $entry[ $key ] : '';
-			if ( '' === $address ) {
-				continue;
-			}
-			$host = strtolower( (string) wp_parse_url( $address, PHP_URL_HOST ) );
-			if ( 'wordpress.org' !== $host && ! str_ends_with( $host, '.wordpress.org' ) ) {
-				return false;
-			}
-			$found = true;
-		}
-		return $found;
 	}
 
 	/**
