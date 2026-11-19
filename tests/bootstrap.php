@@ -51,7 +51,7 @@ if ( ! defined( 'ARRAY_N' ) ) {
 require_once __DIR__ . '/stubs/wp-classes.php';
 
 // CommandExecutor et le snapshot font des require_once de fichiers de wp-admin : on les fournit vides.
-foreach ( [ 'plugin', 'class-wp-upgrader', 'file', 'misc', 'update', 'class-pclzip', 'translation-install' ] as $g2rd_stub ) {
+foreach ( [ 'plugin', 'class-wp-upgrader', 'file', 'misc', 'update', 'class-pclzip', 'translation-install', 'plugin-install', 'theme' ] as $g2rd_stub ) {
 	$g2rd_path = ABSPATH . 'wp-admin/includes/' . $g2rd_stub . '.php';
 	if ( ! is_dir( dirname( $g2rd_path ) ) ) {
 		mkdir( dirname( $g2rd_path ), 0777, true );
