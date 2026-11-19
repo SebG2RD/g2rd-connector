@@ -17,7 +17,7 @@ final class UpdateGateTest extends BackupTestCase {
 	];
 
 	public function test_la_liste_fermee_des_commandes(): void {
-		self::assertSame( [ 'update_plugin', 'update_theme', 'update_core', 'update_translations', 'rollback_plugin' ], UpdateGate::COMMANDS );
+		self::assertSame( [ 'update_plugin', 'update_theme', 'update_core', 'update_translations', 'rollback_plugin', 'rollback_core' ], UpdateGate::COMMANDS );
 		self::assertFalse( UpdateGate::applies_to( 'optimize_database' ) );
 		self::assertFalse( UpdateGate::applies_to( 'clear_cache' ) );
 	}

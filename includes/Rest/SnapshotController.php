@@ -30,6 +30,7 @@ use G2RD\Connector\Environment\SnapshotBlock;
 use G2RD\Connector\PhpErrors\LoggingProbe;
 use G2RD\Connector\PhpErrors\SnapshotBlock as PhpErrorsBlock;
 use G2RD\Connector\ReleaseNotes\ReleaseNotesCommand;
+use G2RD\Connector\Rollback\Core\CoreRollbackCommand;
 use G2RD\Connector\Rollback\PendingOutcomes;
 use G2RD\Connector\Rollback\RestorePointInventory;
 use G2RD\Connector\Rollback\Services;
@@ -469,6 +470,8 @@ final class SnapshotController {
 	 * plateforme garde le mode actuel (`/command`) pour ce site.
 	 * `php_errors` (1.16) : le site sait relever ses erreurs PHP (bloc `php_errors`), même
 	 * collecte coupée ; le manager lit la capacité, jamais un numéro de version.
+	 * `core_rollback` (1.18.0) : `update_core` accepte `snapshot: true` (mise à jour protégée du
+	 * cœur) et la commande `rollback_core` existe ; même condition que `restore_points`.
 	 * `release_notes` (1.18.0) : le site sait lire les notes de version d'une mise à jour (commande
 	 * signée get_release_notes, par `/command`) ; annoncée toujours : « Commandes à distance »
 	 * coupé se voit à la route absente (404 `rest_no_route`).
@@ -486,6 +489,8 @@ final class SnapshotController {
 		$capabilities = [ 'signed_commands', SnapshotFields::CAPABILITY, PhpErrorsBlock::CAPABILITY, ReleaseNotesCommand::CAPABILITY ];
 		if ( Services::supported() ) {
 			$capabilities[] = 'restore_points';
+			// 1.18.0 : mise à jour protégée et retour arrière de WordPress (même condition).
+			$capabilities[] = CoreRollbackCommand::CAPABILITY;
 		}
 		if ( Capability::available( $has_finisher ) ) {
 			$capabilities[] = Capability::NAME;

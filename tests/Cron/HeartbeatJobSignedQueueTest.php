@@ -148,6 +148,13 @@ final class HeartbeatJobSignedQueueTest extends TestCase {
 				'file' => 'akismet/akismet.php',
 			],
 		];
+		yield 'rollback_core' => [
+			'rollback_core',
+			[
+				'expected_current' => '7.1.5',
+				'target'           => '7.1.4',
+			],
+		];
 	}
 
 	public function test_le_fournisseur_couvre_toutes_les_commandes_signed_only(): void {

@@ -33,7 +33,7 @@ final class AsyncCommandsTest extends TestCase {
 		self::assertSame( AsyncCommands::EXCLUDED, array_values( array_unique( AsyncCommands::EXCLUDED ) ) );
 	}
 
-	public function test_les_quatorze_commandes_longues_passent_en_arriere_plan_et_les_six_instantanees_restent_sur_command(): void {
+	public function test_les_quinze_commandes_longues_passent_en_arriere_plan_et_les_six_instantanees_restent_sur_command(): void {
 		$admises = AsyncCommands::ADMITTED;
 		$exclues = AsyncCommands::EXCLUDED;
 		sort( $admises );
@@ -50,6 +50,7 @@ final class AsyncCommandsTest extends TestCase {
 				'delete_spam_comments',
 				'empty_trashed_posts',
 				'optimize_database',
+				'rollback_core',
 				'rollback_plugin',
 				'update_core',
 				'update_plugin',

@@ -33,6 +33,7 @@ final class AsyncCommands {
 		'update_core',
 		'update_translations',
 		'rollback_plugin',
+		'rollback_core',
 		'optimize_database',
 		'delete_spam_comments',
 		'delete_post_revisions',

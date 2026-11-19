@@ -42,7 +42,8 @@ final class NoWiringTest extends TestCase {
 	 * CommandExecutor::ALLOWED relevée le 24/10/2026 sur 64560ac (1.15.0), dans cet ordre ;
 	 * recalée le 07/11/2026 sur 666f084 (1.16.0-rc.1 : set_php_errors_capture) ; relevée le
 	 * 08/11/2026 sur `ajout/sauvegardes-module` (phase 4 : les quatre commandes backup_*) ; relevée le
-	 * 16/11/2026 pour la 1.18.0 (get_release_notes, notes de version).
+	 * 16/11/2026 pour la 1.18.0 (get_release_notes, notes de version), puis le 19/11/2026
+	 * (rollback_core, retour arrière de WordPress).
 	 */
 	private const COMMANDES_ADMISES = [
 		'clear_cache',
@@ -65,13 +66,15 @@ final class NoWiringTest extends TestCase {
 		'backup_step',
 		'backup_abort',
 		'get_release_notes',
+		'rollback_core',
 	];
 
 	/**
 	 * CommandExecutor::SIGNED_ONLY relevée le 24/10/2026 sur 64560ac (1.15.0), dans cet ordre ;
 	 * recalée le 07/11/2026 sur 666f084 (1.16.0-rc.1 : set_php_errors_capture) ; relevée le
 	 * 08/11/2026 sur `ajout/sauvegardes-module` (phase 4 : les quatre commandes backup_*) ; relevée le
-	 * 16/11/2026 pour la 1.18.0 (get_release_notes, notes de version).
+	 * 16/11/2026 pour la 1.18.0 (get_release_notes, notes de version), puis le 19/11/2026
+	 * (rollback_core, retour arrière de WordPress).
 	 */
 	private const COMMANDES_SIGNEES_SEULEMENT = [
 		'rollback_plugin',
@@ -83,6 +86,7 @@ final class NoWiringTest extends TestCase {
 		'backup_step',
 		'backup_abort',
 		'get_release_notes',
+		'rollback_core',
 	];
 
 	/**
@@ -229,24 +233,24 @@ final class NoWiringTest extends TestCase {
 	}
 
 	public function test_les_listes_de_commandes_sont_exactement_celles_ecrites_ici(): void {
-		self::assertCount( 20, self::COMMANDES_ADMISES );
-		self::assertCount( 9, self::COMMANDES_SIGNEES_SEULEMENT );
+		self::assertCount( 21, self::COMMANDES_ADMISES );
+		self::assertCount( 10, self::COMMANDES_SIGNEES_SEULEMENT );
 
 		self::assertSame(
 			self::COMMANDES_ADMISES,
 			CommandExecutor::ALLOWED,
-			"CommandExecutor::ALLOWED n'est plus la liste relevée (20 commandes).\n"
+			"CommandExecutor::ALLOWED n'est plus la liste relevée (21 commandes).\n"
 			. "Cause probable : une commande ajoutée, retirée ou déplacée (les quatre commandes backup_* de la "
-			. "phase 4, puis get_release_notes de la 1.18.0, y sont déjà, à la fin).\n"
+			. "phase 4, puis get_release_notes et rollback_core de la 1.18.0, y sont déjà, à la fin).\n"
 			. 'Action : si le changement est voulu par un plan, mettre la liste écrite dans ce test à jour '
 			. 'dans le même commit ; sinon, rétablir CommandExecutor::ALLOWED.'
 		);
 		self::assertSame(
 			self::COMMANDES_SIGNEES_SEULEMENT,
 			CommandExecutor::SIGNED_ONLY,
-			"CommandExecutor::SIGNED_ONLY n'est plus la liste relevée (9 commandes).\n"
+			"CommandExecutor::SIGNED_ONLY n'est plus la liste relevée (10 commandes).\n"
 			. "Cause probable : une commande signée ajoutée, retirée ou déplacée (les quatre commandes "
-			. "backup_* de la phase 4, puis get_release_notes de la 1.18.0, y sont déjà, à la fin).\n"
+			. "backup_* de la phase 4, puis get_release_notes et rollback_core de la 1.18.0, y sont déjà, à la fin).\n"
 			. 'Action : si le changement est voulu par un plan, mettre la liste écrite dans ce test à jour '
 			. 'dans le même commit ; sinon, rétablir CommandExecutor::SIGNED_ONLY.'
 		);

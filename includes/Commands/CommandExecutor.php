@@ -28,6 +28,7 @@ use G2RD\Connector\PhpErrors\CaptureCommand;
 use G2RD\Connector\ReleaseNotes\ReleaseNotesCommand;
 use G2RD\Connector\ReleaseNotes\ReleaseNotesRefused;
 use G2RD\Connector\Rest\DbHealth;
+use G2RD\Connector\Rollback\Core\CoreRollbackCommand;
 use G2RD\Connector\Rollback\Core\ProtectedCoreUpdate;
 use G2RD\Connector\Rollback\ProtectedUpdate;
 use G2RD\Connector\Rollback\RestoreCommands;
@@ -61,6 +62,7 @@ final class CommandExecutor {
 		'backup_step',
 		'backup_abort',
 		'get_release_notes',
+		'rollback_core',
 	];
 
 	/**
@@ -72,7 +74,8 @@ final class CommandExecutor {
 	 * PHP fait envoyer des données du site. Les quatre commandes `backup_*` (sauvegardes
 	 * chiffrées, Backup\Commands\BackupCommands) reçoivent une clé, copient et envoient le
 	 * site. `get_release_notes` (1.18.0, ReleaseNotes\ReleaseNotesCommand) fait appeler par le
-	 * site le serveur d'un éditeur ou wordpress.org.
+	 * site le serveur d'un éditeur ou wordpress.org. `rollback_core` (1.18.0,
+	 * Rollback\Core\CoreRollbackCommand) réinstalle une version du cœur de WordPress.
 	 *
 	 * @var list<string>
 	 */
@@ -86,6 +89,7 @@ final class CommandExecutor {
 		'backup_step',
 		'backup_abort',
 		'get_release_notes',
+		'rollback_core',
 	];
 
 	/** Longueur maximale de la sortie parasite remontée au manager (diagnostic). */
@@ -197,6 +201,7 @@ final class CommandExecutor {
 				'set_php_errors_capture'    => ( new CaptureCommand() )->run( (array) ( $payload ?? [] ) ),
 				'backup_set_key', 'backup_start', 'backup_step', 'backup_abort' => BackupCommands::run( $command, (array) ( $payload ?? [] ) ),
 				'get_release_notes'         => ( new ReleaseNotesCommand() )->run( (array) ( $payload ?? [] ) ),
+				'rollback_core'             => ( new CoreRollbackCommand( Services::make()->health ) )->run( (array) ( $payload ?? [] ) ),
 			};
 			$outcome = [
 				'status' => 'done',
