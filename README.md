@@ -330,6 +330,47 @@ l'inventaire.
 - Contrat commun avec le manager : `tests/fixtures/release-notes-command-v1.json`, identique à
   l'octet à `backend/tests/fixtures/release-notes-command-v1.json` du manager.
 
+### Retour arrière de WordPress (1.18)
+
+`update_core` accepte les options de la mise à jour protégée des extensions (`snapshot: true`,
+`keep_on_success`, `grace_seconds`) ; sans `snapshot`, rien ne change. Avec `snapshot` et
+`Services::supported()` (`includes/Rollback/Core/ProtectedCoreUpdate.php`) : version installée, langue
+du paquet (`$wp_local_package`, sinon `en_US`) et `db_version` notées ; contrôle de santé avant et
+après ; si la mise à jour s'est arrêtée en cours de copie (codes que WordPress juge critiques pour son
+propre retour arrière : `…do_rollback…`, `…__copy_dir…`, `disk_full`) ou si le site ne répond plus, et
+si `db_version` n'a pas changé, réinstallation de la version d'avant retéléchargée sur wordpress.org ;
+sinon rien, et `error_code: core_rollback_db_changed`. Même verrou que les extensions
+(`UpdateTransaction`, `plugin_file` vide). Avec `keep_on_success` et une base inchangée, la version
+d'avant, sa langue, `db_version` et l'échéance sont gardées dans l'option `g2rd_core_rollback` (non
+autochargée) ; aucune copie de fichiers. Champs ajoutés au résultat : `protected`, `health`,
+`rolled_back`, `rollback_reason` (`update_failed`, `health_check_failed`), `db_version_before`,
+`db_version_after`, `restore_until`, `error_code` / `error`, `locale` ; jamais `outcome`.
+
+Rien sans la transaction : si `UpdateTransaction::step()` rend faux (transaction reprise après plus de
+10 minutes sans signe de vie), ni mise à jour, ni mesure, ni réinstallation. Après un retour
+(automatique ou demandé), la version retirée est bloquée pour les mises à jour automatiques de
+WordPress (`AutoUpdateGuard`, clé `wordpress` de `g2rd_blocked_versions`, filtre `auto_update_core`),
+**avant** la réinstallation : un processus arrêté entre la copie et le blocage la laisserait sinon
+débloquée, et WordPress la réinstallerait au passage suivant du cron (dans la même requête, le verrou
+`core_updater` de WordPress, encore tenu, fait échouer sa mise à jour automatique en `locked`). Le
+blocage tombe dès qu'une version plus récente est proposée. Les mineures de WordPress étant le plus
+souvent des correctifs de sécurité, le site reste d'ici là sur la version d'avant ; le manager le dit.
+
+Commande signée `rollback_core` (`{expected_current, target}`), admise en arrière-plan : réinstalle
+`target` si les informations gardées sont celles de cette mise à jour, si la version installée est
+`expected_current` et si `db_version` n'a pas changé. Résultats à `outcome` : `rollback_success`, ou
+`core_rollback_expired`, `core_rollback_version_changed`, `core_rollback_db_changed`,
+`core_rollback_busy`, `core_rollback_wporg_unreachable`, `core_rollback_integrity`,
+`core_rollback_failed`. Capacité `core_rollback`, sous la condition de `restore_points`.
+
+Paquet (`CorePackage`) : `https://downloads.wordpress.org/release/[{locale}/]wordpress-{version}.zip`,
+repli `en_US` quand `<paquet>.sha1` répond 404 ; SHA-1 publié comparé avant toute copie (WordPress ne
+vérifie plus la signature des paquets du cœur depuis 6.6) ; empreintes de
+`api.wordpress.org/core/checksums/1.0/` lues en https avant, comparées après (`wp-content` exclu).
+Limites connues : proxy de Hostinger devant api.wordpress.org (refus sans changement s'il ne sert pas
+les empreintes) ; les traductions et les thèmes ajoutés par une version majeure ne reviennent pas en
+arrière ; une option par blog en multisite.
+
 ### Signature des requêtes du manager
 
 En plus du Bearer, le manager signe chaque requête (HMAC-SHA256, clé dérivée du SiteToken,
@@ -351,8 +392,8 @@ Politique, réglable dans la page d'administration (« Exiger des commandes sign
 - `required` : toute requête non signée ou mal signée est refusée (401).
 
 Les commandes `rollback_plugin`, `delete_restore_point`, `set_signature_policy`, `set_php_errors_capture`,
-`backup_set_key`, `backup_start`, `backup_step`, `backup_abort` et `get_release_notes` exigent une
-signature valide quelle que soit la politique.
+`backup_set_key`, `backup_start`, `backup_step`, `backup_abort`, `get_release_notes` et `rollback_core` exigent
+une signature valide quelle que soit la politique.
 
 #### Registre anti-rejeu
 
@@ -700,7 +741,7 @@ lecture est refusée (401).
 est celle de `/command` pour chaque commande.
 
 - Commandes admises : `update_plugin`, `update_theme`, `update_core`, `update_translations`,
-  `rollback_plugin`, `optimize_database`, `delete_spam_comments`, `delete_post_revisions`,
+  `rollback_plugin`, `rollback_core`, `optimize_database`, `delete_spam_comments`, `delete_post_revisions`,
   `empty_trashed_posts`, `delete_expired_transients`, et la sonde `async_probe` (ci-dessous).
 - Commandes instantanées, refusées ici : elles restent sur `/command` (`clear_cache`,
   `check_updates`, `delete_restore_point`, `set_signature_policy`, `set_php_errors_capture`,
