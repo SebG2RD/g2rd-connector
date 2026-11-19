@@ -46,6 +46,50 @@ final class AutoUpdateGuardTest extends TestCase {
 		self::assertTrue( ( new AutoUpdateGuard() )->filter( true, (object) [ 'plugin' => 'x' ] ) );
 	}
 
+	private function core_offer( string $version ): object {
+		return (object) [
+			'response' => 'autoupdate',
+			'current'  => $version,
+			'version'  => $version,
+		];
+	}
+
+	public function test_the_blocked_core_version_is_refused_until_a_newer_one_is_offered(): void {
+		AutoUpdateGuard::block( AutoUpdateGuard::CORE, '7.1.5' );
+
+		self::assertFalse( ( new AutoUpdateGuard() )->filter_core( true, $this->core_offer( '7.1.5' ) ) );
+		self::assertNull( ( new AutoUpdateGuard() )->filter_core( null, $this->core_offer( '7.1.4' ) ), 'une version plus ancienne reste à WordPress' );
+		self::assertSame( [ AutoUpdateGuard::CORE => '7.1.5' ], AutoUpdateGuard::all() );
+
+		self::assertTrue( ( new AutoUpdateGuard() )->filter_core( true, $this->core_offer( '7.1.6' ) ) );
+		self::assertSame( [], AutoUpdateGuard::all(), 'le blocage est levé' );
+		self::assertTrue( ( new AutoUpdateGuard() )->filter_core( true, $this->core_offer( '7.1.5' ) ) );
+	}
+
+	public function test_core_and_plugins_are_blocked_apart(): void {
+		AutoUpdateGuard::block( 'akismet/akismet.php', '7.1.5' );
+		self::assertTrue( ( new AutoUpdateGuard() )->filter_core( true, $this->core_offer( '7.1.5' ) ), 'le blocage d\'une extension ne touche pas le cœur' );
+
+		AutoUpdateGuard::unblock( 'akismet/akismet.php' );
+		AutoUpdateGuard::block( AutoUpdateGuard::CORE, '7.1.5' );
+		self::assertTrue( ( new AutoUpdateGuard() )->filter( true, $this->item( 'akismet/akismet.php', '7.1.5' ) ), 'ni celui du cœur une extension' );
+		self::assertSame( [ AutoUpdateGuard::CORE => '7.1.5' ], AutoUpdateGuard::all() );
+	}
+
+	public function test_a_malformed_core_offer_is_passed_through(): void {
+		AutoUpdateGuard::block( AutoUpdateGuard::CORE, '7.1.5' );
+		self::assertTrue( ( new AutoUpdateGuard() )->filter_core( true, 'pas un objet' ) );
+		self::assertTrue( ( new AutoUpdateGuard() )->filter_core( true, (object) [ 'version' => '7.1.5' ] ) );
+	}
+
+	public function test_both_filters_are_registered(): void {
+		$guard = new AutoUpdateGuard();
+		$guard->register();
+
+		self::assertNotFalse( has_filter( 'auto_update_plugin', [ $guard, 'filter' ] ) );
+		self::assertNotFalse( has_filter( 'auto_update_core', [ $guard, 'filter_core' ] ) );
+	}
+
 	public function test_option_is_written_without_autoload_and_tolerates_corruption(): void {
 		$autoload = null;
 		\Brain\Monkey\Functions\when( 'update_option' )->alias(
