@@ -28,6 +28,7 @@ use G2RD\Connector\PhpErrors\CaptureCommand;
 use G2RD\Connector\ReleaseNotes\ReleaseNotesCommand;
 use G2RD\Connector\ReleaseNotes\ReleaseNotesRefused;
 use G2RD\Connector\Rest\DbHealth;
+use G2RD\Connector\Rollback\Core\ProtectedCoreUpdate;
 use G2RD\Connector\Rollback\ProtectedUpdate;
 use G2RD\Connector\Rollback\RestoreCommands;
 use G2RD\Connector\Rollback\Services;
@@ -180,7 +181,7 @@ final class CommandExecutor {
 			$result = match ( $command ) {
 				'clear_cache'               => self::clear_cache(),
 				'check_updates'             => self::check_updates(),
-				'update_core'               => self::update_core(),
+				'update_core'               => self::update_core( (array) ( $payload ?? [] ) ),
 				'delete_spam_comments'      => self::delete_spam_comments(),
 				'delete_post_revisions'     => self::delete_post_revisions(),
 				'empty_trashed_posts'       => self::empty_trashed_posts(),
@@ -873,9 +874,29 @@ final class CommandExecutor {
 	 * Met à jour le cœur WordPress + renvoie les versions avant/après (consommées
 	 * par le manager pour tracer la MAJ : « WordPress 6.4 → 6.5 »).
 	 *
+	 * Mise à jour PROTÉGÉE (contrôle de santé, retour automatique à la version d'avant
+	 * retéléchargée sur wordpress.org, cf. Rollback\Core\ProtectedCoreUpdate) seulement si la
+	 * plateforme le demande (`snapshot: true`) et si le site le permet. Sans le drapeau, le
+	 * chemin historique est strictement inchangé.
+	 *
+	 * @param array<string, mixed> $payload
 	 * @return array<string, mixed>
 	 */
-	private static function update_core(): array {
+	private static function update_core( array $payload ): array {
+		if ( ! empty( $payload['snapshot'] ) && Services::supported() ) {
+			return ( new ProtectedCoreUpdate( Services::make()->health ) )->run( $payload, static fn (): array => self::perform_core_upgrade() );
+		}
+		return self::perform_core_upgrade()[0];
+	}
+
+	/**
+	 * La mise à jour elle-même (chemin historique), partagée par la mise à jour simple et la
+	 * mise à jour protégée : forme historique, et l'erreur de WordPress à part (la mise à jour
+	 * protégée lit son code ; ce qui part au manager ne change pas).
+	 *
+	 * @return array{0: array<string, mixed>, 1: \WP_Error|null}
+	 */
+	private static function perform_core_upgrade(): array {
 		require_once ABSPATH . 'wp-admin/includes/file.php';
 		require_once ABSPATH . 'wp-admin/includes/misc.php';
 		require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
@@ -886,10 +907,13 @@ final class CommandExecutor {
 		$updates = get_core_updates();
 		if ( ! is_array( $updates ) || empty( $updates ) ) {
 			return [
-				'updated'        => false,
-				'reason'         => 'no_updates_available',
-				'version_before' => $version_before,
-				'version_after'  => $version_before,
+				[
+					'updated'        => false,
+					'reason'         => 'no_updates_available',
+					'version_before' => $version_before,
+					'version_after'  => $version_before,
+				],
+				null,
 			];
 		}
 
@@ -907,10 +931,13 @@ final class CommandExecutor {
 		$updated  = ! is_wp_error( $result );
 
 		return [
-			'updated'        => $updated,
-			'version_before' => $version_before,
-			'version_after'  => $updated ? $target : $version_before,
-			'detail'         => is_wp_error( $result ) ? $result->get_error_message() : (string) $result,
+			[
+				'updated'        => $updated,
+				'version_before' => $version_before,
+				'version_after'  => $updated ? $target : $version_before,
+				'detail'         => is_wp_error( $result ) ? $result->get_error_message() : (string) $result,
+			],
+			is_wp_error( $result ) ? $result : null,
 		];
 	}
 
