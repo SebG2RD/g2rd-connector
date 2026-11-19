@@ -36,6 +36,7 @@ use G2RD\Connector\Updates\PremiumUpdatesBridge;
 use Language_Pack_Upgrader;
 use Plugin_Upgrader;
 use Theme_Upgrader;
+use WP_Upgrader;
 
 final class CommandExecutor {
 
@@ -884,9 +885,9 @@ final class CommandExecutor {
 	 */
 	private static function update_core( array $payload ): array {
 		if ( ! empty( $payload['snapshot'] ) && Services::supported() ) {
-			return ( new ProtectedCoreUpdate( Services::make()->health ) )->run( $payload, static fn (): array => self::perform_core_upgrade() );
+			return ( new ProtectedCoreUpdate( Services::make()->health ) )->run( $payload, static fn (): array => self::perform_core_upgrade( true ) );
 		}
-		return self::perform_core_upgrade()[0];
+		return self::perform_core_upgrade( false )[0];
 	}
 
 	/**
@@ -894,9 +895,13 @@ final class CommandExecutor {
 	 * mise à jour protégée : forme historique, et l'erreur de WordPress à part (la mise à jour
 	 * protégée lit son code ; ce qui part au manager ne change pas).
 	 *
-	 * @return array{0: array<string, mixed>, 1: \WP_Error|null}
+	 * @param bool $is_protected Mise à jour protégée : une exception levée une fois la copie faite
+	 *                           n'arrête pas la mise à jour (cf. plus bas), comme pour les extensions
+	 *                           (perform_plugin_upgrade()). Faux : chemin historique inchangé.
+	 * @return array{0: array<string, mixed>, 1: \WP_Error|null} Mise à jour protégée seulement,
+	 *                                                           plus `upgrade_error` dans ce cas.
 	 */
-	private static function perform_core_upgrade(): array {
+	private static function perform_core_upgrade( bool $is_protected ): array {
 		require_once ABSPATH . 'wp-admin/includes/file.php';
 		require_once ABSPATH . 'wp-admin/includes/misc.php';
 		require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
@@ -927,18 +932,49 @@ final class CommandExecutor {
 		// par défaut de WP_Upgrader ÉCRIT sa progression (show_message() = echo + flush),
 		// ce qui corrompt la réponse REST attendue par le manager.
 		$upgrader = new Core_Upgrader( new Automatic_Upgrader_Skin() );
-		$result   = $upgrader->upgrade( $updates[0] );
-		$updated  = ! is_wp_error( $result );
 
-		return [
-			[
-				'updated'        => $updated,
-				'version_before' => $version_before,
-				'version_after'  => $updated ? $target : $version_before,
-				'detail'         => is_wp_error( $result ) ? $result->get_error_message() : (string) $result,
-			],
-			is_wp_error( $result ) ? $result : null,
+		// Marqueur « fichiers copiés » : update_core() émet `_core_updated_successfully` une fois les
+		// fichiers copiés et la mise à niveau de la base lancée (wp-admin/includes/update-core.php,
+		// WordPress 7.1.5 l. 1919), avant `upgrader_process_complete` (class-core-upgrader.php
+		// l. 222). En premier (PHP_INT_MIN) : un autre crochet de cette action peut lever.
+		$copied      = false;
+		$mark_copied = static function () use ( &$copied ): void {
+			$copied = true;
+		};
+		$upgrade_error = null;
+		add_action( '_core_updated_successfully', $mark_copied, PHP_INT_MIN );
+		try {
+			$result = $upgrader->upgrade( $updates[0] );
+		} catch ( \Throwable $e ) {
+			/** @var bool $copied Passé à vrai par référence, dans $mark_copied. */
+			if ( ! $is_protected || ! $copied ) {
+				throw $e;
+			}
+			// Mise à jour PROTÉGÉE, exception levée APRÈS la copie (crochet d'une extension sur
+			// `upgrader_process_complete`) : la nouvelle version est en place. Relever ferait sauter le
+			// contrôle de santé et le retour automatique (ProtectedCoreUpdate), et dirait au manager
+			// « échouée » une mise à jour faite. Le verrou `core_updater`, que WordPress rend après ce
+			// crochet (l. 266), est rendu ici : sinon la réinstallation serait refusée `locked`
+			// pendant 15 minutes. Il appartient à cet upgrade(), qui vient de le prendre.
+			WP_Upgrader::release_lock( 'core_updater' );
+			$upgrade_error = $e->getMessage();
+			$result        = $target;
+		} finally {
+			remove_action( '_core_updated_successfully', $mark_copied, PHP_INT_MIN );
+		}
+		$updated = ! is_wp_error( $result );
+
+		$outcome = [
+			'updated'        => $updated,
+			'version_before' => $version_before,
+			'version_after'  => $updated ? $target : $version_before,
+			'detail'         => is_wp_error( $result ) ? $result->get_error_message() : (string) $result,
 		];
+		if ( null !== $upgrade_error ) {
+			// Lu par le manager comme pour une extension (avertissement du site, connecteur 1.13).
+			$outcome['upgrade_error'] = esc_html( $upgrade_error . self::INSTALLED_THEN_FAILED );
+		}
+		return [ $outcome, is_wp_error( $result ) ? $result : null ];
 	}
 
 	/**

@@ -211,6 +211,15 @@ if ( ! class_exists( 'Automatic_Upgrader_Skin' ) ) {
 	class Automatic_Upgrader_Skin {}
 }
 
+if ( ! class_exists( 'WP_Upgrader' ) ) {
+	/** Doublure : le verrou seul, une option comme dans WordPress (`{nom}.lock`). */
+	class WP_Upgrader {
+		public static function release_lock( string $lock_name ): bool {
+			return delete_option( $lock_name . '.lock' );
+		}
+	}
+}
+
 if ( ! class_exists( 'Core_Upgrader' ) ) {
 	/**
 	 * Doublure : enregistre chaque offre reçue et ses options ; le résultat de upgrade() est fixé

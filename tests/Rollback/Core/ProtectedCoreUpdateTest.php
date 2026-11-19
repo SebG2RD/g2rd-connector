@@ -7,6 +7,7 @@ namespace G2RD\Connector\Tests\Rollback\Core;
 use Brain\Monkey\Actions;
 use Brain\Monkey\Functions;
 use Core_Upgrader;
+use G2RD\Connector\Commands\CommandExecutor;
 use G2RD\Connector\Rollback\AutoUpdateGuard;
 use G2RD\Connector\Rollback\Core\ProtectedCoreUpdate;
 use G2RD\Connector\Rollback\UpdateTransaction;
@@ -347,6 +348,110 @@ final class ProtectedCoreUpdateTest extends CoreRollbackTestCase {
 			self::assertSame( 'Fatal in upgrader_process_complete', $error->getMessage() );
 		}
 		self::assertArrayNotHasKey( UpdateTransaction::OPTION_KEY, $this->options );
+	}
+
+	/**
+	 * Une extension lève sur `upgrader_process_complete`, APRÈS la copie et la mise à niveau de la base
+	 * (update_core() a émis `_core_updated_successfully`) : par le vrai CommandExecutor::perform_core_upgrade(),
+	 * la mise à jour continue vers le contrôle de santé et le retour automatique, verrou `core_updater`
+	 * rendu (la réinstallation serait sinon refusée `locked` pendant 15 minutes).
+	 */
+	public function test_exception_apres_la_copie_controle_puis_retour_automatique(): void {
+		$this->breaks_on = '7.1.5';
+		$this->upgrade_throws( true );
+
+		$result = ( new ProtectedCoreUpdate( $this->health ) )->run( self::PAYLOAD, self::perform_core_upgrade( true ) );
+
+		self::assertSame( 'broken', $result['health']['verdict'] );
+		self::assertTrue( $result['rolled_back'] );
+		self::assertSame( 'health_check_failed', $result['rollback_reason'] );
+		self::assertSame( '7.1.4', $this->version_on_disk() );
+		self::assertCount( 2, Core_Upgrader::$calls );
+		self::assertStringStartsWith( 'Fatal in upgrader_process_complete; WordPress had already installed the new version', $result['upgrade_error'] );
+		self::assertArrayNotHasKey( 'core_updater.lock', $this->options, 'verrou de WordPress rendu' );
+		self::assertArrayNotHasKey( UpdateTransaction::OPTION_KEY, $this->options );
+	}
+
+	public function test_exception_apres_la_copie_site_sain_mise_a_jour_faite(): void {
+		$this->upgrade_throws( true );
+
+		$result = ( new ProtectedCoreUpdate( $this->health ) )->run( self::PAYLOAD, self::perform_core_upgrade( true ) );
+
+		self::assertTrue( $result['updated'] );
+		self::assertSame( '7.1.5', $result['version_after'] );
+		self::assertSame( 'healthy', $result['health']['verdict'] );
+		self::assertFalse( $result['rolled_back'] );
+		self::assertArrayHasKey( 'upgrade_error', $result );
+	}
+
+	/**
+	 * Exception avant la fin de la copie, ou mise à jour simple (chemin historique) : elle remonte,
+	 * comme avant.
+	 *
+	 * @return iterable<string, array{bool, bool}>
+	 */
+	public static function exception_that_propagates(): iterable {
+		yield 'avant la fin de la copie, mise à jour protégée' => [ false, true ];
+		yield 'après la copie, mise à jour simple' => [ true, false ];
+	}
+
+	#[DataProvider( 'exception_that_propagates' )]
+	public function test_exception_remontee( bool $after_copy, bool $is_protected ): void {
+		$this->upgrade_throws( $after_copy );
+
+		$this->expectExceptionMessage( 'Fatal in upgrader_process_complete' );
+		if ( $is_protected ) {
+			( new ProtectedCoreUpdate( $this->health ) )->run( self::PAYLOAD, self::perform_core_upgrade( true ) );
+		} else {
+			self::perform_core_upgrade( false )();
+		}
+	}
+
+	/**
+	 * Le vrai CommandExecutor::perform_core_upgrade().
+	 *
+	 * @return callable(): array{0: array<string, mixed>, 1: WP_Error|null}
+	 */
+	private static function perform_core_upgrade( bool $is_protected ): callable {
+		return static fn (): array => ( new \ReflectionMethod( CommandExecutor::class, 'perform_core_upgrade' ) )->invoke( null, $is_protected );
+	}
+
+	/**
+	 * Core_Upgrader simulé qui lève pendant la mise à jour vers 7.1.5, comme une extension sur
+	 * `upgrader_process_complete`, une fois la copie faite (`_core_updated_successfully` émise) ou
+	 * avant ; verrou `core_updater` pris comme WP_Upgrader::create_lock(). La réinstallation de
+	 * 7.1.4 se passe normalement.
+	 */
+	private function upgrade_throws( bool $after_copy ): void {
+		$marker = null;
+		Functions\when( 'add_action' )->alias(
+			static function ( string $hook, $callback ) use ( &$marker ): bool {
+				if ( '_core_updated_successfully' === $hook ) {
+					$marker = $callback;
+				}
+				return true;
+			}
+		);
+		Functions\when( 'remove_action' )->alias(
+			static function ( string $hook ) use ( &$marker ): bool {
+				if ( '_core_updated_successfully' === $hook ) {
+					$marker = null;
+				}
+				return true;
+			}
+		);
+		Core_Upgrader::$on_upgrade = function ( object $offer ) use ( $after_copy, &$marker ): void {
+			if ( '7.1.5' !== $offer->version ) {
+				$this->install( (string) $offer->version );
+				return;
+			}
+			$this->options['core_updater.lock'] = time();
+			if ( $after_copy ) {
+				$this->install( '7.1.5' );
+				( $marker )( '7.1.5' );
+			}
+			throw new \RuntimeException( 'Fatal in upgrader_process_complete' );
+		};
 	}
 
 	/**

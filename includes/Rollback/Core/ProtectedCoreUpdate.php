@@ -30,11 +30,13 @@
  * nouvel essai (class-wp-automatic-updater.php 6.4.0 l. 468-477). Le blocage reste si la réinstallation
  * échoue : il ne vise que la version proposée (sans effet tant qu'elle est installée), et une version
  * à moitié remplacée ne doit pas être reprise sans contrôle ; il tombe dès qu'une version plus récente
- * est proposée.
+ * de la même branche est proposée (AutoUpdateGuard::filter_core()).
  *
  * Résultat : la forme historique d'update_core, plus `protected`, `health`, `rolled_back`,
  * `rollback_reason`, `db_version_before`, `db_version_after`, `restore_until` ; `error_code` et
- * `error` quand un retour automatique était nécessaire et n'a pas eu lieu ; `locale` après un retour.
+ * `error` quand un retour automatique était nécessaire et n'a pas eu lieu ; `locale` après un retour ;
+ * `upgrade_error` quand une exception a été levée une fois les fichiers copiés : la mise à jour est
+ * alors faite, contrôlée et retirée si besoin (CommandExecutor::perform_core_upgrade()).
  * Jamais `outcome` : le manager le lirait comme l'issue d'une extension.
  *
  * @package G2RD\Connector
