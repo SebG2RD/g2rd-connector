@@ -152,6 +152,32 @@ final class RedactorTest extends PHPUnitTestCase {
 	}
 
 	/**
+	 * Requête citée hors de wpdb::print_error() (exception d'une extension, « Query failed: … ») :
+	 * pas de « for query », seule la lecture des chaînes de SQL_TAIL la masque entière malgré un
+	 * « ; » dans une valeur, un « \' » ou un « \" », ou plus de 1 000 caractères.
+	 *
+	 * @return iterable<string, array{string}>
+	 */
+	public static function requetes_citees_sans_for_query(): iterable {
+		$error = 'Uncaught Exception: Query failed: ';
+		yield 'apostrophe échappée puis « ; »' => [ $error . 'INSERT INTO wp_comments (comment_content) VALUES (\'c\\\'est Jean Dupont; 0612345678\')' ];
+		yield 'valeur sérialisée aux « ; »' => [ $error . 'INSERT INTO wp_usermeta (user_id, meta_key, meta_value) VALUES (12, \'billing\', \'a:2:{s:4:\\"name\\";s:11:\\"Jean Dupont\\";s:5:\\"phone\\";s:10:\\"0612345678\\";}\')' ];
+		yield 'valeur de plus de 1 000 caractères' => [ $error . 'INSERT INTO wp_postmeta (meta_key, meta_value) VALUES (\'note\', \'' . str_repeat( 'x', 1100 ) . ' Jean Dupont 0612345678\')' ];
+		yield 'apostrophe échappée puis « ; », en minuscules' => [ $error . 'update wp_options set option_value = \'Rue de l\\\'Eglise; Jean Dupont, tel 0612345678\' where option_name = \'contact\'' ];
+		yield 'guillemet échappé puis « ; »' => [ $error . 'INSERT INTO wp_postmeta (post_id, meta_key, meta_value) VALUES (7, "note", "Il a dit \\"oui; rappelez Jean Dupont au 0612345678\\"")' ];
+	}
+
+	#[DataProvider( 'requetes_citees_sans_for_query' )]
+	public function test_une_requete_citee_sans_for_query_est_masquee_entiere( string $input ): void {
+		$out = Redactor::redact( $input, [], Redactor::MAX_CHARS, [] );
+
+		self::assertStringNotContainsString( 'Jean Dupont', $out );
+		self::assertStringNotContainsString( '0612345678', $out );
+		self::assertStringStartsWith( 'Uncaught Exception: Query failed: [sql]', $out );
+		self::assertSame( $out, Redactor::redact( $out, [], Redactor::MAX_CHARS, [] ), 'Un texte déjà filtré ne change plus.' );
+	}
+
+	/**
 	 * Textes hostiles sous la borne de lecture (4 000 caractères : rien n'est coupé avant les
 	 * motifs), dont ceux qui visent la lecture des chaînes échappées ; aussi sans JIT (pcre.jit=0).
 	 *
