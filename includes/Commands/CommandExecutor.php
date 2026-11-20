@@ -92,9 +92,6 @@ final class CommandExecutor {
 		'rollback_core',
 	];
 
-	/** Longueur maximale de la sortie parasite remontée au manager (diagnostic). */
-	private const STRAY_OUTPUT_MAX_CHARS = 500;
-
 	/**
 	 * Ajouté à l'erreur d'une mise à jour interrompue par une exception pendant que
 	 * WordPress remplaçait les fichiers, quand l'extension, désactivée par le cœur, n'est
@@ -253,24 +250,12 @@ final class CommandExecutor {
 		}
 
 		if ( '' !== trim( $stray ) ) {
-			$outcome['stray_output'] = self::truncate_stray( $stray );
+			// Écrit par du code tiers ou une notice PHP : filtré, aplati et borné (500 caractères)
+			// comme tout texte tiers ; il sert au diagnostic, pas à transporter une page entière.
+			$outcome['stray_output'] = FilteredError::text( $stray );
 		}
 
 		return $outcome;
-	}
-
-	/**
-	 * Aplatit et tronque une sortie parasite : elle sert au diagnostic, pas à
-	 * transporter une page d'erreur entière jusqu'au manager.
-	 */
-	private static function truncate_stray( string $stray ): string {
-		$flat = trim( (string) preg_replace( '/\s+/', ' ', $stray ) );
-
-		if ( strlen( $flat ) <= self::STRAY_OUTPUT_MAX_CHARS ) {
-			return $flat;
-		}
-
-		return substr( $flat, 0, self::STRAY_OUTPUT_MAX_CHARS ) . '…';
 	}
 
 	/**
