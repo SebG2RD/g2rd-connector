@@ -70,7 +70,10 @@ final class ProtectedCoreUpdate {
 	public function __construct( private readonly HealthChecker $health ) {
 	}
 
-	/** Plafond de `grace_seconds` (365 jours) : au-delà, l'échéance déborderait en nombre décimal. */
+	/**
+	 * Plafond de `grace_seconds` (365 jours) : sans plafond, une valeur proche de PHP_INT_MAX ferait
+	 * passer l'échéance en nombre décimal, que kept() refuse (bouton de retour perdu).
+	 */
 	public const GRACE_MAX_SECONDS = 31536000;
 
 	/**
