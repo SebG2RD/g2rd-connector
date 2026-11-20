@@ -183,7 +183,8 @@ final class RedactorTest extends PHPUnitTestCase {
 
 	/**
 	 * Textes hostiles sous la borne de lecture (4 000 caractères : rien n'est coupé avant les
-	 * motifs), dont ceux qui visent la lecture des chaînes échappées ; aussi sans JIT (pcre.jit=0).
+	 * motifs), dont ceux qui visent la lecture des chaînes échappées. Vérifié à la main aussi avec
+	 * php -d pcre.jit=0 ; la CI tourne avec le JIT.
 	 *
 	 * @return iterable<string, array{string}>
 	 */
