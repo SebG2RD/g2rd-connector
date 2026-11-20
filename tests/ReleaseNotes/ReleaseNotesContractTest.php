@@ -122,6 +122,10 @@ final class ReleaseNotesContractTest extends ReleaseNotesTestCase {
 
 		self::assertSame( $attendu['status'], $issue['status'] ?? null );
 		self::assertSame( $attendu['result'], HeartbeatJob::result_of( (array) $issue ) );
+		// `error` : clé variable du contrat, une phrase toujours présente.
+		self::assertSame( [ 'error' ], $this->contrat['queue_result']['variable_keys'] );
+		self::assertIsString( $issue['error'] ?? null );
+		self::assertNotSame( '', trim( $issue['error'] ) );
 		self::assertSame( [], $this->api_calls );
 	}
 

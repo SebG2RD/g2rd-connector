@@ -147,6 +147,27 @@ final class PremiumUpdatesBridgeReplayEntryTest extends TestCase {
 		);
 	}
 
+	#[DataProvider( 'versions_pas_plus_recentes_du_theme' )]
+	public function test_une_entree_de_theme_qui_n_est_pas_plus_recente_n_est_pas_rejouee( string $version ): void {
+		$this->capture = self::capture( [], [ self::THEME => [ 'new_version' => $version ] + self::entree_theme() ] );
+
+		self::assertNull( PremiumUpdatesBridge::replay_entry( 'themes', self::THEME ) );
+	}
+
+	/**
+	 * @return iterable<string, array{string}>
+	 */
+	public static function versions_pas_plus_recentes_du_theme(): iterable {
+		yield 'même version' => [ '2.0' ];
+		yield 'plus ancienne' => [ '1.9' ];
+	}
+
+	public function test_un_theme_absent_rien(): void {
+		$this->capture = self::capture( [], [ 'theme-absent' => [ 'theme' => 'theme-absent' ] + self::entree_theme() ] );
+
+		self::assertNull( PremiumUpdatesBridge::replay_entry( 'themes', 'theme-absent' ) );
+	}
+
 	public function test_rien_n_est_ecrit_ni_branche(): void {
 		$this->capture = self::capture( [ self::FILE => self::entree_extension( '8.1' ) ], [ self::THEME => self::entree_theme() ] );
 

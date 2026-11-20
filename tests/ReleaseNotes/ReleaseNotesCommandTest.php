@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Tests\ReleaseNotes;
 
+use Brain\Monkey\Filters;
 use Brain\Monkey\Functions;
 use G2RD\Connector\ReleaseNotes\HttpLimits;
 use G2RD\Connector\ReleaseNotes\ReleaseNotesCommand;
@@ -83,6 +84,22 @@ final class ReleaseNotesCommandTest extends ReleaseNotesTestCase {
 			$this->during
 		);
 		$this->assert_nothing_left();
+	}
+
+	/** Le garde passe après les filtres des éditeurs (PHP_INT_MAX), sur les deux crochets. */
+	public function test_le_garde_est_pose_en_dernier(): void {
+		$this->vendor_answer = self::acf_answer();
+		Filters\expectAdded( 'plugins_api' )->once()->with( [ ReleaseNotesCommand::class, 'no_vendor_answer' ], PHP_INT_MAX );
+		Filters\expectAdded( 'themes_api' )->once()->with( [ ReleaseNotesCommand::class, 'no_vendor_answer' ], PHP_INT_MAX );
+
+		$result = $this->command()->run(
+			[
+				'kind' => 'plugin',
+				'file' => self::ACF,
+			]
+		);
+
+		self::assertSame( '6.8.11', $result['version'] );
 	}
 
 	public function test_sans_reponse_de_l_editeur_wordpress_org_n_est_jamais_interroge(): void {

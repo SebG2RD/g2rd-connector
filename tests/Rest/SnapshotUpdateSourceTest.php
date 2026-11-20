@@ -32,6 +32,23 @@ final class SnapshotUpdateSourceTest extends SnapshotTestCase {
 		}
 	}
 
+	/** Chemins `update_source.in` du contrat release-notes-command-v1.json : là où l'inventaire porte la clé. */
+	public function test_les_chemins_du_contrat_sont_ceux_de_l_inventaire(): void {
+		$this->update_transients_checked( 3600 );
+		$snapshot = $this->snapshot();
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- fichier de contrat local du dépôt.
+		$contrat = json_decode( (string) file_get_contents( __DIR__ . '/../fixtures/release-notes-command-v1.json' ), true, 16, JSON_THROW_ON_ERROR );
+
+		self::assertSame( [ 'plugins[].update_source', 'themes[].update_source' ], $contrat['update_source']['in'] );
+		foreach ( $contrat['update_source']['in'] as $chemin ) {
+			[ $section, $cle ] = explode( '[].', $chemin );
+			self::assertNotEmpty( $snapshot[ $section ], $chemin );
+			foreach ( $snapshot[ $section ] as $entree ) {
+				self::assertArrayHasKey( $cle, $entree, $chemin );
+			}
+		}
+	}
+
 	public function test_une_extension_sans_entree_vaut_null(): void {
 		$this->update_transients_checked( 3600 );
 

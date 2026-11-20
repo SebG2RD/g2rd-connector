@@ -83,6 +83,9 @@ final class UpdateSourceTest extends TestCase {
 		yield 'domaine qui finit par wordpress.org' => [ 'package', 'https://notwordpress.org/akismet.zip' ];
 		yield 'domaine qui commence par wordpress.org' => [ 'url', 'https://wordpress.org.premium.example/plugins/akismet/' ];
 		yield 'identifiants devant l’hôte' => [ 'package', 'https://wordpress.org@premium.example/akismet.zip' ];
+		// wp_parse_url() rend null (pas d'hôte) ou false (adresse illisible) : jamais une erreur de type.
+		yield 'adresse sans hôte' => [ 'package', '/wp-content/akismet.zip' ];
+		yield 'adresse illisible' => [ 'package', 'https:///akismet.zip' ];
 	}
 
 	#[DataProvider( 'adresses_qui_ressemblent' )]
