@@ -105,6 +105,76 @@ final class RedactorTest extends PHPUnitTestCase {
 		self::assertStringEndsWith( 'ici', $out );
 	}
 
+	/**
+	 * Requête de wpdb::print_error() (« … for query %s made by %s ») dont une valeur porte un « ; »,
+	 * une apostrophe échappée par mysqli_real_escape_string (« \' »), un guillemet échappé, une barre
+	 * finale (NO_BACKSLASH_ESCAPES), ou dépasse 1 000 caractères : masquée entière, jusqu'au
+	 * « made by ». Mêmes cas que PhpErrorTextTest du manager (seconde barrière), plus la longueur.
+	 *
+	 * @return iterable<string, array{string}>
+	 */
+	public static function requetes_aux_valeurs_piegees(): iterable {
+		$error      = 'WordPress database error Data too long for column \'meta_value\' at row 1 for query ';
+		$serialized = 's:11:"Jean Dupont";s:5:"phone";s:10:"0612345678";}\') made by do_action(\'x\')';
+		yield 'requête brute, valeur sérialisée' => [ $error . 'INSERT INTO wp_usermeta (user_id, meta_key, meta_value) VALUES (12, \'billing\', \'a:2:{s:4:"name";' . $serialized ];
+		yield 'reste collé au masque' => [ $error . '[sql]' . $serialized ];
+		yield 'reste après le masque et une espace' => [ $error . '[sql] Jean Dupont, 0612345678\') made by do_action(\'x\')' ];
+		yield 'apostrophe échappée puis « ; »' => [ $error . 'INSERT INTO wp_comments (comment_author, comment_content) VALUES (\'Jean\', \'Bonjour, c\\\'est Jean Dupont; rappelez-moi au 0612345678\') made by wp_insert_comment' ];
+		yield 'apostrophe échappée puis « ; », en minuscules' => [ $error . 'update wp_options set option_value = \'Rue de l\\\'Eglise; Jean Dupont, tel 0612345678\' where option_name = \'contact\'' ];
+		yield 'guillemet échappé puis « ; »' => [ $error . 'INSERT INTO wp_postmeta (post_id, meta_key, meta_value) VALUES (7, "note", "Il a dit \\"oui; rappelez Jean Dupont au 0612345678\\"")' ];
+		yield 'valeur finie par une barre, sans échappement par barre' => [ $error . 'INSERT INTO wp_postmeta (meta_key, meta_value) VALUES (\'C:\\\', \'Jean Dupont; 0612345678\') made by f' ];
+		yield 'requête de plus de 1 000 caractères' => [ $error . 'INSERT INTO wp_postmeta (meta_key, meta_value) VALUES (\'note\', \'' . str_repeat( 'x', 1100 ) . ' Jean Dupont 0612345678\') made by f' ];
+	}
+
+	#[DataProvider( 'requetes_aux_valeurs_piegees' )]
+	public function test_une_requete_est_masquee_entiere_malgre_ses_valeurs( string $input ): void {
+		$out = Redactor::redact( $input, [], Redactor::MAX_CHARS, [] );
+
+		self::assertStringNotContainsString( 'Jean Dupont', $out );
+		self::assertStringNotContainsString( '0612345678', $out );
+		self::assertStringContainsString( 'WordPress database error', $out );
+		self::assertSame( $out, Redactor::redact( $out, [], Redactor::MAX_CHARS, [] ), 'Un texte déjà filtré ne change plus.' );
+	}
+
+	/**
+	 * Requête arrêtée à un « ; » hors chaîne : ce qui suit appartient encore à la requête jusqu'au
+	 * « made by » ; la pile d'appels de WordPress, après lui, reste lisible.
+	 */
+	public function test_apres_for_query_la_requete_va_jusqu_au_made_by(): void {
+		$out = Redactor::redact( 'WordPress database error Duplicate column for query INSERT INTO wp_x VALUES (\'a;b\'); Jean Dupont made by do_action(\'init\')', [], Redactor::MAX_CHARS, [] );
+
+		self::assertSame( 'WordPress database error Duplicate column for query [sql] made by do_action(\'init\')', $out );
+	}
+
+	/**
+	 * Textes hostiles sous la borne de lecture (4 000 caractères : rien n'est coupé avant les
+	 * motifs), dont ceux qui visent la lecture des chaînes échappées ; aussi sans JIT (pcre.jit=0).
+	 *
+	 * @return iterable<string, array{string}>
+	 */
+	public static function textes_hostiles_sous_la_borne(): iterable {
+		yield 'guillemets' => [ str_repeat( '\'"', 2000 ) ];
+		yield 'apostrophes échappées' => [ str_repeat( '\'\\\'', 1300 ) ];
+		// 25 + 3 000 + 500 = 3 525 caractères : les 500 barres finales passent sous la borne.
+		yield 'requête aux chaînes échappées sans fin' => [ 'INSERT INTO wp_x VALUES (' . str_repeat( '\'\\\'; "\\"; ', 300 ) . str_repeat( '\\', 500 ) ];
+		yield 'requête en minuscules aux chaînes ouvertes' => [ 'update wp_x set a = ' . str_repeat( '"\\', 1900 ) ];
+		yield 'for query répété' => [ str_repeat( 'for query [sql] made by ', 160 ) ];
+		yield 'for query sans made by' => [ 'for query [sql]' . str_repeat( ' made b', 500 ) ];
+	}
+
+	#[DataProvider( 'textes_hostiles_sous_la_borne' )]
+	public function test_un_texte_hostile_sous_la_borne_reste_rapide_et_lisible( string $input ): void {
+		self::assertLessThanOrEqual( 4000, mb_strlen( $input ) );
+
+		$start = hrtime( true );
+		$out   = Redactor::redact( $input, [], Redactor::MAX_CHARS, [] );
+		$ms    = ( hrtime( true ) - $start ) / 1e6;
+
+		self::assertLessThan( 100, $ms, sprintf( '%.1f ms : un motif retombe en arrière sur ce texte', $ms ) );
+		self::assertNotSame( Redactor::UNREADABLE, $out, 'un motif a atteint une limite de PCRE sur ce texte' );
+		self::assertLessThanOrEqual( Redactor::MAX_CHARS, mb_strlen( $out ) );
+	}
+
 	public function test_un_texte_vide_est_illisible(): void {
 		self::assertSame( Redactor::UNREADABLE, Redactor::redact( '', [] ) );
 		self::assertSame( Redactor::UNREADABLE, Redactor::redact( "\u{200B}\u{0007}", [] ) );

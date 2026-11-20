@@ -25,8 +25,9 @@
  * Les masques sont courts, en anglais neutre, distincts de ceux du manager (`[path]`, `[email]`…).
  *
  * Règles des motifs : répétitions possessives ou bornées, texte borné à 16 000 octets puis coupé
- * à 4 000 caractères avant filtrage. Un motif qui échoue rend UNREADABLE, jamais un texte à moitié
- * masqué. Classe pure, sans effet au chargement, appelable dans une fonction d'arrêt.
+ * à 4 000 caractères avant filtrage (une requête SQL y est masquée entière, sans autre borne). Un
+ * motif qui échoue rend UNREADABLE, jamais un texte à moitié masqué. Classe pure, sans effet au
+ * chargement, appelable dans une fonction d'arrêt.
  *
  * @package G2RD\Connector
  */
@@ -83,6 +84,14 @@ final class Redactor {
 	 * manager) : « /home/u…/public_html/wp-content/ » devient « wp-content/ ».
 	 */
 	private const WORDPRESS_ROOT = '#(?:(?:\bfile:///)?(?<!\w)[A-Za-z]:|\bfile://|(?<![\w/.]))/(?:[\w.\-~]+/)+?(wp-content|wp-admin|wp-includes)/#u';
+
+	/**
+	 * Suite d'une requête jusqu'au premier « ; » hors chaîne : une chaîne entre guillemets est prise
+	 * d'un bloc, ses « ; » et ses « \' » et « \" » compris (last_query passe par
+	 * mysqli_real_escape_string), sans borne de longueur (le texte lu en a une). Même motif que
+	 * PhpErrorText::SQL_TAIL du manager (seconde barrière).
+	 */
+	private const SQL_TAIL = '(?:\'[^\'\\\\]*+(?:\\\\.[^\'\\\\]*+)*+\'?+|"[^"\\\\]*+(?:\\\\.[^"\\\\]*+)*+"?+|[^;\'"])*+;?';
 
 	/**
 	 * Texte filtré, `$max_chars` caractères au plus.
@@ -272,10 +281,16 @@ final class Redactor {
 			// Erreur de syntaxe SQL (1064) : « near '…' at line N » recopie un morceau de la requête et
 			// ses valeurs (souvent une valeur collée sans préparation). Répétition paresseuse bornée.
 			'/\b(near\s++)\'.{0,1000}?\'(?=\s++at\s++line\s++\d)/u' => '$1' . self::MASK_SQL,
-			// Requête SQL, mots-clés en majuscules, avec sa structure.
-			'/\b(?:SELECT\b[^;]{0,300}?\bFROM\b|INSERT\s++(?:IGNORE\s++)?INTO\b|REPLACE\s++INTO\b|UPDATE\s++`?[\w.]++`?\s++SET\b|DELETE\s++FROM\b|(?:ALTER|DROP|CREATE|TRUNCATE)\s++TABLE\b)[^;]{0,1000}+;?/u' => self::MASK_SQL,
-			// En minuscules : seulement sur une table au nom de table (« wp_users »).
-			'/\b(?:select\b[^;]{0,300}?\bfrom\s++`?\w*_\w*|insert\s++(?:ignore\s++)?into\s++`?\w*_\w*|update\s++`?\w*_\w*`?\s++set\b|delete\s++from\s++`?\w*_\w*)[^;]{0,1000}+;?/iu' => self::MASK_SQL,
+			// Requête SQL, mots-clés en majuscules, avec sa structure, puis en minuscules seulement sur
+			// une table au nom de table (« wp_users ») : une chaîne entre guillemets est prise d'un bloc,
+			// ses « ; » et ses « \' » compris (valeur sérialisée, texte d'un visiteur), cf. SQL_TAIL.
+			'/\b(?:SELECT\b[^;]{0,300}?\bFROM\b|INSERT\s++(?:IGNORE\s++)?INTO\b|REPLACE\s++INTO\b|UPDATE\s++`?[\w.]++`?\s++SET\b|DELETE\s++FROM\b|(?:ALTER|DROP|CREATE|TRUNCATE)\s++TABLE\b)' . self::SQL_TAIL . '/u' => self::MASK_SQL,
+			'/\b(?:select\b[^;]{0,300}?\bfrom\s++`?\w*_\w*|insert\s++(?:ignore\s++)?into\s++`?\w*_\w*|update\s++`?\w*_\w*`?\s++set\b|delete\s++from\s++`?\w*_\w*)' . self::SQL_TAIL . '/iu' => self::MASK_SQL,
+			// Après « for query » (wpdb::print_error(), « for query %s made by %s ») : tout ce qui suit
+			// le masque appartient à la requête jusqu'au dernier « made by » (pile d'appels de
+			// WordPress), sinon jusqu'à la fin, quelle que soit la lecture des guillemets (une valeur
+			// finie par « \ » sous NO_BACKSLASH_ESCAPES décale SQL_TAIL). Même règle que le manager.
+			'/(?<=\bfor query )' . preg_quote( self::MASK_SQL, '/' ) . '(?:.*(?=\s++made\s++by\b)|.*+)/u' => self::MASK_SQL,
 			// Chaînes de connexion (PDO, Redis, Memcached).
 			'/\b(?:mysqli?|pgsql|sqlite|sqlsrv|rediss?|memcached?):(?:\/\/)?[^\s"\'<>]{1,500}+/i' => self::MASK_DSN,
 			// Compte de base de données : sur Hostinger, il commence par l'identifiant du compte.
