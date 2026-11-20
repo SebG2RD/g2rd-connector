@@ -324,7 +324,8 @@ final class ProtectedUpdate {
 			$point = $s->snapshotter->create( $plugin_file, $meta, $now );
 		} catch ( RestorePointException $e ) {
 			UpdateTransaction::close();
-			// Refus AVANT toute mise à jour : rien n'a changé sur le site.
+			// Refus AVANT toute mise à jour : rien n'a changé sur le site. Message du connecteur, le
+			// texte tiers qu'il cite (ZipArchive, PclZip) déjà filtré par Snapshotter.
 			return $this->legacy_shape( $plugin_file, $version ) + [
 				'outcome'       => $e->error_code(),
 				'error_code'    => $e->error_code(),
@@ -515,7 +516,8 @@ final class ProtectedUpdate {
 			return $result + [
 				'outcome'       => self::OUTCOME_AUTO_ROLLBACK_FAILED,
 				'error_code'    => $e instanceof RestoreException ? $e->error_code() : RestoreException::FAILED,
-				'error'         => $e->getMessage(),
+				// Texte tiers filtré, une fois (déjà filtré : tel quel, explication comprise).
+				'error'         => FilteredError::message_of( $e ),
 				'health'        => $health,
 				'restore_point' => $this->public_point( $s->store->get( $point['id'] ) ),
 			];
@@ -831,8 +833,10 @@ final class ProtectedUpdate {
 			}
 		} catch ( \Throwable $e ) {
 			$outcome['outcome'] = 'recovery_failed';
-			// Abandon (ci-dessus) : son explication reste, l'erreur du point la complète.
-			$outcome['detail'] = isset( $outcome['detail'] ) ? $outcome['detail'] . ' (' . $e->getMessage() . ')' : $e->getMessage();
+			// Abandon (ci-dessus) : son explication reste, l'erreur du point la complète. Texte tiers
+			// filtré, une fois (déjà filtré : tel quel, explication comprise).
+			$error             = FilteredError::message_of( $e );
+			$outcome['detail'] = isset( $outcome['detail'] ) ? $outcome['detail'] . ' (' . $error . ')' : $error;
 		}
 
 		PendingOutcomes::add( $outcome, $now );
@@ -1098,14 +1102,14 @@ final class ProtectedUpdate {
 	 * L'erreur d'une restauration qui a échoué, complétée de ce qui a été fait de
 	 * l'extension (`$detail`, texte fixe). Même classe et même code pour une
 	 * RestoreException (la plateforme lit `error_code`) ; toute autre erreur devient une
-	 * RuntimeException qui la porte.
+	 * FilteredError qui la porte : son texte tiers filtré une fois, l'explication entière à la
+	 * suite, que le filet de CommandExecutor::run() ne refiltre ni ne coupe.
 	 */
 	private static function with_detail( \Throwable $e, string $detail ): \Throwable {
 		if ( $e instanceof RestoreException ) {
 			return $e->with_detail( $detail );
 		}
-		// Message déjà échappé par celui qui l'a levé, suffixe fixe.
-		return new \RuntimeException( $e->getMessage() . $detail, 0, $e );
+		return new FilteredError( esc_html( FilteredError::message_of( $e ) . $detail ), 0, $e );
 	}
 
 	/**

@@ -12,6 +12,7 @@ use G2RD\Connector\Rest\Auth;
 use G2RD\Connector\Rollback\AutoUpdateGuard;
 use G2RD\Connector\Rollback\HealthChecker;
 use G2RD\Connector\Rollback\PluginRestorer;
+use G2RD\Connector\Rollback\ProtectedUpdate;
 use G2RD\Connector\Rollback\RestoreCommands;
 use G2RD\Connector\Rollback\RestorePointStore;
 use G2RD\Connector\Rollback\Services;
@@ -345,6 +346,131 @@ final class RestoreCommandsTest extends FilesystemTestCase {
 		self::assertGreaterThanOrEqual( $now + 3600, $kept['hold_until'] );
 		self::assertLessThanOrEqual( time() + 3600, $kept['hold_until'] );
 		self::assertFileExists( (string) $this->store->path_for( $kept ) );
+	}
+
+	/**
+	 * Textes d'une erreur tierce : chemin du compte d'hébergement et 14 000 caractères, puis requête et
+	 * valeurs d'un visiteur.
+	 *
+	 * @return array<string, array{string, string, list<string>}>
+	 */
+	public static function hostile_errors(): array {
+		return [
+			'chemin du serveur, 14 000 caractères' => [
+				'Fatal in /home/u123456789/domains/exemple.fr/public_html/wp-content/plugins/x/x.php:12 for contact@exemple.fr ' . str_repeat( 'détail ', 2000 ),
+				'Fatal in wp-content/plugins/x/x.php:12 for [email] détail',
+				[ '/home/', 'u123456789', 'contact@exemple.fr' ],
+			],
+			'requête et ses valeurs'               => [
+				'Query failed: INSERT INTO wp_postmeta (meta_key, meta_value) VALUES (\'tel\', \'Jean Dupont 0612345678\')',
+				'Query failed: [sql]',
+				[ 'Jean Dupont', '0612345678' ],
+			],
+		];
+	}
+
+	/**
+	 * Exception tierce qui n'est pas une RestoreException, levée pendant la restauration une fois
+	 * l'extension désactivée (filtre `wp_opcache_invalidate_file` d'une extension, appelé par
+	 * wp_opcache_invalidate_directory()) : le texte tiers part filtré une fois, et l'explication de ce
+	 * qu'est devenue l'extension le suit entière, jamais coupée ni effacée après un masque [sql].
+	 *
+	 * @param list<string> $absent
+	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider( 'hostile_errors' )]
+	public function test_a_third_party_error_while_restoring_is_filtered_once_and_keeps_its_explanation( string $message, string $start, array $absent ): void {
+		Functions\when( 'wp_opcache_invalidate_directory' )->alias(
+			static function () use ( $message ): void {
+				throw new \RuntimeException( $message ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- texte d'essai.
+			}
+		);
+		$explanation = ( new \ReflectionClassConstant( ProtectedUpdate::class, 'LEFT_INACTIVE_NOT_CHECKED' ) )->getValue();
+
+		$outcome = CommandExecutor::run( 'rollback_plugin', $this->rollback_payload( 'restore_point' ) );
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assertStringStartsWith( $start, $outcome['error'] );
+		foreach ( $absent as $text ) {
+			self::assertStringNotContainsString( $text, $outcome['error'] );
+		}
+		self::assertStringEndsWith( $explanation, $outcome['error'] );
+		self::assertLessThanOrEqual( 500 + mb_strlen( $explanation ), mb_strlen( $outcome['error'] ) );
+		self::assertFalse( $this->active );
+	}
+
+	/**
+	 * Texte tiers levé pendant l'extraction ou par la désactivation de l'extension : filtré à la
+	 * création de la RestoreException, avant d'être échappé, puis rendu tel quel dans `error`, suivi
+	 * entier de l'explication.
+	 *
+	 * @param list<string> $absent
+	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider( 'hostile_errors' )]
+	public function test_a_third_party_error_raised_by_the_extraction_or_the_deactivation_is_filtered( string $message, string $start, array $absent ): void {
+		$put_back = ( new \ReflectionClassConstant( ProtectedUpdate::class, 'PUT_BACK_AS_BEFORE' ) )->getValue();
+		$s        = Services::make();
+		Services::override(
+			new Services(
+				$s->store,
+				$s->snapshotter,
+				new PluginRestorer(
+					$this->plugins,
+					static function () use ( $message ): void {
+						throw new \RuntimeException( $message ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- texte d'essai.
+					}
+				),
+				$s->health,
+				$s->plugins_root
+			)
+		);
+		$extraction = CommandExecutor::run( 'rollback_plugin', $this->rollback_payload( 'restore_point' ) )['result'];
+
+		Services::override( $s );
+		Functions\when( 'deactivate_plugins' )->alias(
+			static function () use ( $message ): void {
+				throw new \RuntimeException( $message ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- texte d'essai.
+			}
+		);
+		$deactivation = CommandExecutor::run( 'rollback_plugin', $this->rollback_payload( 'restore_point' ) )['result'];
+
+		foreach ( [ 'extraction failed: ' => $extraction, 'restore stopped before extracting the archive: ' => $deactivation ] as $prefix => $r ) {
+			self::assertSame( 'rollback_failed', $r['outcome'] );
+			self::assertStringStartsWith( $prefix . $start, $r['error'] );
+			foreach ( $absent as $text ) {
+				self::assertStringNotContainsString( $text, $r['error'] );
+			}
+			self::assertStringEndsWith( $put_back, $r['error'] );
+		}
+	}
+
+	/**
+	 * Archive de repli : la WP_Error de download_url() (texte de WordPress ou d'une extension branchée
+	 * sur la requête) est filtrée avant d'être échappée ; sans message, son code.
+	 */
+	public function test_the_error_of_a_failed_download_is_filtered(): void {
+		$errors = [
+			new WP_Error( 'http_request_failed', "cURL error 77: error setting certificate verify locations: CAfile: /home/u123456789/domains/exemple.fr/public_html/wp-includes/certificates/ca-bundle.crt for {\"license_key\":\"Hx7-ab12-cd34\"}" ),
+			new WP_Error( 'http_404', '' ),
+		];
+		Functions\when( 'download_url' )->alias(
+			static function () use ( &$errors ): WP_Error {
+				return array_shift( $errors );
+			}
+		);
+		$payload = [
+			'file'             => self::FILE,
+			'source_url'       => 'https://downloads.wordpress.org/plugin/akismet.1.0.zip',
+			'expected_version' => '1.0',
+		];
+
+		$first  = CommandExecutor::run( 'rollback_plugin', $payload )['result'];
+		$second = CommandExecutor::run( 'rollback_plugin', $payload )['result'];
+
+		self::assertSame( 'rollback_failed', $first['outcome'] );
+		self::assertStringStartsWith( 'download failed: cURL error 77: error setting certificate verify locations: CAfile: wp-includes/certificates/ca-bundle.crt', $first['error'] );
+		self::assertStringNotContainsString( 'u123456789', $first['error'] );
+		self::assertStringNotContainsString( 'Hx7-ab12-cd34', $first['error'] );
+		self::assertSame( 'download failed: http_404', $second['error'] );
 	}
 
 	/** Une rétention qui lève à son tour n'efface pas l'erreur de la restauration, qui dit ce qu'est devenue l'extension. */

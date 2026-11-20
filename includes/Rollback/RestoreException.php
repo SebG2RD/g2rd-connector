@@ -2,7 +2,9 @@
 /**
  * Échec d'une restauration, avec un code stable remonté au manager.
  * Le message est échappé (esc_html) au point de lancement quand il contient une
- * variable (règle WordPress.Security.EscapeOutput, Plugin Check).
+ * variable (règle WordPress.Security.EscapeOutput, Plugin Check), et le texte tiers qu'il
+ * cite (exception, WP_Error) filtré avant, une fois (Commands\FilteredError) : il part au
+ * manager tel quel, jamais refiltré.
  *
  * @package G2RD\Connector
  */

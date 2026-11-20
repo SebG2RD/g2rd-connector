@@ -353,3 +353,29 @@ if ( ! class_exists( 'Theme_Upgrader' ) ) {
 		}
 	}
 }
+
+if ( ! class_exists( 'PclZip' ) ) {
+	/**
+	 * Doublure : create() échoue et errorInfo() rend `$error`, comme PclZip sur un hébergement sans
+	 * l'extension zip (cf. Snapshotter, construit sans ZipArchive). Jamais utilisée quand ZipArchive l'est.
+	 */
+	class PclZip {
+		public static string $error = '';
+
+		public function __construct( public string $zipname ) {}
+
+		/** @param mixed ...$options */
+		public function create( ...$options ): int {
+			unset( $options );
+			return 0;
+		}
+
+		public function errorInfo( bool $full = false ): string {
+			unset( $full );
+			return self::$error;
+		}
+	}
+}
+if ( ! defined( 'PCLZIP_OPT_REMOVE_PATH' ) ) {
+	define( 'PCLZIP_OPT_REMOVE_PATH', 77003 );
+}

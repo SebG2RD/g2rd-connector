@@ -18,6 +18,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Rollback;
 
+use G2RD\Connector\Commands\FilteredError;
 use G2RD\Connector\Cron\RestorePointPurgeJob;
 use G2RD\Connector\Settings;
 
@@ -256,7 +257,8 @@ final class RestoreCommands {
 		}
 		$tmp = download_url( $url, 120 );
 		if ( is_wp_error( $tmp ) ) {
-			throw RestoreException::failed( esc_html( 'download failed: ' . $tmp->get_error_message() ) );
+			// Texte de WordPress ou d'une extension branchée sur la requête : filtré avant d'être échappé.
+			throw RestoreException::failed( esc_html( 'download failed: ' . FilteredError::of_wp_error( $tmp ) ) );
 		}
 
 		try {

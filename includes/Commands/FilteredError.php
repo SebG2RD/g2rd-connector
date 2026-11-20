@@ -18,14 +18,19 @@ declare(strict_types=1);
 namespace G2RD\Connector\Commands;
 
 use G2RD\Connector\PhpErrors\Redactor;
+use G2RD\Connector\Rollback\RestoreException;
 
 final class FilteredError extends \RuntimeException {
 
 	/**
-	 * Message de `$e` prêt à quitter le site : tel quel s'il est déjà filtré, sinon filtré par text().
+	 * Message de `$e` prêt à quitter le site : tel quel s'il est déjà filtré (FilteredError, et
+	 * RestoreException, dont le texte tiers est filtré à sa création), sinon filtré par text().
 	 */
 	public static function message_of( \Throwable $e ): string {
-		return $e instanceof self ? $e->getMessage() : self::text( $e->getMessage(), get_class( $e ) );
+		if ( $e instanceof self || $e instanceof RestoreException ) {
+			return $e->getMessage();
+		}
+		return self::text( $e->getMessage(), get_class( $e ) );
 	}
 
 	/**

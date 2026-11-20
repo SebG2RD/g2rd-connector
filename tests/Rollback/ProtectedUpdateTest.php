@@ -1492,6 +1492,114 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		self::assertLessThanOrEqual( Redactor::MAX_CHARS + mb_strlen( $end ), mb_strlen( $error ) );
 	}
 
+	// ── Texte tiers des retours en arrière ──────────────────────────────────
+
+	/**
+	 * Rollback automatique manqué (`auto_rollback_failed`) sur une erreur tierce levée pendant
+	 * l'extraction : son texte est filtré à la création de la RestoreException, avant d'être échappé,
+	 * puis rendu tel quel dans `error`, suivi entier de ce qu'est devenue l'extension.
+	 */
+	public function test_a_third_party_error_while_rolling_back_automatically_is_filtered(): void {
+		$this->responses = [
+			[ 'code' => 200, 'body' => 'ok' ],
+			[ 'code' => 200, 'body' => self::ajax_ok() ],
+			[ 'code' => 500, 'body' => '' ],
+			[ 'code' => 200, 'body' => '<b>Fatal error</b>: Uncaught Error' ],
+		];
+		$this->loaded_at_boot();
+		$this->restore_fails( then_activation_throws: false, message: self::QUERY_ERROR . ' in /home/u123456789/domains/exemple.fr/public_html/wp-content/plugins/x/x.php:3' );
+
+		$r = CommandExecutor::run( 'update_plugin', $this->payload( [] ) )['result'];
+
+		self::assertSame( ProtectedUpdate::OUTCOME_AUTO_ROLLBACK_FAILED, $r['outcome'] );
+		self::assertStringStartsWith( 'extraction failed: Query failed: [sql]' . self::LEFT_INACTIVE, $r['error'] );
+		self::assertStringEndsWith( 'roll it back again from the platform or reinstall it', $r['error'] );
+		self::assertStringNotContainsString( '0612345678', $r['error'] );
+		self::assertStringNotContainsString( 'u123456789', $r['error'] );
+	}
+
+	/**
+	 * Même échec, extension inactive avant la mise à jour : l'exception tierce (filtre
+	 * `wp_opcache_invalidate_file` d'une extension) remonte telle quelle de la restauration. Son
+	 * texte est filtré dans `error`.
+	 */
+	public function test_a_third_party_exception_of_a_failed_automatic_rollback_is_filtered(): void {
+		$this->responses = [
+			[ 'code' => 200, 'body' => 'ok' ],
+			[ 'code' => 200, 'body' => self::ajax_ok() ],
+			[ 'code' => 500, 'body' => '' ],
+			[ 'code' => 200, 'body' => '<b>Fatal error</b>: Uncaught Error' ],
+		];
+		$this->active = false;
+		Functions\when( 'wp_opcache_invalidate_directory' )->alias(
+			function (): void {
+				if ( [] !== $this->deactivated ) { // Pendant la restauration seulement.
+					throw new \RuntimeException( self::QUERY_ERROR ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- texte d'essai.
+				}
+			}
+		);
+
+		$r = CommandExecutor::run( 'update_plugin', $this->payload( [] ) )['result'];
+
+		self::assertSame( ProtectedUpdate::OUTCOME_AUTO_ROLLBACK_FAILED, $r['outcome'] );
+		self::assertSame( RestoreException::FAILED, $r['error_code'] );
+		self::assertSame( 'Query failed: [sql]', $r['error'] );
+	}
+
+	/**
+	 * Reprise dont la restauration échoue sur une exception tierce : `detail` de `recovery_failed`
+	 * filtré, suivi entier de ce qu'est devenue l'extension (inactive avant : elle le reste), ou seul
+	 * quand l'extension n'a pas été désactivée.
+	 *
+	 * @return iterable<string, array{bool, string}>
+	 */
+	public static function recoveries_failing_on_a_third_party_exception(): iterable {
+		yield 'extension inactive avant la mise à jour' => [ false, 'Query failed: [sql]; the plugin was inactive before the update and stays inactive; check its files, then roll it back from the platform: its restore point is kept' ];
+		yield 'extension jamais désactivée' => [ true, 'Query failed: [sql]' ];
+	}
+
+	#[DataProvider( 'recoveries_failing_on_a_third_party_exception' )]
+	public function test_the_detail_of_a_recovery_failing_on_a_third_party_exception_is_filtered( bool $was_active, string $detail ): void {
+		$point = ( new Snapshotter( $this->store, $this->plugins ) )->create( self::FILE, [ 'version' => '1.0', 'kind' => 'wporg' ], time() - 1000 );
+		( Plugin_Upgrader::$on_upgrade )();
+		$this->dead_transaction( self::FILE, $point['id'] );
+		$this->options[ UpdateTransaction::OPTION_KEY ]['was_active'] = $was_active;
+		// Active : la désactivation ne fait rien, l'extension reste active pendant l'échec.
+		$this->active = $was_active;
+		if ( $was_active ) {
+			Functions\when( 'deactivate_plugins' )->justReturn( null );
+		}
+		Functions\when( 'wp_opcache_invalidate_directory' )->alias(
+			static function (): void {
+				throw new \RuntimeException( self::QUERY_ERROR ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- texte d'essai.
+			}
+		);
+
+		ProtectedUpdate::recover( time() );
+
+		$pending = PendingOutcomes::all();
+		self::assertSame( 'recovery_failed', $pending[0]['outcome'] );
+		self::assertSame( $detail, $pending[0]['detail'] );
+	}
+
+	/**
+	 * Point de restauration refusé sur un hébergement sans l'extension zip (PclZip) : le texte de
+	 * PclZip::errorInfo(), qui cite le chemin absolu de l'archive, est filtré avant d'être échappé
+	 * dans `error` du résultat `snapshot_failed`.
+	 */
+	public function test_the_pclzip_error_of_a_refused_restore_point_is_filtered(): void {
+		$s = Services::make();
+		Services::override( new Services( $s->store, new Snapshotter( $s->store, $this->plugins, false ), $s->restorer, $s->health, $s->plugins_root ) );
+		\PclZip::$error = "PCLZIP_ERR_READ_OPEN_FAIL (-2) : Unable to open archive '/home/u123456789/domains/exemple.fr/public_html/wp-content/g2rd-snapshots/akismet-1.0.zip.part' in wb mode";
+		$this->script_health( ok: 2, then_ok: 0 );
+
+		$r = CommandExecutor::run( 'update_plugin', $this->payload( [] ) )['result'];
+
+		self::assertSame( 'snapshot_failed', $r['outcome'] );
+		self::assertSame( 'zip failed: PclZip: PCLZIP_ERR_READ_OPEN_FAIL (-2) : Unable to open archive &#039;wp-content/g2rd-snapshots/akismet-1.0.zip.part&#039; in wb mode', $r['error'] );
+		self::assertSame( [], Plugin_Upgrader::$upgraded );
+	}
+
 	// ── Reprise qui meurt à chaque tentative ─────────────────────────────────
 
 	/**
@@ -2264,16 +2372,17 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 	 * retire l'extraction partielle et remet le dossier d'avant. Avec
 	 * `$then_activation_throws`, le fichier principal lève ensuite au chargement
 	 * (activate_plugin() lève une Error), à partir de cette restauration seulement.
+	 * `$message` : texte de l'erreur levée pendant l'extraction.
 	 */
-	private function restore_fails( bool $then_activation_throws ): void {
+	private function restore_fails( bool $then_activation_throws, string $message = 'disk full' ): void {
 		$s        = Services::make();
 		$restorer = new PluginRestorer(
 			$this->plugins,
-			function ( string $zip, string $destination ) use ( $then_activation_throws ): void {
+			function ( string $zip, string $destination ) use ( $then_activation_throws, $message ): void {
 				mkdir( $destination . '/akismet', 0777, true );
 				file_put_contents( $destination . '/akismet/akismet.php', "<?php\n/**\n * Plugin Name: akismet\n" );
 				$this->activation_throws = $then_activation_throws;
-				throw new \RuntimeException( 'disk full' );
+				throw new \RuntimeException( $message ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- texte d'essai.
 			}
 		);
 		Services::override( new Services( $s->store, $s->snapshotter, $restorer, $s->health, $s->plugins_root ) );
