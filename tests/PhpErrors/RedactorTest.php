@@ -153,8 +153,10 @@ final class RedactorTest extends PHPUnitTestCase {
 
 	/**
 	 * Requête citée hors de wpdb::print_error() (exception d'une extension, « Query failed: … ») :
-	 * pas de « for query », seule la lecture des chaînes de SQL_TAIL la masque entière malgré un
-	 * « ; » dans une valeur, un « \' » ou un « \" », ou plus de 1 000 caractères.
+	 * pas de « for query », la lecture des chaînes de SQL_TAIL la masque entière malgré un « ; »
+	 * dans une valeur, un « \' » ou un « \" », ou plus de 1 000 caractères. Une valeur finie par
+	 * « \ » sans échappement (NO_BACKSLASH_ESCAPES) décale cette lecture : ce qui suit le masque
+	 * jusqu'au « made by », sinon jusqu'à la fin, appartient encore à la requête.
 	 *
 	 * @return iterable<string, array{string}>
 	 */
@@ -165,6 +167,7 @@ final class RedactorTest extends PHPUnitTestCase {
 		yield 'valeur de plus de 1 000 caractères' => [ $error . 'INSERT INTO wp_postmeta (meta_key, meta_value) VALUES (\'note\', \'' . str_repeat( 'x', 1100 ) . ' Jean Dupont 0612345678\')' ];
 		yield 'apostrophe échappée puis « ; », en minuscules' => [ $error . 'update wp_options set option_value = \'Rue de l\\\'Eglise; Jean Dupont, tel 0612345678\' where option_name = \'contact\'' ];
 		yield 'guillemet échappé puis « ; »' => [ $error . 'INSERT INTO wp_postmeta (post_id, meta_key, meta_value) VALUES (7, "note", "Il a dit \\"oui; rappelez Jean Dupont au 0612345678\\"")' ];
+		yield 'valeur finie par une barre, sans échappement par barre' => [ $error . 'INSERT INTO wp_postmeta (meta_key, meta_value) VALUES (\'C:\\\', \'Jean Dupont; 0612345678\')' ];
 	}
 
 	#[DataProvider( 'requetes_citees_sans_for_query' )]
@@ -192,6 +195,8 @@ final class RedactorTest extends PHPUnitTestCase {
 		yield 'for query répété' => [ str_repeat( 'for query [sql] made by ', 160 ) ];
 		yield 'for query sans made by' => [ 'for query [sql]' . str_repeat( ' made b', 500 ) ];
 		yield 'for query répété sans masque ni made by' => [ str_repeat( 'for query x made b ', 210 ) ];
+		yield 'masque répété sans made by' => [ str_repeat( '[sql] made b', 330 ) ];
+		yield 'near et masque répétés' => [ str_repeat( 'near [sql] at ', 280 ) ];
 	}
 
 	#[DataProvider( 'textes_hostiles_sous_la_borne' )]
@@ -490,9 +495,10 @@ final class RedactorTest extends PHPUnitTestCase {
 			'Boutique [secret] fermée, voir workshop et shops',
 			Redactor::redact( 'Boutique SHOP fermée, voir workshop et shops', [], Redactor::MAX_CHARS, [ 'shop' ] )
 		);
+		// « [sql] » en dernier : la suite d'un masque de requête lui appartient (cf. Redactor::patterns()).
 		self::assertSame(
-			'Erreur [secret] et [sql] pour le compte [secret]',
-			Redactor::redact( 'Erreur [secret] et [sql] pour le compte secret', [], Redactor::MAX_CHARS, [ 'secret', 'sql' ] )
+			'Erreur [secret] pour le compte [secret] et [sql]',
+			Redactor::redact( 'Erreur [secret] pour le compte secret et [sql]', [], Redactor::MAX_CHARS, [ 'secret', 'sql' ] )
 		);
 	}
 

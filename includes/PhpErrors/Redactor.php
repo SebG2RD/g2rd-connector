@@ -293,6 +293,10 @@ final class Redactor {
 			// lecture des guillemets (une valeur finie par « \ » sous NO_BACKSLASH_ESCAPES décale
 			// SQL_TAIL). Le manager ne l'applique qu'après un masque déjà posé.
 			'/(\bfor query )(?:.*(?=\s++made\s++by\b)|.*+)/u' => '$1' . self::MASK_SQL,
+			// De même après un masque de requête déjà posé, « for query » ou non (seconde barrière du
+			// manager) : une valeur finie par « \ » arrête SQL_TAIL avant la fin de la requête. Sauf le
+			// fragment d'une erreur de syntaxe (« near [sql] at line N ») : la suite est le message.
+			'/((?<!near )' . preg_quote( self::MASK_SQL, '/' ) . ')(?:.*(?=\s++made\s++by\b)|.*+)/u' => '$1',
 			// Chaînes de connexion (PDO, Redis, Memcached).
 			'/\b(?:mysqli?|pgsql|sqlite|sqlsrv|rediss?|memcached?):(?:\/\/)?[^\s"\'<>]{1,500}+/i' => self::MASK_DSN,
 			// Compte de base de données : sur Hostinger, il commence par l'identifiant du compte.

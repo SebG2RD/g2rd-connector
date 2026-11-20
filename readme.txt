@@ -153,9 +153,9 @@ Pre-release of the 1.18 line, piloted on one site before it is offered to every 
   a database query quoted in an error message ("WordPress database error … for query … made by …")
   is now removed entirely on the site, whatever its kind (`SHOW`, `CALL`, a trigger, a long column
   list included) and even when one of its values contains a semicolon, an escaped quote (`\'`) or
-  more than 1,000 characters; before, such a query, or the end of such a value (for example a
-  visitor's name or phone number), could be left readable. Everything between "for query" and
-  WordPress' "made by" list is part of the query.
+  more than 1,000 characters, or ends with a backslash; before, such a query, or the end of such a
+  value (for example a visitor's name or phone number), could be left readable. Everything between
+  "for query" and WordPress' "made by" list is part of the query.
 
 = 1.17.0 =
 
