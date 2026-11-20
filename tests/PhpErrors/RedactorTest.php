@@ -169,15 +169,17 @@ final class RedactorTest extends PHPUnitTestCase {
 		yield 'apostrophe échappée puis « ; », en minuscules' => [ $error . 'update wp_options set option_value = \'Rue de l\\\'Eglise; Jean Dupont, tel 0612345678\' where option_name = \'contact\'' ];
 		yield 'guillemet échappé puis « ; »' => [ $error . 'INSERT INTO wp_postmeta (post_id, meta_key, meta_value) VALUES (7, "note", "Il a dit \\"oui; rappelez Jean Dupont au 0612345678\\"")' ];
 		yield 'valeur finie par une barre, sans échappement par barre' => [ $error . 'INSERT INTO wp_postmeta (meta_key, meta_value) VALUES (\'C:\\\', \'Jean Dupont; 0612345678\')' ];
+		// Seul « near [sql] at line N » (erreur de syntaxe, 1064) garde sa suite : ici, pas de « at line ».
+		yield 'requête après « near », valeur finie par une barre' => [ 'Uncaught Exception: Syntax error near INSERT INTO wp_postmeta (meta_key, meta_value) VALUES (\'C:\\\', \'Jean Dupont; 0612345678\')', 'Uncaught Exception: Syntax error near [sql]' ];
 	}
 
 	#[DataProvider( 'requetes_citees_sans_for_query' )]
-	public function test_une_requete_citee_sans_for_query_est_masquee_entiere( string $input ): void {
+	public function test_une_requete_citee_sans_for_query_est_masquee_entiere( string $input, string $start = 'Uncaught Exception: Query failed: [sql]' ): void {
 		$out = Redactor::redact( $input, [], Redactor::MAX_CHARS, [] );
 
 		self::assertStringNotContainsString( 'Jean Dupont', $out );
 		self::assertStringNotContainsString( '0612345678', $out );
-		self::assertStringStartsWith( 'Uncaught Exception: Query failed: [sql]', $out );
+		self::assertStringStartsWith( $start, $out );
 		self::assertSame( $out, Redactor::redact( $out, [], Redactor::MAX_CHARS, [] ), 'Un texte déjà filtré ne change plus.' );
 	}
 
@@ -199,6 +201,7 @@ final class RedactorTest extends PHPUnitTestCase {
 		yield 'for query répété sans masque ni made by' => [ str_repeat( 'for query x made b ', 210 ) ];
 		yield 'masque répété sans made by' => [ str_repeat( '[sql] made b', 330 ) ];
 		yield 'near et masque répétés' => [ str_repeat( 'near [sql] at ', 280 ) ];
+		yield 'fragment de syntaxe répété' => [ str_repeat( 'near [sql] at line 1 ', 190 ) ];
 	}
 
 	#[DataProvider( 'textes_hostiles_sous_la_borne' )]
