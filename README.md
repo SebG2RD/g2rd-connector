@@ -264,13 +264,19 @@ aujourd'hui toute version ≥ 2 pour la version 2.
 | POST | `/wp-json/g2rd/v1/command-runs` | Bearer SiteToken + signature obligatoire | Accepte une commande longue, exécutée après la réponse (1.15, voir « Commandes en arrière-plan ») |
 | GET | `/wp-json/g2rd/v1/command-runs/<numéro>` | Bearer SiteToken + signature obligatoire | État et résultat d'une commande en arrière-plan (1.15) |
 
-Une commande en échec rend `{status: failed, error}`. Le texte d'une exception tierce (WordPress, une
-extension) ou de la `WP_Error` d'un upgrader (extension, thème, traductions) y est filtré par
-`PhpErrors\Redactor` avant tout échappement (« &#039; » ne serait plus lu comme une apostrophe) :
-chemins du serveur, e-mails, IP, jetons et requêtes SQL retirés, 500 caractères au plus, puis suivi
-entier de l'explication du connecteur quand il en
-ajoute une (`Commands\FilteredError`, jamais refiltrée). De même pour `upgrade_error` des extensions
-et du cœur (1.18).
+Une commande en échec rend `{status: failed, error}`. Principe (1.18) : tout texte d'origine tierce
+qui part au manager (exception de WordPress ou d'une extension, `WP_Error` d'un upgrader ou de
+`download_url()`, message de PclZip ou de cURL, nom de la classe d'une exception imprévue) passe une
+fois, et une seule, par `Commands\FilteredError::text()`, c'est-à-dire `PhpErrors\Redactor`, avant
+tout échappement (« &#039; » ne serait plus lu comme une apostrophe) : chemins du serveur, e-mails,
+IP, jetons et requêtes SQL retirés, 500 caractères au plus ; vide, il est remplacé par son code ou sa
+classe, jamais par `[unreadable]`. L'explication du connecteur qui le suit est entière, jamais
+refiltrée ni coupée : le message d'une `Commands\FilteredError` ou d'une `Rollback\RestoreException`
+(texte tiers filtré à sa création) part tel quel. Champs concernés : `error` du filet de
+`CommandExecutor::run()` et d'une commande en arrière-plan, `upgrade_error` des extensions et du
+cœur, `detail` d'`update_core`, `error` de `snapshot_failed*`, d'`auto_rollback_failed` et des
+échecs de `rollback_plugin`, `detail` de `recovery_failed`, `reason` des sondes de `health`, refus
+`core_rollback_failed` (classe de l'exception).
 
 ### Origine des thèmes dans l'inventaire
 
