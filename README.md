@@ -377,7 +377,10 @@ et `db_version` relues après le téléchargement, juste avant la copie (mêmes 
 paquet est supprimé). Résultats à `outcome` : `rollback_success`, ou
 `core_rollback_expired`, `core_rollback_version_changed`, `core_rollback_db_changed`,
 `core_rollback_busy`, `core_rollback_wporg_unreachable`, `core_rollback_integrity`,
-`core_rollback_failed`. Capacité `core_rollback`, sous la condition de `restore_points`.
+`core_rollback_failed`. Un refus rend `version_after` égal à `version_before` (version chargée au
+début de la requête), sauf `core_rollback_version_changed` : la version écrite dans
+`wp-includes/version.php`, quand elle est lisible. Capacité `core_rollback`, sous la condition de
+`restore_points`.
 
 Paquet (`CorePackage`) : `https://downloads.wordpress.org/release/[{locale}/]wordpress-{version}.zip`,
 repli `en_US` quand `<paquet>.sha1` répond 404 ; SHA-1 publié comparé avant toute copie (WordPress ne

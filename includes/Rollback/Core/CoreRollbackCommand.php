@@ -71,12 +71,15 @@ final class CoreRollbackCommand {
 		} catch ( \Throwable $e ) {
 			// Exception imprévue : code stable, et sa classe seulement (son texte peut porter un chemin du serveur).
 			$refused = $e instanceof CoreRollbackRefused ? $e : CoreRollbackRefused::because( CoreRollbackRefused::FAILED, get_class( $e ) );
+			// Version changée : celle écrite sur le disque (un autre processus a mis WordPress à jour),
+			// pas celle chargée au début de la requête ; celle-ci si le fichier est illisible.
+			$on_disk = CoreRollbackRefused::VERSION_CHANGED === $refused->error_code() ? self::version_on_disk() : '';
 			return [
 				'outcome'        => $refused->error_code(),
 				'error_code'     => $refused->error_code(),
 				'error'          => $refused->getMessage(),
 				'version_before' => $installed,
-				'version_after'  => $installed,
+				'version_after'  => '' === $on_disk ? $installed : $on_disk,
 			];
 		}
 	}

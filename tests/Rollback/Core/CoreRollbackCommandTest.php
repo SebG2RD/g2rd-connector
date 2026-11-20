@@ -97,6 +97,7 @@ final class CoreRollbackCommandTest extends CoreRollbackTestCase {
 		yield 'WordPress mis à jour entre-temps' => [
 			static function ( self $test ): void {
 				$test->loaded_version = '7.1.6';
+				file_put_contents( ABSPATH . 'wp-includes/version.php', "<?php \$wp_version = '7.1.6';\n" );
 			},
 			'core_rollback_version_changed',
 			false,
@@ -163,7 +164,8 @@ final class CoreRollbackCommandTest extends CoreRollbackTestCase {
 	#[DataProvider( 'refusals' )]
 	public function test_refus_a_code_stable( \Closure $setup, string $code, bool $blocked ): void {
 		$setup( $this );
-		$kept = $this->options[ ProtectedCoreUpdate::RECORD_OPTION ] ?? null;
+		$kept    = $this->options[ ProtectedCoreUpdate::RECORD_OPTION ] ?? null;
+		$on_disk = $this->version_on_disk();
 
 		$result = ( new CoreRollbackCommand( $this->health ) )->run( self::PAYLOAD );
 
@@ -173,7 +175,7 @@ final class CoreRollbackCommandTest extends CoreRollbackTestCase {
 		self::assertSame( $this->loaded_version, $result['version_before'] );
 		self::assertSame( $this->loaded_version, $result['version_after'] );
 		if ( 'core_rollback_integrity' !== $code ) {
-			self::assertSame( '7.1.5', $this->version_on_disk(), 'rien n\'a été modifié' );
+			self::assertSame( $on_disk, $this->version_on_disk(), 'rien n\'a été modifié' );
 		}
 		self::assertSame( $kept, $this->options[ ProtectedCoreUpdate::RECORD_OPTION ] ?? null, 'informations gardées intactes : retour redemandable' );
 		self::assertSame( $blocked ? [ AutoUpdateGuard::CORE => '7.1.5' ] : [], AutoUpdateGuard::all() );
@@ -210,9 +212,10 @@ final class CoreRollbackCommandTest extends CoreRollbackTestCase {
 	/**
 	 * Le téléchargement peut durer six minutes : un autre processus a pu mettre WordPress ou sa base
 	 * à jour entre-temps. Contrôles refaits juste avant la copie : refus à code stable, paquet
-	 * supprimé, rien de copié, informations gardées intactes.
+	 * supprimé, rien de copié, informations gardées intactes. `version_after` dit la version lue sur
+	 * le disque (celle que l'autre processus a installée), pas celle chargée au début de la requête.
 	 *
-	 * @return iterable<string, array{\Closure(self): void, string}>
+	 * @return iterable<string, array{\Closure(self): void, string, string}>
 	 */
 	public static function changes_during_download(): iterable {
 		yield 'WordPress mis à jour pendant le téléchargement' => [
@@ -220,23 +223,26 @@ final class CoreRollbackCommandTest extends CoreRollbackTestCase {
 				file_put_contents( ABSPATH . 'wp-includes/version.php', "<?php \$wp_version = '7.1.6';\n" );
 			},
 			'core_rollback_version_changed',
+			'7.1.6',
 		];
 		yield 'base mise à jour pendant le téléchargement' => [
 			static function ( self $test ): void {
 				$test->table->rows['db_version']['value'] = '61900';
 			},
 			'core_rollback_db_changed',
+			'7.1.5',
 		];
 	}
 
 	#[DataProvider( 'changes_during_download' )]
-	public function test_controles_refaits_apres_le_telechargement( \Closure $change, string $code ): void {
+	public function test_controles_refaits_apres_le_telechargement( \Closure $change, string $code, string $version_after ): void {
 		$this->on_download = fn () => $change( $this );
 		$kept              = $this->options[ ProtectedCoreUpdate::RECORD_OPTION ];
 
 		$result = ( new CoreRollbackCommand( $this->health ) )->run( self::PAYLOAD );
 
 		self::assertSame( $code, $result['outcome'] );
+		self::assertSame( $version_after, $result['version_after'] );
 		self::assertSame( [], Core_Upgrader::$calls, 'rien de copié' );
 		self::assertCount( 1, $this->downloads );
 		self::assertFileDoesNotExist( $this->downloads[0] );
