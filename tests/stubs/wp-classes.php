@@ -337,3 +337,19 @@ if ( ! class_exists( 'Plugin_Upgrader' ) ) {
 		}
 	}
 }
+
+if ( ! class_exists( 'Theme_Upgrader' ) ) {
+	/** Doublure : upgrade() rend `$next_result` (true, ou la WP_Error d'un échec). */
+	class Theme_Upgrader {
+		/** @var mixed */
+		public static $next_result = true;
+
+		public function __construct( public object $skin ) {}
+
+		/** @return mixed */
+		public function upgrade( string $stylesheet ) {
+			unset( $stylesheet );
+			return self::$next_result;
+		}
+	}
+}

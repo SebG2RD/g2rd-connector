@@ -11,6 +11,7 @@ use G2RD\Connector\Rollback\RestorePointStore;
 use G2RD\Connector\Tests\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Plugin_Upgrader;
+use Theme_Upgrader;
 use WP_Error;
 
 /**
@@ -38,6 +39,7 @@ final class UpdatePluginLegacyTest extends TestCase {
 	protected function setUp(): void {
 		parent::setUp();
 		Plugin_Upgrader::reset();
+		Theme_Upgrader::$next_result = true;
 
 		$this->plugins = [ 'akismet/akismet.php' => [ 'Version' => '1.0' ] ];
 		$this->active  = true;
@@ -571,6 +573,53 @@ final class UpdatePluginLegacyTest extends TestCase {
 
 		self::assertSame( 'failed', $outcome['status'] );
 		self::assert_filtered( $outcome['error'], $start, $absent, '; the plugin was left inactive: the update stopped while WordPress was replacing it, and its files may be incomplete; check its files and the PHP error log, then update it again, roll it back or reinstall it' );
+	}
+
+	/**
+	 * Texte d'une WP_Error de l'upgrader (échec courant d'une mise à jour, ou updater premium sur
+	 * `upgrader_pre_download`) : valeurs entre apostrophes ou guillemets, que le filtre ne lit
+	 * plus une fois le texte échappé (« ' » devenu « &#039; »).
+	 *
+	 * @return array<string, array{string, string, list<string>}>
+	 */
+	public static function hostile_upgrader_errors(): array {
+		return [
+			'doublon, téléphone'       => [ "Duplicate entry '0612345678' for key 'tel'", 'Duplicate entry', [ '0612345678' ] ],
+			'doublon, nom et téléphone' => [ "Duplicate entry 'Jean Dupont 0612345678' for key 'PRIMARY'", 'Duplicate entry', [ 'Jean Dupont', '0612345678' ] ],
+			'clé de licence en JSON'   => [ 'Licence refusée : {"license_key":"Hx7-ab12-cd34"}', 'Licence refusée', [ 'Hx7-ab12-cd34' ] ],
+		] + self::hostile_errors();
+	}
+
+	/**
+	 * WP_Error rendue par Plugin_Upgrader : son texte est filtré AVANT d'être échappé, puis rendu
+	 * tel quel par le filet de CommandExecutor::run().
+	 *
+	 * @param list<string> $absent
+	 */
+	#[DataProvider( 'hostile_upgrader_errors' )]
+	public function test_the_wp_error_of_the_plugin_upgrader_is_filtered_before_being_escaped( string $message, string $start, array $absent ): void {
+		Plugin_Upgrader::$next_result = new WP_Error( 'download_failed', $message );
+
+		$outcome = CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] );
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assert_filtered( $outcome['error'], $start, $absent, '' );
+	}
+
+	/**
+	 * Même chose pour Theme_Upgrader (update_theme).
+	 *
+	 * @param list<string> $absent
+	 */
+	#[DataProvider( 'hostile_upgrader_errors' )]
+	public function test_the_wp_error_of_the_theme_upgrader_is_filtered_before_being_escaped( string $message, string $start, array $absent ): void {
+		Functions\when( 'wp_get_themes' )->justReturn( [ 'twentytwentyfour' => new \WP_Theme( 'twentytwentyfour', [ 'Version' => '1.0' ] ) ] );
+		Theme_Upgrader::$next_result = new WP_Error( 'download_failed', $message );
+
+		$outcome = CommandExecutor::run( 'update_theme', [ 'stylesheet' => 'twentytwentyfour' ] );
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assert_filtered( $outcome['error'], $start, $absent, '' );
 	}
 
 	/**

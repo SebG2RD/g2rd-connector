@@ -474,8 +474,9 @@ final class CommandExecutor {
 		if ( is_wp_error( $result ) ) {
 			// Le filet shutdown armé plus haut réactivera le plugin (le coeur l'a
 			// peut-être déjà désactivé via deactivate_plugin_before_upgrade avant
-			// d'échouer) — on peut donc jeter sans laisser le site éteint.
-			throw new \RuntimeException( esc_html( $result->get_error_message() ) );
+			// d'échouer) — on peut donc jeter sans laisser le site éteint. Texte filtré avant
+			// d'être échappé : échappé, ses « ' » et « " » ne seraient plus lus par le filtre.
+			throw new FilteredError( esc_html( Redactor::redact( $result->get_error_message() ) ) );
 		}
 
 		// Réactivation nominale (synchrone) : si le plugin était actif, on le
@@ -760,7 +761,8 @@ final class CommandExecutor {
 		$result   = $upgrader->upgrade( $stylesheet );
 
 		if ( is_wp_error( $result ) ) {
-			throw new \RuntimeException( esc_html( $result->get_error_message() ) );
+			// Filtré avant d'être échappé, comme dans update_plugin().
+			throw new FilteredError( esc_html( Redactor::redact( $result->get_error_message() ) ) );
 		}
 
 		// Re-lire la version installée après upgrade. `false` pour la même raison
@@ -821,7 +823,8 @@ final class CommandExecutor {
 		$results  = $upgrader->bulk_upgrade( $updates );
 
 		if ( is_wp_error( $results ) ) {
-			throw new \RuntimeException( esc_html( $results->get_error_message() ) );
+			// Filtré avant d'être échappé, comme dans update_plugin().
+			throw new FilteredError( esc_html( Redactor::redact( $results->get_error_message() ) ) );
 		}
 
 		// false global = échec d'init du système de fichiers (droits/credentials).

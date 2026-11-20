@@ -265,8 +265,10 @@ aujourd'hui toute version ≥ 2 pour la version 2.
 | GET | `/wp-json/g2rd/v1/command-runs/<numéro>` | Bearer SiteToken + signature obligatoire | État et résultat d'une commande en arrière-plan (1.15) |
 
 Une commande en échec rend `{status: failed, error}`. Le texte d'une exception tierce (WordPress, une
-extension) y est filtré par `PhpErrors\Redactor` : chemins du serveur, e-mails, IP, jetons et requêtes
-SQL retirés, 500 caractères au plus, puis suivi entier de l'explication du connecteur quand il en
+extension) ou de la `WP_Error` d'un upgrader (extension, thème, traductions) y est filtré par
+`PhpErrors\Redactor` avant tout échappement (« &#039; » ne serait plus lu comme une apostrophe) :
+chemins du serveur, e-mails, IP, jetons et requêtes SQL retirés, 500 caractères au plus, puis suivi
+entier de l'explication du connecteur quand il en
 ajoute une (`Commands\FilteredError`, jamais refiltrée). De même pour `upgrade_error` des extensions
 et du cœur (1.18).
 
