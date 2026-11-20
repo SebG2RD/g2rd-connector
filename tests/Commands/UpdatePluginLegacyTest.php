@@ -422,6 +422,36 @@ final class UpdatePluginLegacyTest extends TestCase {
 	}
 
 	/**
+	 * `stray_output` est écrit par du code tiers ou une notice PHP : il part au manager filtré
+	 * (chemin du serveur, identifiant du compte, e-mail retirés) et borné à 500 caractères, sans
+	 * caractère UTF-8 coupé.
+	 */
+	public function test_stray_output_is_filtered_before_it_leaves_the_site(): void {
+		Plugin_Upgrader::$on_complete = static function (): void {
+			echo 'Warning: x in /home/u123456789/domains/exemple.fr/public_html/wp-content/plugins/x/x.php on line 3 for contact@exemple.fr ';
+			echo str_repeat( 'é', 600 );
+			throw new \RuntimeException( 'Language pack download timed out.' );
+		};
+
+		$level = ob_get_level();
+		try {
+			$outcome = CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] );
+		} finally {
+			while ( ob_get_level() > $level ) {
+				ob_end_clean();
+			}
+		}
+
+		$stray = (string) ( $outcome['stray_output'] ?? '' );
+		self::assertStringStartsWith( 'Warning: x in wp-content/plugins/x/x.php on line 3 for [email]', $stray );
+		self::assertStringNotContainsString( '/home/', $stray );
+		self::assertStringNotContainsString( 'u123456789', $stray );
+		self::assertStringNotContainsString( 'contact@exemple.fr', $stray );
+		self::assertLessThanOrEqual( Redactor::MAX_CHARS, mb_strlen( $stray ) );
+		self::assertTrue( mb_check_encoding( $stray, 'UTF-8' ), 'Aucun caractère coupé.' );
+	}
+
+	/**
 	 * Le marqueur « fichiers installés » ne vaut que pour la copie de CETTE extension,
 	 * réussie : une installation d'une autre extension pendant la copie (mise à jour
 	 * imbriquée), ou une copie qu'un filtre `upgrader_post_install` déclare en échec, ne
