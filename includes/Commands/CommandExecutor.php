@@ -25,7 +25,6 @@ use G2RD\Connector\Backup\Commands\BackupCommands;
 use G2RD\Connector\Backup\Commands\BackupRefused;
 use G2RD\Connector\Backup\Gate\UpdateGate;
 use G2RD\Connector\PhpErrors\CaptureCommand;
-use G2RD\Connector\PhpErrors\Redactor;
 use G2RD\Connector\ReleaseNotes\ReleaseNotesCommand;
 use G2RD\Connector\ReleaseNotes\ReleaseNotesRefused;
 use G2RD\Connector\Rest\DbHealth;
@@ -437,8 +436,8 @@ final class CommandExecutor {
 				// les pages en « erreur critique ». La suite est celle d'une copie réussie :
 				// réactivation nominale (sous réserve du droit de réactiver), relecture de la
 				// version, puis contrôle de santé dans run(). L'erreur est rendue dans le
-				// résultat (`upgrade_error`).
-				$upgrade_error = $e->getMessage();
+				// résultat (`upgrade_error`), filtrée dès ici.
+				$upgrade_error = FilteredError::message_of( $e );
 				$result        = true;
 			} elseif ( $files_installed ) {
 				// Mise à jour simple (connecteur compris), même cas : fichiers complets, comme
@@ -455,14 +454,14 @@ final class CommandExecutor {
 					// de shutdown réessaiera.
 					unset( $reactivation_error );
 				}
-				throw new FilteredError( esc_html( Redactor::redact( $e->getMessage() ) . ( $reactivated ? self::INSTALLED_THEN_FAILED_REACTIVATED : self::INSTALLED_THEN_FAILED ) ), 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message échappé ; `$e` est l'exception chaînée, pas une sortie.
+				throw new FilteredError( esc_html( FilteredError::message_of( $e ) . ( $reactivated ? self::INSTALLED_THEN_FAILED_REACTIVATED : self::INSTALLED_THEN_FAILED ) ), 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message échappé ; `$e` est l'exception chaînée, pas une sortie.
 			} else {
 				// upgrade() n'a pas rendu la main, la copie n'était pas terminée : du code
 				// branché sur la mise à jour a levé, peut-être en pleine copie. Comme pour une
 				// requête morte, le filet ne réactive pas une extension que le cœur a déjà
 				// désactivée : elle reste désactivée, et l'erreur remontée à la plateforme le dit.
 				if ( $was_active && ! is_plugin_active( $file ) ) {
-					throw new FilteredError( esc_html( Redactor::redact( $e->getMessage() ) . self::LEFT_INACTIVE_MID_UPDATE ), 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message échappé ; `$e` est l'exception chaînée, pas une sortie.
+					throw new FilteredError( esc_html( FilteredError::message_of( $e ) . self::LEFT_INACTIVE_MID_UPDATE ), 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message échappé ; `$e` est l'exception chaînée, pas une sortie.
 				}
 				throw $e;
 			}
@@ -476,7 +475,7 @@ final class CommandExecutor {
 			// peut-être déjà désactivé via deactivate_plugin_before_upgrade avant
 			// d'échouer) — on peut donc jeter sans laisser le site éteint. Texte filtré avant
 			// d'être échappé : échappé, ses « ' » et « " » ne seraient plus lus par le filtre.
-			throw new FilteredError( esc_html( Redactor::redact( $result->get_error_message() ) ) );
+			throw new FilteredError( esc_html( FilteredError::of_wp_error( $result ) ) );
 		}
 
 		// Réactivation nominale (synchrone) : si le plugin était actif, on le
@@ -521,7 +520,7 @@ final class CommandExecutor {
 			// Le message, filtré (PhpErrors\Redactor, 500 caractères au plus) puis échappé :
 			// ProtectedUpdate::run() le complète et le rend dans tous ses résultats (`updated`,
 			// `auto_rolled_back`…), ou dans son erreur si une reprise l'a prise en route.
-			$outcome['upgrade_error'] = esc_html( Redactor::redact( $upgrade_error ) );
+			$outcome['upgrade_error'] = esc_html( $upgrade_error );
 		}
 		return $outcome;
 	}
@@ -762,7 +761,7 @@ final class CommandExecutor {
 
 		if ( is_wp_error( $result ) ) {
 			// Filtré avant d'être échappé, comme dans update_plugin().
-			throw new FilteredError( esc_html( Redactor::redact( $result->get_error_message() ) ) );
+			throw new FilteredError( esc_html( FilteredError::of_wp_error( $result ) ) );
 		}
 
 		// Re-lire la version installée après upgrade. `false` pour la même raison
@@ -824,7 +823,7 @@ final class CommandExecutor {
 
 		if ( is_wp_error( $results ) ) {
 			// Filtré avant d'être échappé, comme dans update_plugin().
-			throw new FilteredError( esc_html( Redactor::redact( $results->get_error_message() ) ) );
+			throw new FilteredError( esc_html( FilteredError::of_wp_error( $results ) ) );
 		}
 
 		// false global = échec d'init du système de fichiers (droits/credentials).
@@ -968,7 +967,7 @@ final class CommandExecutor {
 			// crochet (l. 266), est rendu ici : sinon la réinstallation serait refusée `locked`
 			// pendant 15 minutes. Il appartient à cet upgrade(), qui vient de le prendre.
 			WP_Upgrader::release_lock( 'core_updater' );
-			$upgrade_error = $e->getMessage();
+			$upgrade_error = FilteredError::message_of( $e );
 			$result        = $target;
 		} finally {
 			remove_action( '_core_updated_successfully', $mark_copied, PHP_INT_MIN );
@@ -979,14 +978,15 @@ final class CommandExecutor {
 			'updated'        => $updated,
 			'version_before' => $version_before,
 			'version_after'  => $updated ? $target : $version_before,
-			'detail'         => is_wp_error( $result ) ? $result->get_error_message() : (string) $result,
+			// Texte de la WP_Error filtré : une extension branchée sur la mise à jour peut l'écrire.
+			'detail'         => is_wp_error( $result ) ? FilteredError::of_wp_error( $result ) : (string) $result,
 		];
 		if ( null !== $upgrade_error ) {
 			// Lu par le manager comme pour une extension (avertissement du site, connecteur 1.13). Texte
 			// d'une extension tierce : filtré comme celui des autres exceptions que rend CommandExecutor
 			// (filet de run(), erreurs et `upgrade_error` des extensions) : chemins du serveur, e-mails,
 			// IP, jetons, requêtes SQL retirés ; 500 caractères au plus.
-			$outcome['upgrade_error'] = esc_html( Redactor::redact( $upgrade_error ) . self::INSTALLED_THEN_FAILED );
+			$outcome['upgrade_error'] = esc_html( $upgrade_error . self::INSTALLED_THEN_FAILED );
 		}
 		return [ $outcome, is_wp_error( $result ) ? $result : null ];
 	}

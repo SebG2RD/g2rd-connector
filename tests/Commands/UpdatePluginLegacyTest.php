@@ -623,6 +623,49 @@ final class UpdatePluginLegacyTest extends TestCase {
 	}
 
 	/**
+	 * WP_Error sans message (updater premium sur `upgrader_pre_download`, `new WP_Error( 'x' )`) : rien
+	 * à filtrer, son code est rendu, jamais le jeton « [unreadable] » d'un échec du filtre.
+	 */
+	public function test_a_wp_error_without_message_gives_its_code(): void {
+		Plugin_Upgrader::$next_result = new WP_Error( 'download_failed', '' );
+		Functions\when( 'wp_get_themes' )->justReturn( [ 'twentytwentyfour' => new \WP_Theme( 'twentytwentyfour', [ 'Version' => '1.0' ] ) ] );
+		Theme_Upgrader::$next_result = new WP_Error( 'no_package', '' );
+
+		self::assertSame( 'download_failed', CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] )['error'] );
+		self::assertSame( 'no_package', CommandExecutor::run( 'update_theme', [ 'stylesheet' => 'twentytwentyfour' ] )['error'] );
+	}
+
+	/**
+	 * Exception tierce sans message (`throw new \Exception()`) : le nom de sa classe, jamais « [unreadable] ».
+	 */
+	public function test_a_third_party_exception_without_message_gives_its_class(): void {
+		Plugin_Upgrader::$on_download = static function (): void {
+			throw new \UnexpectedValueException();
+		};
+
+		self::assertSame( 'UnexpectedValueException', CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] )['error'] );
+	}
+
+	/** Même chose une fois les fichiers copiés : le nom de la classe, puis l'explication entière. */
+	public function test_a_third_party_exception_without_message_once_the_files_are_installed_gives_its_class(): void {
+		$nets                         = $this->record_shutdown_nets();
+		Plugin_Upgrader::$on_upgrade  = function (): void {
+			$this->plugins['akismet/akismet.php']['Version'] = '2.0';
+			$this->active                                    = false;
+		};
+		Plugin_Upgrader::$on_complete = static function (): void {
+			throw new \RuntimeException( '' );
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] );
+		foreach ( $nets as $net ) {
+			$net();
+		}
+
+		self::assertSame( 'RuntimeException; WordPress had already installed the new version when this error occurred (its files are complete), so the plugin was reactivated; check the PHP error log for the code that raised it', $outcome['error'] );
+	}
+
+	/**
 	 * @param list<string> $absent Ce qui ne doit plus apparaître.
 	 * @param string       $end    Explication fixe du connecteur, rendue entière après le texte tiers ('' : aucune).
 	 */

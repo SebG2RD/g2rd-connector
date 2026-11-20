@@ -85,6 +85,42 @@ final class CoreRollbackWiringTest extends CoreRollbackTestCase {
 		self::assertCount( 1, Core_Upgrader::$calls );
 	}
 
+	/**
+	 * `detail` d'une mise à jour en échec : texte de la WP_Error de Core_Upgrader (une extension branchée
+	 * sur `upgrader_pre_download` ou `upgrader_source_selection` peut l'écrire), filtré comme les autres
+	 * erreurs tierces ; sans message, son code. Le manager ne le lit pas : il le garde dans le résultat.
+	 *
+	 * @return iterable<string, array{\WP_Error, string, list<string>}>
+	 */
+	public static function erreurs_du_coeur(): iterable {
+		yield 'doublon, chemin du serveur' => [
+			new \WP_Error( 'copy_failed', "Duplicate entry '0612345678' for key 'tel' in /home/u123456789/domains/exemple.fr/public_html/wp-content/upgrade/x.php " . str_repeat( 'détail ', 2000 ) ),
+			'Duplicate entry \'[secret]\' for key \'tel\' in wp-content/upgrade/x.php détail',
+			[ '0612345678', '/home/', 'u123456789' ],
+		];
+		yield 'sans message' => [ new \WP_Error( 'download_failed', '' ), 'download_failed', [ '[unreadable]' ] ];
+	}
+
+	/**
+	 * @param list<string> $absent
+	 */
+	#[DataProvider( 'erreurs_du_coeur' )]
+	public function test_update_core_le_detail_d_un_echec_est_filtre( \WP_Error $error, string $start, array $absent ): void {
+		$this->loaded_version       = '7.1.4';
+		$this->install( '7.1.4' );
+		Core_Upgrader::$next_result = $error;
+
+		$outcome = CommandExecutor::run( 'update_core', [] );
+
+		self::assertSame( 'done', $outcome['status'] );
+		self::assertFalse( $outcome['result']['updated'] );
+		self::assertStringStartsWith( $start, $outcome['result']['detail'] );
+		foreach ( $absent as $text ) {
+			self::assertStringNotContainsString( $text, $outcome['result']['detail'] );
+		}
+		self::assertLessThanOrEqual( 500, mb_strlen( $outcome['result']['detail'] ) );
+	}
+
 	public function test_update_core_protegee_par_la_commande(): void {
 		$this->loaded_version = '7.1.4';
 		$this->install( '7.1.4' );
