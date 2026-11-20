@@ -183,10 +183,12 @@ final class HealthChecker {
 	public static function wp_transport( string $url, array $args ): array {
 		$response = wp_remote_get( $url, $args );
 		if ( is_wp_error( $response ) ) {
+			// Sans message (extension branchée sur `pre_http_request`), son code : `reason` n'est jamais vide.
+			$message = $response->get_error_message();
 			return [
 				'code'  => 0,
 				'body'  => '',
-				'error' => $response->get_error_message(),
+				'error' => '' !== trim( $message ) ? $message : (string) $response->get_error_code(),
 			];
 		}
 		return [

@@ -34,10 +34,12 @@ final class FilteredError extends \RuntimeException {
 	}
 
 	/**
-	 * Texte d'une WP_Error prêt à quitter le site (cf. text()) ; sans message, son code.
+	 * Texte d'une WP_Error prêt à quitter le site (cf. text()) ; sans message, son code ; sans code
+	 * non plus, « WP_Error » (le manager n'enregistre jamais un échec sans texte).
 	 */
 	public static function of_wp_error( \WP_Error $error ): string {
-		return self::text( $error->get_error_message(), (string) $error->get_error_code() );
+		$code = (string) $error->get_error_code();
+		return self::text( $error->get_error_message(), '' !== $code ? $code : 'WP_Error' );
 	}
 
 	/**

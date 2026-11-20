@@ -663,6 +663,10 @@ final class UpdatePluginLegacyTest extends TestCase {
 
 		self::assertSame( 'download_failed', CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] )['error'] );
 		self::assertSame( 'no_package', CommandExecutor::run( 'update_theme', [ 'stylesheet' => 'twentytwentyfour' ] )['error'] );
+
+		// Ni message ni code (updater premium sur upgrader_pre_download) : jamais un échec sans texte.
+		Plugin_Upgrader::$next_result = new WP_Error();
+		self::assertSame( 'WP_Error', CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] )['error'] );
 	}
 
 	/**

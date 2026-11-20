@@ -136,6 +136,14 @@ final class HealthCheckerTest extends TestCase {
 		self::assertSame( 'transport: pre_http_request: wp-includes/certificates/ca-bundle.crt for [email]', $throws->measure()['home']['reason'] );
 	}
 
+	/** Erreur de transport sans message (extension sur `pre_http_request`) : son code, jamais un `reason` vide. */
+	public function test_a_transport_error_without_message_gives_its_code(): void {
+		Functions\when( 'wp_remote_get' )->justReturn( new \WP_Error( 'http_request_failed', '' ) );
+		Functions\when( 'is_wp_error' )->alias( static fn ( $thing ): bool => $thing instanceof \WP_Error );
+
+		self::assertSame( 'http_request_failed', HealthChecker::wp_transport( 'https://site.test/', [] )['error'] );
+	}
+
 	public function test_admin_answer_without_our_token_is_unverifiable(): void {
 		$probe = $this->checker( [ 'code' => 200, 'body' => 'ok' ], [ 'code' => 200, 'body' => '{"ok":true,"token":"autre"}' ] )->measure();
 		self::assertSame( 'unverifiable', $probe['admin']['state'], 'une réponse de cache ou de pare-feu ne prouve rien' );

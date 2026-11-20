@@ -651,7 +651,7 @@ final class ProtectedUpdate {
 			$detail             = self::LEFT_INACTIVE_DETAILS[ $this->reactivation ]
 				?? ( $inactive_before ? self::REACTIVATED_FILES_UNCHECKED : null );
 			if ( null !== $detail ) {
-				throw self::with_detail( $e, $detail ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message déjà échappé par celui qui l'a levé, suffixe fixe.
+				throw self::with_detail( $e, $detail ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message échappé par celui qui l'a levé (RestoreException) ou filtré puis échappé par with_detail(), suffixe fixe.
 			}
 			throw $e;
 		}
@@ -812,7 +812,7 @@ final class ProtectedUpdate {
 						}
 						if ( self::REACTIVATION_AS_BEFORE === $reactivation ) {
 							// Rien ne le disait : inactive avant, elle n'a pas été essayée.
-							throw self::with_detail( $e, self::LEFT_INACTIVE_AS_BEFORE_UPDATE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message déjà échappé par celui qui l'a levé, suffixe fixe.
+							throw self::with_detail( $e, self::LEFT_INACTIVE_AS_BEFORE_UPDATE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message échappé par celui qui l'a levé (RestoreException) ou filtré puis échappé par with_detail(), suffixe fixe.
 						}
 						throw $e;
 					}
