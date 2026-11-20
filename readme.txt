@@ -17,9 +17,9 @@ Connects this WordPress site to the centralized G2RD WP Manager dashboard (https
 = Features =
 
 * **Inventory snapshot** — secure REST endpoint exposing WordPress core, plugins, themes and server info to the manager.
-* **Optional hourly heartbeat** — light telemetry payload (disk usage, active plugin count, user count) sent to your manager instance via WP-Cron. Enabled by default once the site is enrolled; can be turned off in the plugin settings ("Signe de vie horaire").
-* **Optional event stream** — push real-time notifications (user logins, login failures, plugin activations, core/plugin/theme updates, auto-update failures) to the manager. Login failures are sent with a 2-second cap instead of 15, at most 30 per minute. Enabled by default once the site is enrolled; can be turned off in the plugin settings ("Événements en temps réel").
-* **Optional remote commands** — let the manager trigger cache clearing, update checks, core/plugin/theme updates and database maintenance (delete spam comments, delete post revisions, empty trash, delete expired transients, optimize database) remotely, and, since 1.18, read the release notes of a plugin or theme update the way WordPress' "View version details" link does, and protect a WordPress update (health check, then automatic return to the previous version, downloaded again from wordpress.org, when the update breaks the site and did not change the database; that previous version can also be put back on request for a limited time; after such a return, WordPress' automatic updates do not reinstall the removed version until a newer one is released). Enabled by default once the site is enrolled; can be turned off in the plugin settings ("Commandes à distance").
+* **Hourly heartbeat** — light telemetry payload (disk usage, active plugin count, user count) sent to your manager instance via WP-Cron. Enabled by default once the site is enrolled; can be turned off in the plugin settings ("Signe de vie horaire").
+* **Event stream** — push real-time notifications (user logins, login failures, plugin activations, core/plugin/theme updates, auto-update failures) to the manager. Login failures are sent with a 2-second cap instead of 15, at most 30 per minute. Enabled by default once the site is enrolled; can be turned off in the plugin settings ("Événements en temps réel").
+* **Remote commands** — let the manager trigger cache clearing, update checks, core/plugin/theme updates and database maintenance (delete spam comments, delete post revisions, empty trash, delete expired transients, optimize database) remotely, and, since 1.18, read the release notes of a plugin or theme update the way WordPress' "View version details" link does, and protect a WordPress update (health check, then automatic return to the previous version, downloaded again from wordpress.org, when the update breaks the site and did not change the database; that previous version can also be put back on request for a limited time; after such a return, WordPress' automatic updates do not reinstall the removed version until a newer one is released). Enabled by default once the site is enrolled; can be turned off in the plugin settings ("Commandes à distance").
 * **Direct login from the manager** — the manager can open this site's dashboard without a password, through a signed one-time link valid for one minute, for staff whose manager account uses two-factor authentication. On by default; can be turned off in the plugin settings ("Allow direct login from G2RD").
 * **Optional PHP error monitoring** — when turned on for this site (off by default), PHP fatal errors raised after the plugin has loaded are kept 7 days, with their message filtered on the site, and sent to the manager with the inventory. Turned on or off by a signed command from the manager, or with the "Relevé des erreurs PHP" setting of the plugin.
 * **Theme integration** — when the parent theme is the optional companion theme `g2rd-theme` (>= 1.19, child themes included), the plugin registers itself as a "Manager G2RD" tab of the theme's options console (*Appearance → G2RD Options* up to theme 1.40, top-level *G2RD* menu from theme 1.41) instead of adding a top-level menu, for a tidy admin UX. Its own settings page stays reachable outside the menu, as a fallback, at `wp-admin/admin.php?page=g2rd-connector`.
@@ -147,8 +147,14 @@ Pre-release of the 1.18 line, piloted on one site before it is offered to every 
   for plugin restore points).
 * The "Remote commands" setting's help text now mentions release notes and the requests they make.
 * **Readme fix:** the hourly heartbeat, the event stream and remote commands are enabled by default
-  once the site is enrolled (the readme said they were disabled until you opt in); the plugin's
-  behaviour does not change.
+  once the site is enrolled (the readme said they were disabled until you opt in, and called them
+  optional); the plugin's behaviour does not change.
+* **Fix: database queries in PHP error messages are hidden whole.** When PHP error monitoring is on,
+  a database query quoted in an error message ("WordPress database error … for query … made by …")
+  is now removed entirely on the site, even when one of its values contains a semicolon, an escaped
+  quote (`\'`) or more than 1,000 characters; before, the end of such a value (for example a
+  visitor's name or phone number) could be left after the mask. Everything between "for query" and
+  WordPress' "made by" list is part of the query.
 
 = 1.17.0 =
 

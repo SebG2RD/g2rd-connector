@@ -308,11 +308,14 @@ l'inventaire.
 - Bornes (`ReleaseNotes\HttpLimits`) : 15 s pour l'ensemble des appels faits pendant la commande,
   redirections comprises (3 au plus par appel ; l'action `requests-requests.before_redirect` ramène
   chaque saut au temps qui reste ou, budget épuisé, le détourne vers une adresse non HTTP que
-  Requests refuse, `nonhttp`, sans exception dans l'action), 8 Mio par réponse, `reject_unsafe_urls`
+  Requests refuse, `nonhttp`, sans exception dans l'action ; horloge monotone, `hrtime()`), 8 Mio
+  gardés par réponse (octets décompressés avec cURL, reçus avec `fsockopen` ; la suite du corps est
+  lue et jetée), `reject_unsafe_urls`
   (adresses non publiques au sens de WordPress — privées, de bouclage, lien local… selon la version —,
   ports autres que 80, 443 et 8080 et hôtes non résolus refusés) ; `notes_html` à 256 Kio,
   coupé avant d'être rendu valide, jamais au milieu d'un caractère ni d'une balise (`truncated`) ;
-  `homepage` en https, sans requête ni fragment.
+  `homepage` en https, sans requête ni fragment, hôte en lettres, chiffres, tirets et points (ni
+  hôte encodé, ni IPv6).
 - Limites connues : un éditeur qui appelle cURL lui-même, ou un site dont le transport HTTP est
   `fsockopen` (délai par lecture, pas de délai total), échappe au budget ; la résolution DNS faite
   par `wp_http_validate_url()` n'est pas bornée ; un updater qui ne s'enregistre pas en REST
@@ -344,7 +347,12 @@ sinon rien, et `error_code: core_rollback_db_changed`. Même verrou que les exte
 d'avant, sa langue, `db_version` et l'échéance sont gardées dans l'option `g2rd_core_rollback` (non
 autochargée) ; aucune copie de fichiers. Champs ajoutés au résultat : `protected`, `health`,
 `rolled_back`, `rollback_reason` (`update_failed`, `health_check_failed`), `db_version_before`,
-`db_version_after`, `restore_until`, `error_code` / `error`, `locale` ; jamais `outcome`.
+`db_version_after`, `restore_until`, `error_code` / `error`, `locale`, `upgrade_error` (exception
+levée une fois les fichiers copiés : la mise à jour continue vers le contrôle de santé ; texte filtré
+par `PhpErrors\Redactor`, 500 caractères au plus, suivi d'une phrase fixe) ; jamais `outcome`.
+`grace_seconds` est ramené entre 0 et 365 jours. Sans rien à protéger (version de développement,
+offre `latest`), chemin historique strict : une exception levée après la copie remonte comme sans
+`snapshot`.
 
 Rien sans la transaction : si `UpdateTransaction::step()` rend faux (transaction reprise après plus de
 10 minutes sans signe de vie), ni mise à jour, ni mesure, ni réinstallation. Après un retour
@@ -358,7 +366,9 @@ souvent des correctifs de sécurité, le site reste d'ici là sur la version d'a
 
 Commande signée `rollback_core` (`{expected_current, target}`), admise en arrière-plan : réinstalle
 `target` si les informations gardées sont celles de cette mise à jour, si la version installée est
-`expected_current` et si `db_version` n'a pas changé. Résultats à `outcome` : `rollback_success`, ou
+`expected_current` et si `db_version` n'a pas changé ; version écrite dans `wp-includes/version.php`
+et `db_version` relues après le téléchargement, juste avant la copie (mêmes codes ; rien de copié, le
+paquet est supprimé). Résultats à `outcome` : `rollback_success`, ou
 `core_rollback_expired`, `core_rollback_version_changed`, `core_rollback_db_changed`,
 `core_rollback_busy`, `core_rollback_wporg_unreachable`, `core_rollback_integrity`,
 `core_rollback_failed`. Capacité `core_rollback`, sous la condition de `restore_points`.
