@@ -6,11 +6,14 @@
  * « quoi, cause probable, action » et ne sert qu'au journal.
  *
  * `core_rollback_failed` s'ajoute aux six codes de la spécification : l'outil de mise à jour de
- * WordPress a rendu une erreur pendant la réinstallation (copie, système de fichiers).
+ * WordPress a rendu une erreur pendant la réinstallation (copie, système de fichiers), ou une
+ * exception imprévue a été levée (sa classe seulement en détail, jamais son texte).
  *
- * Construite par because(), qui refuse un code inconnu. Chaque `throw` porte l'exception à la règle
- * d'échappement de PHPCS (WordPress.Security.EscapeOutput.ExceptionNotEscaped) : la phrase est fixe,
- * le détail court, et rien n'est affiché en HTML.
+ * Construite par because(), qui refuse un code inconnu. Les appelants qui la lèvent (`throw
+ * CoreRollbackRefused::because( … )`) portent chacun sur leur ligne l'annotation
+ * `phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped` : PHPCS ne sait pas que le
+ * message vient d'ici ; la phrase est fixe, le détail court (code de WordPress, fichier, version,
+ * classe d'une exception), et rien n'est affiché en HTML.
  *
  * @package G2RD\Connector
  */

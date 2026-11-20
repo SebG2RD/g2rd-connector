@@ -110,9 +110,11 @@ final class CorePackage {
 	}
 
 	/**
-	 * Fichiers du cœur absents ou différents de leur empreinte, `wp-content/` exclu (comme le
-	 * contrôle de update_core() après la copie). Une entrée dont le chemin remonte (`..`) ou part de
-	 * la racine compte comme différente, sans être lue.
+	 * Fichiers du cœur absents ou différents de leur empreinte, avec les mêmes exceptions que le
+	 * contrôle de update_core() après la copie : `wp-content/` exclu, fichiers `.html` et `.txt` de la
+	 * racine jamais contrôlés (présents, modifiés ou absents), `wp-config-sample.php` absent toléré
+	 * (contrôlé s'il est présent) ; des extensions de sécurité les retirent après une mise à jour. Une
+	 * entrée dont le chemin remonte (`..`) ou part de la racine compte comme différente, sans être lue.
 	 *
 	 * @param array<string, string> $checksums Chemin relatif ⇒ md5.
 	 * @return list<string>
