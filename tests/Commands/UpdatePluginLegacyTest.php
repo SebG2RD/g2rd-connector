@@ -6,6 +6,7 @@ namespace G2RD\Connector\Tests\Commands;
 
 use Brain\Monkey\Functions;
 use G2RD\Connector\Commands\CommandExecutor;
+use G2RD\Connector\PhpErrors\Redactor;
 use G2RD\Connector\Rollback\RestorePointStore;
 use G2RD\Connector\Tests\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -484,6 +485,107 @@ final class UpdatePluginLegacyTest extends TestCase {
 		self::assertSame( 'Download interrupted.', $outcome['error'] );
 		self::assertSame( [], $this->activations );
 		self::assertTrue( $this->active );
+	}
+
+	/**
+	 * Texte d'une exception tierce : début attendu une fois filtré, et ce qui ne doit plus en sortir.
+	 *
+	 * @return array<string, array{string, string, list<string>}>
+	 */
+	public static function hostile_errors(): array {
+		return [
+			'chemin du serveur, 14 000 caractères' => [
+				'Fatal in /home/u123456789/domains/exemple.fr/public_html/wp-content/plugins/x/x.php:12 for contact@exemple.fr ' . str_repeat( 'détail ', 2000 ),
+				'Fatal in wp-content/plugins/x/x.php:12 for [email] détail',
+				[ '/home/', 'u123456789', 'contact@exemple.fr' ],
+			],
+			'requête SQL et ses valeurs'           => [
+				'Query failed: INSERT INTO wp_postmeta (meta_key, meta_value) VALUES (\'tel\', \'Jean Dupont 0612345678\') in /home/u123456789/x.php:3',
+				'Query failed: [sql]',
+				[ 'Jean Dupont', '0612345678', 'u123456789' ],
+			],
+		];
+	}
+
+	/**
+	 * Filet de CommandExecutor::run() : le texte d'une exception tierce qui remonte telle quelle
+	 * part au manager filtré par PhpErrors\Redactor, 500 caractères au plus.
+	 *
+	 * @param list<string> $absent
+	 */
+	#[DataProvider( 'hostile_errors' )]
+	public function test_the_error_of_a_third_party_exception_is_filtered_and_bounded( string $message, string $start, array $absent ): void {
+		Plugin_Upgrader::$on_download = static function () use ( $message ): void {
+			throw new \RuntimeException( $message ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- texte d'essai.
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] );
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assert_filtered( $outcome['error'], $start, $absent, '' );
+	}
+
+	/**
+	 * Exception après la copie, extension réactivée : le texte tiers est filtré et borné, puis
+	 * suivi de son explication entière, même après un masque de requête.
+	 *
+	 * @param list<string> $absent
+	 */
+	#[DataProvider( 'hostile_errors' )]
+	public function test_an_error_raised_once_the_files_are_installed_is_filtered_before_its_explanation( string $message, string $start, array $absent ): void {
+		$nets                         = $this->record_shutdown_nets();
+		Plugin_Upgrader::$on_upgrade  = function (): void {
+			$this->plugins['akismet/akismet.php']['Version'] = '2.0';
+			$this->active                                    = false;
+		};
+		Plugin_Upgrader::$on_complete = static function () use ( $message ): void {
+			throw new \RuntimeException( $message ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- texte d'essai.
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] );
+		foreach ( $nets as $net ) {
+			$net();
+		}
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assert_filtered( $outcome['error'], $start, $absent, '; WordPress had already installed the new version when this error occurred (its files are complete), so the plugin was reactivated; check the PHP error log for the code that raised it' );
+	}
+
+	/**
+	 * Exception pendant la copie, extension laissée désactivée : même filtrage, même explication entière.
+	 *
+	 * @param list<string> $absent
+	 */
+	#[DataProvider( 'hostile_errors' )]
+	public function test_an_error_raised_while_upgrading_is_filtered_before_its_explanation( string $message, string $start, array $absent ): void {
+		$nets                        = $this->record_shutdown_nets();
+		Plugin_Upgrader::$on_upgrade = function () use ( $message ): void {
+			$this->active = false;
+			throw new \RuntimeException( $message ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- texte d'essai.
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] );
+		foreach ( $nets as $net ) {
+			$net();
+		}
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assert_filtered( $outcome['error'], $start, $absent, '; the plugin was left inactive: the update stopped while WordPress was replacing it, and its files may be incomplete; check its files and the PHP error log, then update it again, roll it back or reinstall it' );
+	}
+
+	/**
+	 * @param list<string> $absent Ce qui ne doit plus apparaître.
+	 * @param string       $end    Explication fixe du connecteur, rendue entière après le texte tiers ('' : aucune).
+	 */
+	private static function assert_filtered( string $error, string $start, array $absent, string $end ): void {
+		self::assertStringStartsWith( $start, $error );
+		foreach ( $absent as $text ) {
+			self::assertStringNotContainsString( $text, $error );
+		}
+		if ( '' !== $end ) {
+			self::assertStringEndsWith( $end, $error );
+		}
+		self::assertLessThanOrEqual( Redactor::MAX_CHARS + mb_strlen( $end ), mb_strlen( $error ) );
 	}
 
 	/**

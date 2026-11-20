@@ -264,6 +264,12 @@ aujourd'hui toute version ≥ 2 pour la version 2.
 | POST | `/wp-json/g2rd/v1/command-runs` | Bearer SiteToken + signature obligatoire | Accepte une commande longue, exécutée après la réponse (1.15, voir « Commandes en arrière-plan ») |
 | GET | `/wp-json/g2rd/v1/command-runs/<numéro>` | Bearer SiteToken + signature obligatoire | État et résultat d'une commande en arrière-plan (1.15) |
 
+Une commande en échec rend `{status: failed, error}`. Le texte d'une exception tierce (WordPress, une
+extension) y est filtré par `PhpErrors\Redactor` : chemins du serveur, e-mails, IP, jetons et requêtes
+SQL retirés, 500 caractères au plus, puis suivi entier de l'explication du connecteur quand il en
+ajoute une (`Commands\FilteredError`, jamais refiltrée). De même pour `upgrade_error` des extensions
+et du cœur (1.18).
+
 ### Origine des thèmes dans l'inventaire
 
 - **`themes[].wporg`** : vrai seulement si wordpress.org connaît le thème, d'après sa dernière

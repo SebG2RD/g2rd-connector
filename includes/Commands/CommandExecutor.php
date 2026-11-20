@@ -215,7 +215,9 @@ final class CommandExecutor {
 		} catch ( \Throwable $e ) {
 			$outcome = [
 				'status' => 'failed',
-				'error'  => $e->getMessage(),
+				// Texte d'une exception tierce filtré (PhpErrors\Redactor, 500 caractères au plus) ;
+				// celui que le connecteur a déjà filtré et expliqué (FilteredError) tel quel.
+				'error'  => FilteredError::message_of( $e ),
 			];
 		} finally {
 			// Refermer TOUS les niveaux ouverts pendant la commande, le nôtre compris, et
@@ -453,14 +455,14 @@ final class CommandExecutor {
 					// de shutdown réessaiera.
 					unset( $reactivation_error );
 				}
-				throw new \RuntimeException( esc_html( $e->getMessage() . ( $reactivated ? self::INSTALLED_THEN_FAILED_REACTIVATED : self::INSTALLED_THEN_FAILED ) ), 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message échappé ; `$e` est l'exception chaînée, pas une sortie.
+				throw new FilteredError( esc_html( Redactor::redact( $e->getMessage() ) . ( $reactivated ? self::INSTALLED_THEN_FAILED_REACTIVATED : self::INSTALLED_THEN_FAILED ) ), 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message échappé ; `$e` est l'exception chaînée, pas une sortie.
 			} else {
 				// upgrade() n'a pas rendu la main, la copie n'était pas terminée : du code
 				// branché sur la mise à jour a levé, peut-être en pleine copie. Comme pour une
 				// requête morte, le filet ne réactive pas une extension que le cœur a déjà
 				// désactivée : elle reste désactivée, et l'erreur remontée à la plateforme le dit.
 				if ( $was_active && ! is_plugin_active( $file ) ) {
-					throw new \RuntimeException( esc_html( $e->getMessage() . self::LEFT_INACTIVE_MID_UPDATE ), 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message échappé ; `$e` est l'exception chaînée, pas une sortie.
+					throw new FilteredError( esc_html( Redactor::redact( $e->getMessage() ) . self::LEFT_INACTIVE_MID_UPDATE ), 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message échappé ; `$e` est l'exception chaînée, pas une sortie.
 				}
 				throw $e;
 			}
@@ -515,10 +517,10 @@ final class CommandExecutor {
 			'reason'         => $changed ? null : ( true === $result ? 'version_unchanged' : 'upgrade_failed' ),
 		];
 		if ( null !== $upgrade_error ) {
-			// Le message, échappé : ProtectedUpdate::run() le complète et le rend dans tous
-			// ses résultats (`updated`, `auto_rolled_back`…), ou dans son erreur si une
-			// reprise l'a prise en route.
-			$outcome['upgrade_error'] = esc_html( $upgrade_error );
+			// Le message, filtré (PhpErrors\Redactor, 500 caractères au plus) puis échappé :
+			// ProtectedUpdate::run() le complète et le rend dans tous ses résultats (`updated`,
+			// `auto_rolled_back`…), ou dans son erreur si une reprise l'a prise en route.
+			$outcome['upgrade_error'] = esc_html( Redactor::redact( $upgrade_error ) );
 		}
 		return $outcome;
 	}
@@ -978,8 +980,9 @@ final class CommandExecutor {
 		];
 		if ( null !== $upgrade_error ) {
 			// Lu par le manager comme pour une extension (avertissement du site, connecteur 1.13). Texte
-			// d'une extension tierce : filtré comme les autres messages qui quittent le site (chemins du
-			// serveur, e-mails, IP, jetons, requêtes SQL retirés ; 500 caractères au plus).
+			// d'une extension tierce : filtré comme celui des autres exceptions que rend CommandExecutor
+			// (filet de run(), erreurs et `upgrade_error` des extensions) : chemins du serveur, e-mails,
+			// IP, jetons, requêtes SQL retirés ; 500 caractères au plus.
 			$outcome['upgrade_error'] = esc_html( Redactor::redact( $upgrade_error ) . self::INSTALLED_THEN_FAILED );
 		}
 		return [ $outcome, is_wp_error( $result ) ? $result : null ];

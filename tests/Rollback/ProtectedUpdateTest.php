@@ -7,6 +7,7 @@ namespace G2RD\Connector\Tests\Rollback;
 use Brain\Monkey\Functions;
 use G2RD\Connector\Commands\CommandExecutor;
 use G2RD\Connector\Cron\RestorePointPurgeJob;
+use G2RD\Connector\PhpErrors\Redactor;
 use G2RD\Connector\Rollback\AutoUpdateGuard;
 use G2RD\Connector\Rollback\HealthChecker;
 use G2RD\Connector\Rollback\PendingOutcomes;
@@ -38,6 +39,9 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 
 	/** Début du texte d'`upgrade_error` : exception levée une fois la nouvelle version copiée. */
 	private const INSTALLED_THEN_FAILED = '; WordPress had already installed the new version when this error occurred (its files are complete), so the protected update did not stop on it and went on as after a successful copy (see outcome)';
+
+	/** Requête et valeurs d'un visiteur citées par le texte d'une erreur tierce. */
+	private const QUERY_ERROR = 'Query failed: INSERT INTO wp_postmeta (meta_key, meta_value) VALUES (\'tel\', \'Jean Dupont 0612345678\')';
 
 	private RestorePointStore $store;
 	/** @var list<array{code:int, body:string|callable, error?:string|null}> Réponses loopback, consommées dans l'ordre (home, admin, home, admin…). */
@@ -1397,6 +1401,95 @@ final class ProtectedUpdateTest extends FilesystemTestCase {
 		self::assertSame( 'Could not copy file. (its transaction was taken over by a recovery, which reports its own result)', $outcome['error'] );
 		self::assertSame( [ [ self::FILE, 'recovered_rolled_back' ] ], $this->pending_outcomes() );
 		self::assertSame( [ self::FILE ], $this->deactivated, 'Une seule restauration : celle de la reprise.' );
+	}
+
+	/**
+	 * Même cas, l'erreur cite une requête : filtrée (PhpErrors\Redactor), puis suivie de la prise
+	 * en route entière.
+	 */
+	public function test_an_upgrade_error_after_a_takeover_is_filtered_and_keeps_its_explanation(): void {
+		$this->script_health( ok: 2, then_ok: 2 );
+		Plugin_Upgrader::$next_result = new WP_Error( 'copy_failed', self::QUERY_ERROR );
+		$upgrade                      = Plugin_Upgrader::$on_upgrade;
+		Plugin_Upgrader::$on_upgrade  = function () use ( $upgrade ): void {
+			$upgrade();
+			$this->age_transaction( UpdateTransaction::STALE_AFTER_SECONDS + 100 );
+			$this->as_another_process( static fn () => ProtectedUpdate::recover( time() ) );
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assertSame( 'Query failed: [sql] (its transaction was taken over by a recovery, which reports its own result)', $outcome['error'] );
+	}
+
+	/**
+	 * Exception après la copie puis prise en route : l'erreur de WordPress, filtrée, garde la fin de
+	 * son explication (« check the PHP error log… ») même après un masque de requête.
+	 */
+	public function test_both_errors_of_a_takeover_keep_their_explanation_after_a_filtered_query(): void {
+		$this->script_health( ok: 2, then_ok: 2 );
+		$upgrade                      = Plugin_Upgrader::$on_upgrade;
+		Plugin_Upgrader::$on_upgrade  = function () use ( $upgrade ): void {
+			$upgrade();
+			$this->age_transaction( UpdateTransaction::STALE_AFTER_SECONDS + 100 );
+			$this->as_another_process( static fn () => ProtectedUpdate::recover( time() ) );
+		};
+		Plugin_Upgrader::$on_complete = static function (): void {
+			throw new \RuntimeException( self::QUERY_ERROR ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- texte d'essai.
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assertStringStartsWith( 'protected update was taken over by a recovery while it was updating the plugin', $outcome['error'] );
+		self::assertStringEndsWith( '; WordPress had also raised an error once the new version was installed: Query failed: [sql]; check the PHP error log for the code that raised it', $outcome['error'] );
+		self::assertStringNotContainsString( '0612345678', $outcome['error'] );
+	}
+
+	/**
+	 * Le texte d'une exception tierce levée une fois la nouvelle version copiée part au manager
+	 * filtré (PhpErrors\Redactor) et borné dans `upgrade_error`, suivi de son explication entière.
+	 *
+	 * @return array<string, array{string, string, list<string>}>
+	 */
+	public static function hostile_upgrade_errors(): array {
+		return [
+			'chemin du serveur, 14 000 caractères' => [
+				'Fatal in /home/u123456789/domains/exemple.fr/public_html/wp-content/plugins/x/x.php:12 for contact@exemple.fr ' . str_repeat( 'détail ', 2000 ),
+				'Fatal in wp-content/plugins/x/x.php:12 for [email] détail',
+				[ '/home/', 'u123456789', 'contact@exemple.fr' ],
+			],
+			'requête SQL et ses valeurs'           => [ self::QUERY_ERROR, 'Query failed: [sql]', [ 'Jean Dupont', '0612345678' ] ],
+		];
+	}
+
+	/**
+	 * @param list<string> $absent
+	 */
+	#[DataProvider( 'hostile_upgrade_errors' )]
+	public function test_the_upgrade_error_is_filtered_and_bounded( string $message, string $start, array $absent ): void {
+		$nets = $this->record_shutdown_nets();
+		$this->script_health( ok: 2, then_ok: 2 );
+		$this->loaded_at_boot();
+		Plugin_Upgrader::$on_complete = static function () use ( $message ): void {
+			throw new \RuntimeException( $message ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- texte d'essai.
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', $this->payload( [] ) );
+		foreach ( $nets as $net ) {
+			$net();
+		}
+
+		self::assertSame( 'done', $outcome['status'] );
+		$error = $outcome['result']['upgrade_error'];
+		$end   = self::INSTALLED_THEN_FAILED . '; check the PHP error log for the code that raised it';
+		self::assertStringStartsWith( $start, $error );
+		foreach ( $absent as $text ) {
+			self::assertStringNotContainsString( $text, $error );
+		}
+		self::assertStringEndsWith( $end, $error );
+		self::assertLessThanOrEqual( Redactor::MAX_CHARS + mb_strlen( $end ), mb_strlen( $error ) );
 	}
 
 	// ── Reprise qui meurt à chaque tentative ─────────────────────────────────

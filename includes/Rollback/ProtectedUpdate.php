@@ -31,6 +31,7 @@ declare(strict_types=1);
 namespace G2RD\Connector\Rollback;
 
 use G2RD\Connector\Commands\CommandExecutor;
+use G2RD\Connector\Commands\FilteredError;
 use G2RD\Connector\Cron\RestorePointPurgeJob;
 
 final class ProtectedUpdate {
@@ -387,8 +388,8 @@ final class ProtectedUpdate {
 			$s->store->hold( $point['id'], $hold_until );
 			if ( ! self::close_own( $identity ) ) {
 				// Prise par une reprise entre-temps : elle consigne son propre résultat.
-				// Message déjà échappé par celui qui l'a levé (CommandExecutor), suffixe fixe.
-				throw new \RuntimeException( $e->getMessage() . self::TAKEN_OVER_SUFFIX, 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- cf. ci-dessus.
+				// Message filtré (texte tiers) ou déjà filtré et échappé (CommandExecutor), suffixe fixe.
+				throw new FilteredError( FilteredError::message_of( $e ) . self::TAKEN_OVER_SUFFIX, 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- cf. ci-dessus.
 			}
 			throw $e;
 		} finally {
@@ -978,7 +979,7 @@ final class ProtectedUpdate {
 		if ( null !== $upgrade_error ) {
 			$message .= sprintf( self::UPGRADE_ERROR_TOO, $upgrade_error );
 		}
-		throw new \RuntimeException( $message ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- constantes, et `upgrade_error` déjà échappé par CommandExecutor.
+		throw new FilteredError( $message ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- constantes, et `upgrade_error` déjà filtré et échappé par CommandExecutor.
 	}
 
 	private function installed_version( string $plugin_file ): string {
