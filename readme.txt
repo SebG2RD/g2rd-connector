@@ -156,6 +156,13 @@ Pre-release of the 1.18 line, piloted on one site before it is offered to every 
   more than 1,000 characters, or ends with a backslash; before, such a query, or the end of such a
   value (for example a visitor's name or phone number), could be left readable. Everything between
   "for query" and WordPress' "made by" list is part of the query.
+* **Fix: error messages of failed remote commands are filtered too.** When a remote command fails on
+  an error raised by WordPress or by another plugin (for example during a plugin update), the text of
+  that error now goes through the same filter as PHP error messages before it is sent to G2RD WP
+  Manager: server paths, e-mail addresses, IP addresses, tokens and database queries are removed,
+  and it is limited to 500 characters, followed in full by the connector's explanation of what
+  happened and what to do. The same applies to the error reported with a plugin update that went on
+  (`upgrade_error`). Before, that text was sent as it was.
 
 = 1.17.0 =
 
