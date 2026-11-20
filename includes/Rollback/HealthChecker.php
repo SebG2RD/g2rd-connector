@@ -23,6 +23,8 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Rollback;
 
+use G2RD\Connector\Commands\FilteredError;
+
 final class HealthChecker {
 
 	public const HEALTHY      = 'healthy';
@@ -120,14 +122,16 @@ final class HealthChecker {
 			'user-agent'  => 'G2RD-Connector-HealthCheck/' . G2RD_CONNECTOR_VERSION,
 		];
 
+		// `reason` part au manager (`health`) : le texte d'une erreur de transport (WordPress, cURL,
+		// extension branchée sur `pre_http_request`) y est filtré.
 		try {
 			$response = ( $this->transport )( $url, $args );
 		} catch ( \Throwable $e ) {
-			return self::result( self::PROBE_UNVERIFIABLE, null, 'transport: ' . $e->getMessage() );
+			return self::result( self::PROBE_UNVERIFIABLE, null, 'transport: ' . FilteredError::message_of( $e ) );
 		}
 
 		if ( null !== ( $response['error'] ?? null ) ) {
-			return self::result( self::PROBE_UNVERIFIABLE, null, (string) $response['error'] );
+			return self::result( self::PROBE_UNVERIFIABLE, null, FilteredError::text( (string) $response['error'] ) );
 		}
 
 		$code = (int) $response['code'];
@@ -179,10 +183,12 @@ final class HealthChecker {
 	public static function wp_transport( string $url, array $args ): array {
 		$response = wp_remote_get( $url, $args );
 		if ( is_wp_error( $response ) ) {
+			// Sans message (extension branchée sur `pre_http_request`), son code : `reason` n'est jamais vide.
+			$message = $response->get_error_message();
 			return [
 				'code'  => 0,
 				'body'  => '',
-				'error' => $response->get_error_message(),
+				'error' => '' !== trim( $message ) ? $message : (string) $response->get_error_code(),
 			];
 		}
 		return [

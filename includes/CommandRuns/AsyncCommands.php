@@ -5,7 +5,8 @@
  * l'hébergeur ne les exécute jamais deux fois.
  *
  * Toutes les commandes du site y passent, sauf les instantanées (quatre jusqu'à la 1.15,
- * cinq avec `set_php_errors_capture`), dont les appelants attendent une réponse
+ * cinq avec `set_php_errors_capture`, six avec `get_release_notes` en 1.18.0, qui ne passe
+ * que par `/command`), dont les appelants attendent une réponse
  * immédiate : elles restent sur `/command`
  * (décision n° 5 du propriétaire). Chaque commande de CommandExecutor::ALLOWED est
  * rangée dans l'une des deux listes, jamais dans les deux (cf. AsyncCommandsTest).
@@ -32,6 +33,7 @@ final class AsyncCommands {
 		'update_core',
 		'update_translations',
 		'rollback_plugin',
+		'rollback_core',
 		'optimize_database',
 		'delete_spam_comments',
 		'delete_post_revisions',
@@ -54,6 +56,7 @@ final class AsyncCommands {
 		'delete_restore_point',
 		'set_signature_policy',
 		'set_php_errors_capture',
+		'get_release_notes',
 	];
 
 	/**

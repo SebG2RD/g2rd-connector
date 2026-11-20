@@ -130,6 +130,7 @@ namespace G2RD\Connector\CommandRuns;
 use G2RD\Connector\Backup\Commands\BackupRefused;
 use G2RD\Connector\Backup\Gate\UpdateGate;
 use G2RD\Connector\Commands\CommandExecutor;
+use G2RD\Connector\Commands\FilteredError;
 use G2RD\Connector\PhpErrors\Normalizer;
 use G2RD\Connector\PhpErrors\Redactor;
 use G2RD\Connector\Rollback\PendingOutcomes;
@@ -939,10 +940,11 @@ final class AfterResponseRunner {
 	 * @return array<string, mixed>
 	 */
 	private function unexpected_error( string $command, \Throwable $error ): array {
-		// Sans point final : la phrase en ajoute un. Message vide : le type de l'erreur.
-		$detail = rtrim( trim( $error->getMessage() ), '.' );
+		// Sans point final : la phrase en ajoute un. Message vide : le type de l'erreur. Texte tiers
+		// filtré avant de partir au manager (cf. FilteredError).
+		$detail = rtrim( FilteredError::message_of( $error ), '.' );
 		if ( '' === $detail ) {
-			$detail = get_class( $error );
+			$detail = FilteredError::text( get_class( $error ) );
 		}
 
 		return $this->failure(

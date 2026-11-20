@@ -211,6 +211,58 @@ if ( ! class_exists( 'Automatic_Upgrader_Skin' ) ) {
 	class Automatic_Upgrader_Skin {}
 }
 
+if ( ! class_exists( 'WP_Upgrader' ) ) {
+	/** Doublure : le verrou seul, une option comme dans WordPress (`{nom}.lock`). */
+	class WP_Upgrader {
+		public static function release_lock( string $lock_name ): bool {
+			return delete_option( $lock_name . '.lock' );
+		}
+	}
+}
+
+if ( ! class_exists( 'Core_Upgrader' ) ) {
+	/**
+	 * Doublure : enregistre chaque offre reçue et ses options ; le résultat de upgrade() est fixé
+	 * par le test (un par appel, dans l'ordre, sinon `$next_result`) ; `$on_upgrade` simule ce que
+	 * update_core() écrit sur le disque.
+	 */
+	class Core_Upgrader {
+		/** @var mixed Résultat par défaut : la version installée, comme WordPress. */
+		public static $next_result = '7.1.5';
+		/** @var list<mixed> Résultats des appels successifs, consommés dans l'ordre. */
+		public static array $results = [];
+		/** @var callable|null Reçoit l'offre ; écrit les fichiers « installés ». */
+		public static $on_upgrade = null;
+		/** @var list<array{offer: object, args: array<string, mixed>}> */
+		public static array $calls = [];
+
+		public function __construct( public object $skin ) {}
+
+		/**
+		 * @param object               $current
+		 * @param array<string, mixed> $args
+		 * @return mixed
+		 */
+		public function upgrade( $current, $args = [] ) {
+			self::$calls[] = [
+				'offer' => $current,
+				'args'  => $args,
+			];
+			if ( null !== self::$on_upgrade ) {
+				( self::$on_upgrade )( $current );
+			}
+			return [] !== self::$results ? array_shift( self::$results ) : self::$next_result;
+		}
+
+		public static function reset(): void {
+			self::$next_result = '7.1.5';
+			self::$results     = [];
+			self::$on_upgrade  = null;
+			self::$calls       = [];
+		}
+	}
+}
+
 if ( ! class_exists( 'Plugin_Upgrader' ) ) {
 	/**
 	 * Doublure : le résultat de upgrade() est fixé par le test ; des callables
@@ -284,4 +336,46 @@ if ( ! class_exists( 'Plugin_Upgrader' ) ) {
 			self::$upgraded                    = [];
 		}
 	}
+}
+
+if ( ! class_exists( 'Theme_Upgrader' ) ) {
+	/** Doublure : upgrade() rend `$next_result` (true, ou la WP_Error d'un échec). */
+	class Theme_Upgrader {
+		/** @var mixed */
+		public static $next_result = true;
+
+		public function __construct( public object $skin ) {}
+
+		/** @return mixed */
+		public function upgrade( string $stylesheet ) {
+			unset( $stylesheet );
+			return self::$next_result;
+		}
+	}
+}
+
+if ( ! class_exists( 'PclZip' ) ) {
+	/**
+	 * Doublure : create() échoue et errorInfo() rend `$error`, comme PclZip sur un hébergement sans
+	 * l'extension zip (cf. Snapshotter, construit sans ZipArchive). Jamais utilisée quand ZipArchive l'est.
+	 */
+	class PclZip {
+		public static string $error = '';
+
+		public function __construct( public string $zipname ) {}
+
+		/** @param mixed ...$options */
+		public function create( ...$options ): int {
+			unset( $options );
+			return 0;
+		}
+
+		public function errorInfo( bool $full = false ): string {
+			unset( $full );
+			return self::$error;
+		}
+	}
+}
+if ( ! defined( 'PCLZIP_OPT_REMOVE_PATH' ) ) {
+	define( 'PCLZIP_OPT_REMOVE_PATH', 77003 );
 }

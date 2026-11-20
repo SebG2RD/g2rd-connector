@@ -105,6 +105,118 @@ final class RedactorTest extends PHPUnitTestCase {
 		self::assertStringEndsWith( 'ici', $out );
 	}
 
+	/**
+	 * Requête de wpdb::print_error() (« … for query %s made by %s ») dont une valeur porte un « ; »,
+	 * une apostrophe échappée par mysqli_real_escape_string (« \' »), un guillemet échappé, une barre
+	 * finale (NO_BACKSLASH_ESCAPES), ou dépasse 1 000 caractères : masquée entière, jusqu'au
+	 * « made by ». Mêmes cas que PhpErrorTextTest du manager (seconde barrière), plus la longueur.
+	 *
+	 * @return iterable<string, array{string}>
+	 */
+	public static function requetes_aux_valeurs_piegees(): iterable {
+		$error      = 'WordPress database error Data too long for column \'meta_value\' at row 1 for query ';
+		$serialized = 's:11:"Jean Dupont";s:5:"phone";s:10:"0612345678";}\') made by do_action(\'x\')';
+		yield 'requête brute, valeur sérialisée' => [ $error . 'INSERT INTO wp_usermeta (user_id, meta_key, meta_value) VALUES (12, \'billing\', \'a:2:{s:4:"name";' . $serialized ];
+		yield 'reste collé au masque' => [ $error . '[sql]' . $serialized ];
+		yield 'reste après le masque et une espace' => [ $error . '[sql] Jean Dupont, 0612345678\') made by do_action(\'x\')' ];
+		yield 'apostrophe échappée puis « ; »' => [ $error . 'INSERT INTO wp_comments (comment_author, comment_content) VALUES (\'Jean\', \'Bonjour, c\\\'est Jean Dupont; rappelez-moi au 0612345678\') made by wp_insert_comment' ];
+		yield 'apostrophe échappée puis « ; », en minuscules' => [ $error . 'update wp_options set option_value = \'Rue de l\\\'Eglise; Jean Dupont, tel 0612345678\' where option_name = \'contact\'' ];
+		yield 'guillemet échappé puis « ; »' => [ $error . 'INSERT INTO wp_postmeta (post_id, meta_key, meta_value) VALUES (7, "note", "Il a dit \\"oui; rappelez Jean Dupont au 0612345678\\"")' ];
+		yield 'valeur finie par une barre, sans échappement par barre' => [ $error . 'INSERT INTO wp_postmeta (meta_key, meta_value) VALUES (\'C:\\\', \'Jean Dupont; 0612345678\') made by f' ];
+		yield 'requête de plus de 1 000 caractères' => [ $error . 'INSERT INTO wp_postmeta (meta_key, meta_value) VALUES (\'note\', \'' . str_repeat( 'x', 1100 ) . ' Jean Dupont 0612345678\') made by f' ];
+		// En-tête non reconnu par les motifs de requête : seule la règle « for query » la masque.
+		yield '« ; » entre SELECT et FROM' => [ $error . 'SELECT CONCAT(\';\', meta_value) FROM wp_usermeta WHERE meta_value = \'Jean Dupont 0612345678\' made by do_action(\'x\')' ];
+		yield 'plus de 300 caractères entre SELECT et FROM' => [ $error . 'SELECT ' . implode( ', ', array_map( static fn ( int $i ): string => 's.col_' . $i, range( 10, 41 ) ) ) . ' FROM wp_wc_order_stats s WHERE s.note = \'Jean Dupont 0612345678\' made by f' ];
+		yield 'requête SHOW' => [ $error . 'SHOW TABLES LIKE \'Jean Dupont 0612345678\' made by do_action(\'x\')' ];
+		yield 'requête CALL' => [ $error . 'CALL wp_enregistre_contact(\'Jean Dupont\', \'0612345678\') made by f' ];
+		yield 'requête SHOW sur plusieurs lignes' => [ $error . "SHOW TABLES\nLIKE 'x'\r\nOR 'Jean Dupont 0612345678'\nmade by f" ];
+	}
+
+	#[DataProvider( 'requetes_aux_valeurs_piegees' )]
+	public function test_une_requete_est_masquee_entiere_malgre_ses_valeurs( string $input ): void {
+		$out = Redactor::redact( $input, [], Redactor::MAX_CHARS, [] );
+
+		self::assertStringNotContainsString( 'Jean Dupont', $out );
+		self::assertStringNotContainsString( '0612345678', $out );
+		self::assertStringContainsString( 'WordPress database error', $out );
+		self::assertSame( $out, Redactor::redact( $out, [], Redactor::MAX_CHARS, [] ), 'Un texte déjà filtré ne change plus.' );
+	}
+
+	/**
+	 * Requête arrêtée à un « ; » hors chaîne : ce qui suit appartient encore à la requête jusqu'au
+	 * « made by » ; la pile d'appels de WordPress, après lui, reste lisible.
+	 */
+	public function test_apres_for_query_la_requete_va_jusqu_au_made_by(): void {
+		$out = Redactor::redact( 'WordPress database error Duplicate column for query INSERT INTO wp_x VALUES (\'a;b\'); Jean Dupont made by do_action(\'init\')', [], Redactor::MAX_CHARS, [] );
+
+		self::assertSame( 'WordPress database error Duplicate column for query [sql] made by do_action(\'init\')', $out );
+	}
+
+	/**
+	 * Requête citée hors de wpdb::print_error() (exception d'une extension, « Query failed: … ») :
+	 * pas de « for query », la lecture des chaînes de SQL_TAIL la masque entière malgré un « ; »
+	 * dans une valeur, un « \' » ou un « \" », ou plus de 1 000 caractères. Une valeur finie par
+	 * « \ » sans échappement (NO_BACKSLASH_ESCAPES) décale cette lecture : ce qui suit le masque
+	 * jusqu'au « made by », sinon jusqu'à la fin, appartient encore à la requête.
+	 *
+	 * @return iterable<string, array{string}>
+	 */
+	public static function requetes_citees_sans_for_query(): iterable {
+		$error = 'Uncaught Exception: Query failed: ';
+		yield 'apostrophe échappée puis « ; »' => [ $error . 'INSERT INTO wp_comments (comment_content) VALUES (\'c\\\'est Jean Dupont; 0612345678\')' ];
+		yield 'valeur sérialisée aux « ; »' => [ $error . 'INSERT INTO wp_usermeta (user_id, meta_key, meta_value) VALUES (12, \'billing\', \'a:2:{s:4:\\"name\\";s:11:\\"Jean Dupont\\";s:5:\\"phone\\";s:10:\\"0612345678\\";}\')' ];
+		yield 'valeur de plus de 1 000 caractères' => [ $error . 'INSERT INTO wp_postmeta (meta_key, meta_value) VALUES (\'note\', \'' . str_repeat( 'x', 1100 ) . ' Jean Dupont 0612345678\')' ];
+		yield 'apostrophe échappée puis « ; », en minuscules' => [ $error . 'update wp_options set option_value = \'Rue de l\\\'Eglise; Jean Dupont, tel 0612345678\' where option_name = \'contact\'' ];
+		yield 'guillemet échappé puis « ; »' => [ $error . 'INSERT INTO wp_postmeta (post_id, meta_key, meta_value) VALUES (7, "note", "Il a dit \\"oui; rappelez Jean Dupont au 0612345678\\"")' ];
+		yield 'valeur finie par une barre, sans échappement par barre' => [ $error . 'INSERT INTO wp_postmeta (meta_key, meta_value) VALUES (\'C:\\\', \'Jean Dupont; 0612345678\')' ];
+		// Seul « near [sql] at line N » (erreur de syntaxe, 1064) garde sa suite : ici, pas de « at line ».
+		yield 'requête après « near », valeur finie par une barre' => [ 'Uncaught Exception: Syntax error near INSERT INTO wp_postmeta (meta_key, meta_value) VALUES (\'C:\\\', \'Jean Dupont; 0612345678\')', 'Uncaught Exception: Syntax error near [sql]' ];
+	}
+
+	#[DataProvider( 'requetes_citees_sans_for_query' )]
+	public function test_une_requete_citee_sans_for_query_est_masquee_entiere( string $input, string $start = 'Uncaught Exception: Query failed: [sql]' ): void {
+		$out = Redactor::redact( $input, [], Redactor::MAX_CHARS, [] );
+
+		self::assertStringNotContainsString( 'Jean Dupont', $out );
+		self::assertStringNotContainsString( '0612345678', $out );
+		self::assertStringStartsWith( $start, $out );
+		self::assertSame( $out, Redactor::redact( $out, [], Redactor::MAX_CHARS, [] ), 'Un texte déjà filtré ne change plus.' );
+	}
+
+	/**
+	 * Textes hostiles sous la borne de lecture (4 000 caractères : rien n'est coupé avant les
+	 * motifs), dont ceux qui visent la lecture des chaînes échappées. Vérifié à la main aussi avec
+	 * php -d pcre.jit=0 ; la CI tourne avec le JIT.
+	 *
+	 * @return iterable<string, array{string}>
+	 */
+	public static function textes_hostiles_sous_la_borne(): iterable {
+		yield 'guillemets' => [ str_repeat( '\'"', 2000 ) ];
+		yield 'apostrophes échappées' => [ str_repeat( '\'\\\'', 1300 ) ];
+		// 25 + 3 000 + 500 = 3 525 caractères : les 500 barres finales passent sous la borne.
+		yield 'requête aux chaînes échappées sans fin' => [ 'INSERT INTO wp_x VALUES (' . str_repeat( '\'\\\'; "\\"; ', 300 ) . str_repeat( '\\', 500 ) ];
+		yield 'requête en minuscules aux chaînes ouvertes' => [ 'update wp_x set a = ' . str_repeat( '"\\', 1900 ) ];
+		yield 'for query répété' => [ str_repeat( 'for query [sql] made by ', 160 ) ];
+		yield 'for query sans made by' => [ 'for query [sql]' . str_repeat( ' made b', 500 ) ];
+		yield 'for query répété sans masque ni made by' => [ str_repeat( 'for query x made b ', 210 ) ];
+		yield 'masque répété sans made by' => [ str_repeat( '[sql] made b', 330 ) ];
+		yield 'near et masque répétés' => [ str_repeat( 'near [sql] at ', 280 ) ];
+		yield 'fragment de syntaxe répété' => [ str_repeat( 'near [sql] at line 1 ', 190 ) ];
+	}
+
+	#[DataProvider( 'textes_hostiles_sous_la_borne' )]
+	public function test_un_texte_hostile_sous_la_borne_reste_rapide_et_lisible( string $input ): void {
+		self::assertLessThanOrEqual( 4000, mb_strlen( $input ) );
+
+		$start = hrtime( true );
+		$out   = Redactor::redact( $input, [], Redactor::MAX_CHARS, [] );
+		$ms    = ( hrtime( true ) - $start ) / 1e6;
+
+		self::assertLessThan( 100, $ms, sprintf( '%.1f ms : un motif retombe en arrière sur ce texte', $ms ) );
+		self::assertNotSame( Redactor::UNREADABLE, $out, 'un motif a atteint une limite de PCRE sur ce texte' );
+		self::assertLessThanOrEqual( Redactor::MAX_CHARS, mb_strlen( $out ) );
+	}
+
 	public function test_un_texte_vide_est_illisible(): void {
 		self::assertSame( Redactor::UNREADABLE, Redactor::redact( '', [] ) );
 		self::assertSame( Redactor::UNREADABLE, Redactor::redact( "\u{200B}\u{0007}", [] ) );
@@ -214,8 +326,13 @@ final class RedactorTest extends PHPUnitTestCase {
 			"View '[secret].wp_vue_commandes' references invalid table(s) or column(s) or function(s) or definer/invoker of view lack rights to use them",
 		];
 		yield 'définisseur entre accents graves' => [
+			'SQLSTATE[42000]: Access denied; you need (at least one of) the SUPER privilege(s) for this operation: CREATE DEFINER=`u123456789_wp`@`localhost` TRIGGER `wp_x_ai` AFTER INSERT ON `wp_x` FOR EACH ROW BEGIN END',
+			'SQLSTATE[42000]: Access denied; you need (at least one of) the SUPER privilege(s) for this operation: CREATE DEFINER=[secret] TRIGGER `wp_x_ai` AFTER INSERT ON `wp_x` FOR EACH ROW BEGIN END',
+		];
+		// Après « for query », la requête entière part, définisseur compris.
+		yield 'définisseur entre accents graves après « for query »' => [
 			'Access denied; you need (at least one of) the SUPER privilege(s) for this operation for query CREATE DEFINER=`u123456789_wp`@`localhost` TRIGGER `wp_x_ai` AFTER INSERT ON `wp_x` FOR EACH ROW BEGIN END',
-			'Access denied; you need (at least one of) the SUPER privilege(s) for this operation for query CREATE DEFINER=[secret] TRIGGER `wp_x_ai` AFTER INSERT ON `wp_x` FOR EACH ROW BEGIN END',
+			'Access denied; you need (at least one of) the SUPER privilege(s) for this operation for query [sql]',
 		];
 	}
 
@@ -383,9 +500,10 @@ final class RedactorTest extends PHPUnitTestCase {
 			'Boutique [secret] fermée, voir workshop et shops',
 			Redactor::redact( 'Boutique SHOP fermée, voir workshop et shops', [], Redactor::MAX_CHARS, [ 'shop' ] )
 		);
+		// « [sql] » en dernier : la suite d'un masque de requête lui appartient (cf. Redactor::patterns()).
 		self::assertSame(
-			'Erreur [secret] et [sql] pour le compte [secret]',
-			Redactor::redact( 'Erreur [secret] et [sql] pour le compte secret', [], Redactor::MAX_CHARS, [ 'secret', 'sql' ] )
+			'Erreur [secret] pour le compte [secret] et [sql]',
+			Redactor::redact( 'Erreur [secret] pour le compte secret et [sql]', [], Redactor::MAX_CHARS, [ 'secret', 'sql' ] )
 		);
 	}
 

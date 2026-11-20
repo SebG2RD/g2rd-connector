@@ -18,6 +18,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Rollback;
 
+use G2RD\Connector\Commands\FilteredError;
 use G2RD\Connector\Support\DiskSpace;
 
 // phpcs:disable WordPress.WP.AlternativeFunctions -- système de fichiers direct, voir RestorePointStore.
@@ -30,9 +31,14 @@ final class Snapshotter {
 	/** Budget disque par défaut pour l'ensemble des points d'un site (octets). */
 	public const DEFAULT_MAX_TOTAL_BYTES = 314572800;
 
+	/**
+	 * @param bool $ziparchive ZipArchive s'il est chargé ; faux pour les essais : PclZip, comme sur un
+	 *                         hébergement sans l'extension zip.
+	 */
 	public function __construct(
 		private readonly RestorePointStore $store,
 		private readonly string $plugins_root,
+		private readonly bool $ziparchive = true,
 	) {
 	}
 
@@ -93,7 +99,8 @@ final class Snapshotter {
 			if ( $e instanceof RestorePointException ) {
 				throw $e;
 			}
-			throw RestorePointException::failed( esc_html( 'zip failed: ' . $e->getMessage() ) );
+			// Texte tiers (ZipArchive, PclZip) filtré une fois, avant d'être échappé.
+			throw RestorePointException::failed( esc_html( 'zip failed: ' . FilteredError::message_of( $e ) ) );
 		}
 
 		$record = [
@@ -153,7 +160,7 @@ final class Snapshotter {
 	 * @return int Nombre d'entrées attendues dans le zip.
 	 */
 	private function zip( string $source_path, bool $is_dir, string $target ): int {
-		if ( class_exists( \ZipArchive::class ) ) {
+		if ( $this->ziparchive && class_exists( \ZipArchive::class ) ) {
 			return $this->zip_with_ziparchive( $source_path, $is_dir, $target );
 		}
 		return $this->zip_with_pclzip( $source_path, $is_dir, $target );
@@ -198,7 +205,8 @@ final class Snapshotter {
 		// PclZip lit ses options via func_get_args() : le stub ne déclare que le 1er paramètre.
 		$result = $archive->create( $source_path, PCLZIP_OPT_REMOVE_PATH, $parent ); // @phpstan-ignore-line
 		if ( 0 === $result || ! is_array( $result ) ) {
-			throw new \RuntimeException( esc_html( 'PclZip: ' . (string) $archive->errorInfo( true ) ) );
+			// Chemin absolu de l'archive cité : filtré puis échappé par create(), son seul appelant.
+			throw new \RuntimeException( 'PclZip: ' . (string) $archive->errorInfo( true ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- filtré puis échappé par create().
 		}
 		return count( $result );
 	}

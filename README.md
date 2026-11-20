@@ -264,6 +264,21 @@ aujourd'hui toute version ≥ 2 pour la version 2.
 | POST | `/wp-json/g2rd/v1/command-runs` | Bearer SiteToken + signature obligatoire | Accepte une commande longue, exécutée après la réponse (1.15, voir « Commandes en arrière-plan ») |
 | GET | `/wp-json/g2rd/v1/command-runs/<numéro>` | Bearer SiteToken + signature obligatoire | État et résultat d'une commande en arrière-plan (1.15) |
 
+Une commande en échec rend `{status: failed, error}`. Principe (1.18) : tout texte d'origine tierce
+qui part au manager (exception de WordPress ou d'une extension, `WP_Error` d'un upgrader ou de
+`download_url()`, message de PclZip ou de cURL, nom de la classe d'une exception imprévue) passe une
+fois, et une seule, par `Commands\FilteredError::text()`, c'est-à-dire `PhpErrors\Redactor`, avant
+tout échappement (« &#039; » ne serait plus lu comme une apostrophe) : chemins du serveur, e-mails,
+IP, jetons et requêtes SQL retirés, 500 caractères au plus ; vide, il est remplacé par son code ou sa
+classe, jamais par `[unreadable]`. L'explication du connecteur qui le suit est entière, jamais
+refiltrée ni coupée : le message d'une `Commands\FilteredError` ou d'une `Rollback\RestoreException`
+(texte tiers filtré à sa création) part tel quel. Champs concernés : `error` du filet de
+`CommandExecutor::run()` et d'une commande en arrière-plan, `upgrade_error` des extensions et du
+cœur, `detail` d'`update_core`, `error` de `snapshot_failed*`, d'`auto_rollback_failed` et des
+échecs de `rollback_plugin`, `detail` de `recovery_failed`, `reason` des sondes de `health`, refus
+`core_rollback_failed` (classe de l'exception), `stray_output` d'une commande (ce que du code tiers
+ou une notice PHP écrit pendant qu'elle s'exécute).
+
 ### Origine des thèmes dans l'inventaire
 
 - **`themes[].wporg`** : vrai seulement si wordpress.org connaît le thème, d'après sa dernière
@@ -272,6 +287,117 @@ aujourd'hui toute version ≥ 2 pour la version 2.
   sous-domaines — une entrée ajoutée par un updater tiers ne compte pas. Thème enfant, premium
   ou sur mesure : faux. Aucun appel réseau de plus. Le champ est omis quand ce transient n'a pas
   de réponse de wordpress.org (réseau coupé) : le manager garde alors son ancien calcul.
+
+### Provenance des mises à jour dans l'inventaire (1.18)
+
+- **`plugins[].update_source`** et **`themes[].update_source`** : `wporg` si l'entrée de mise à
+  jour vue par l'inventaire (transient `update_plugins` ou `update_themes` après le rejeu de la
+  capture des mises à jour tierces ; entrée `response` d'abord, sinon `no_update`) vient de
+  wordpress.org — `id` en `w.org/`, ou fiche ou paquet sur wordpress.org ou l'un de ses
+  sous-domaines, et aucune fiche ni aucun paquet ailleurs ; `vendor` si une entrée existe et n'en
+  vient pas (updater de l'éditeur, en-tête `Update URI`, rejeu de la capture) ; `null` sans entrée.
+  Aucun appel réseau. Code : `Updates\UpdateSource`, qui porte aussi la règle du champ `wporg` des
+  thèmes.
+- **`wporg` et `update_source` peuvent se contredire pour un thème** : `wporg` (1.14) regarde
+  `response` et `no_update` ensemble, `update_source` prend `response` d'abord. Un thème premium
+  annoncé par son éditeur dans `response`, avec un homonyme de wordpress.org dans `no_update`, a
+  `wporg: true` et `update_source: "vendor"`. Le manager préfère `update_source` quand il est présent.
+
+### Notes de version (1.18)
+
+Commande signée `get_release_notes` (signature exigée quelle que soit la politique), par
+`POST /wp-json/g2rd/v1/command` seulement : refusée par la file des commandes
+(`release_notes_queue_unsupported`) et par la route en arrière-plan (`command_not_async`), absente
+quand « Commandes à distance » est coupé (404 `rest_no_route`). Capacité `release_notes` dans
+l'inventaire.
+
+- Charge : `{"kind": "plugin", "file": "dossier/fichier.php"}` ou `{"kind": "theme",
+  "stylesheet": "dossier"}`, cherchés parmi les extensions et thèmes installés.
+- Provenance : celle de l'inventaire — transient lu tel quel, complété pour une entrée absente de
+  `response` par la capture des mises à jour tierces (`PremiumUpdatesBridge::replay_entry()`,
+  lecture seule). Pour un composant dont la provenance n'est pas `wporg`, wordpress.org n'est jamais
+  interrogé quand aucun éditeur n'a répondu.
+- Lecture : `plugins_api( 'plugin_information' )` ou `themes_api( 'theme_information' )` avec les
+  sections, comme le lien « Afficher les détails de la version » ; l'éditeur répond par son propre
+  filtre.
+- Bornes (`ReleaseNotes\HttpLimits`) : 15 s pour l'ensemble des appels faits pendant la commande,
+  redirections comprises (3 au plus par appel ; l'action `requests-requests.before_redirect` ramène
+  chaque saut au temps qui reste ou, budget épuisé, le détourne vers une adresse non HTTP que
+  Requests refuse, `nonhttp`, sans exception dans l'action ; horloge monotone, `hrtime()`), 8 Mio
+  gardés par réponse (octets décompressés avec cURL, reçus avec `fsockopen` ; la suite du corps est
+  lue et jetée), `reject_unsafe_urls`
+  (adresses non publiques au sens de WordPress — privées, de bouclage, lien local… selon la version —,
+  ports autres que 80, 443 et 8080 et hôtes non résolus refusés) ; `notes_html` à 256 Kio,
+  coupé avant d'être rendu valide, jamais au milieu d'un caractère ni d'une balise (`truncated`) ;
+  `homepage` en https, sans requête ni fragment, hôte en lettres, chiffres, tirets et points (ni
+  hôte encodé, ni IPv6).
+- Limites connues : un éditeur qui appelle cURL lui-même, ou un site dont le transport HTTP est
+  `fsockopen` (délai par lecture, pas de délai total), échappe au budget ; la résolution DNS faite
+  par `wp_http_validate_url()` n'est pas bornée ; un updater qui ne s'enregistre pas en REST
+  (SEOPress PRO mesuré) ne répond pas : `release_notes_not_provided` ; la plupart des thèmes premium
+  ne répondent pas à `themes_api()` (WordPress ouvre l'adresse `url` de leur entrée).
+- Écritures : le code de la commande n'écrit rien (liste fermée des appels :
+  `tests/ReleaseNotes/ReadOnlyTest.php`) ; WordPress (cache d'objets, transient `theme_roots`), le
+  module de mise à jour du connecteur (cache de la dernière version GitHub, `Updater\GitHubUpdater`,
+  quand la cible est le connecteur) et celui de l'éditeur peuvent rafraîchir leurs caches, comme
+  sur l'écran des extensions.
+- Réponse : `{"notes_html": "…", "truncated": false, "version": "6.8.11", "homepage": "https://…"}`
+  (`version` et `homepage` peuvent être `null`) ; refus à code stable (`error_code`, HTTP 500) :
+  `release_notes_invalid_request`, `release_notes_not_installed`, `release_notes_not_provided`,
+  `release_notes_source_unavailable`.
+- Contrat commun avec le manager : `tests/fixtures/release-notes-command-v1.json`, identique à
+  l'octet à `backend/tests/fixtures/release-notes-command-v1.json` du manager.
+
+### Retour arrière de WordPress (1.18)
+
+`update_core` accepte les options de la mise à jour protégée des extensions (`snapshot: true`,
+`keep_on_success`, `grace_seconds`) ; sans `snapshot`, rien ne change. Avec `snapshot` et
+`Services::supported()` (`includes/Rollback/Core/ProtectedCoreUpdate.php`) : version installée, langue
+du paquet (`$wp_local_package`, sinon `en_US`) et `db_version` notées ; contrôle de santé avant et
+après ; si la mise à jour s'est arrêtée en cours de copie (codes que WordPress juge critiques pour son
+propre retour arrière : `…do_rollback…`, `…__copy_dir…`, `disk_full`) ou si le site ne répond plus, et
+si `db_version` n'a pas changé, réinstallation de la version d'avant retéléchargée sur wordpress.org ;
+sinon rien, et `error_code: core_rollback_db_changed`. Même verrou que les extensions
+(`UpdateTransaction`, `plugin_file` vide). Avec `keep_on_success` et une base inchangée, la version
+d'avant, sa langue, `db_version` et l'échéance sont gardées dans l'option `g2rd_core_rollback` (non
+autochargée) ; aucune copie de fichiers. Champs ajoutés au résultat : `protected`, `health`,
+`rolled_back`, `rollback_reason` (`update_failed`, `health_check_failed`), `db_version_before`,
+`db_version_after`, `restore_until`, `error_code` / `error`, `locale`, `upgrade_error` (exception
+levée une fois les fichiers copiés : la mise à jour continue vers le contrôle de santé ; texte filtré
+par `PhpErrors\Redactor`, 500 caractères au plus, suivi d'une phrase fixe) ; jamais `outcome`.
+`grace_seconds` est ramené entre 0 et 365 jours. Sans rien à protéger (version de développement,
+offre `latest`), chemin historique strict : une exception levée après la copie remonte comme sans
+`snapshot`.
+
+Rien sans la transaction : si `UpdateTransaction::step()` rend faux (transaction reprise après plus de
+10 minutes sans signe de vie), ni mise à jour, ni mesure, ni réinstallation. Après un retour
+(automatique ou demandé), la version retirée est bloquée pour les mises à jour automatiques de
+WordPress (`AutoUpdateGuard`, clé `wordpress` de `g2rd_blocked_versions`, filtre `auto_update_core`),
+**avant** la réinstallation : un processus arrêté entre la copie et le blocage la laisserait sinon
+débloquée, et WordPress la réinstallerait au passage suivant du cron (dans la même requête, le verrou
+`core_updater` de WordPress, encore tenu, fait échouer sa mise à jour automatique en `locked`). Le
+blocage tombe dès qu'une version plus récente est proposée. Les mineures de WordPress étant le plus
+souvent des correctifs de sécurité, le site reste d'ici là sur la version d'avant ; le manager le dit.
+
+Commande signée `rollback_core` (`{expected_current, target}`), admise en arrière-plan : réinstalle
+`target` si les informations gardées sont celles de cette mise à jour, si la version installée est
+`expected_current` et si `db_version` n'a pas changé ; version écrite dans `wp-includes/version.php`
+et `db_version` relues après le téléchargement, juste avant la copie (mêmes codes ; rien de copié, le
+paquet est supprimé). Résultats à `outcome` : `rollback_success`, ou
+`core_rollback_expired`, `core_rollback_version_changed`, `core_rollback_db_changed`,
+`core_rollback_busy`, `core_rollback_wporg_unreachable`, `core_rollback_integrity`,
+`core_rollback_failed`. Un refus rend `version_after` égal à `version_before` (version chargée au
+début de la requête), sauf `core_rollback_version_changed` : la version écrite dans
+`wp-includes/version.php`, quand elle est lisible. Capacité `core_rollback`, sous la condition de
+`restore_points`.
+
+Paquet (`CorePackage`) : `https://downloads.wordpress.org/release/[{locale}/]wordpress-{version}.zip`,
+repli `en_US` quand `<paquet>.sha1` répond 404 ; SHA-1 publié comparé avant toute copie (WordPress ne
+vérifie plus la signature des paquets du cœur depuis 6.6) ; empreintes de
+`api.wordpress.org/core/checksums/1.0/` lues en https avant, comparées après (`wp-content` exclu).
+Limites connues : proxy de Hostinger devant api.wordpress.org (refus sans changement s'il ne sert pas
+les empreintes) ; les traductions et les thèmes ajoutés par une version majeure ne reviennent pas en
+arrière ; une option par blog en multisite.
 
 ### Signature des requêtes du manager
 
@@ -293,8 +419,9 @@ Politique, réglable dans la page d'administration (« Exiger des commandes sign
   `signature_check`, en-tête `X-G2RD-Signature-Check`), mais une requête non signée reste acceptée ;
 - `required` : toute requête non signée ou mal signée est refusée (401).
 
-Les commandes `rollback_plugin`, `delete_restore_point`, `set_signature_policy` et `set_php_errors_capture` exigent une
-signature valide quelle que soit la politique.
+Les commandes `rollback_plugin`, `delete_restore_point`, `set_signature_policy`, `set_php_errors_capture`,
+`backup_set_key`, `backup_start`, `backup_step`, `backup_abort`, `get_release_notes` et `rollback_core` exigent
+une signature valide quelle que soit la politique.
 
 #### Registre anti-rejeu
 
@@ -642,10 +769,11 @@ lecture est refusée (401).
 est celle de `/command` pour chaque commande.
 
 - Commandes admises : `update_plugin`, `update_theme`, `update_core`, `update_translations`,
-  `rollback_plugin`, `optimize_database`, `delete_spam_comments`, `delete_post_revisions`,
+  `rollback_plugin`, `rollback_core`, `optimize_database`, `delete_spam_comments`, `delete_post_revisions`,
   `empty_trashed_posts`, `delete_expired_transients`, et la sonde `async_probe` (ci-dessous).
 - Commandes instantanées, refusées ici : elles restent sur `/command` (`clear_cache`,
-  `check_updates`, `delete_restore_point`, `set_signature_policy`, `set_php_errors_capture`).
+  `check_updates`, `delete_restore_point`, `set_signature_policy`, `set_php_errors_capture`,
+  `get_release_notes`).
 
 | Situation à l'arrivée | Réponse | Exécution |
 | --- | --- | --- |

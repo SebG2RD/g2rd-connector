@@ -141,6 +141,20 @@ final class HeartbeatJobSignedQueueTest extends TestCase {
 		yield 'backup_start' => [ 'backup_start', [ 'backup_id' => str_repeat( 'a', 32 ) ] ];
 		yield 'backup_step' => [ 'backup_step', [ 'backup_id' => str_repeat( 'a', 32 ) ] ];
 		yield 'backup_abort' => [ 'backup_abort', [ 'backup_id' => str_repeat( 'a', 32 ) ] ];
+		yield 'get_release_notes' => [
+			'get_release_notes',
+			[
+				'kind' => 'plugin',
+				'file' => 'akismet/akismet.php',
+			],
+		];
+		yield 'rollback_core' => [
+			'rollback_core',
+			[
+				'expected_current' => '7.1.5',
+				'target'           => '7.1.4',
+			],
+		];
 	}
 
 	public function test_le_fournisseur_couvre_toutes_les_commandes_signed_only(): void {

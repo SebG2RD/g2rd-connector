@@ -30,6 +30,8 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Rollback;
 
+use G2RD\Connector\Commands\FilteredError;
+
 // phpcs:disable WordPress.WP.AlternativeFunctions -- système de fichiers direct, voir RestorePointStore.
 
 final class PluginRestorer {
@@ -97,9 +99,10 @@ final class PluginRestorer {
 			try {
 				$before_extract();
 			} catch ( \Throwable $e ) {
-				// Rien n'a été extrait : le dossier mis de côté reprend sa place.
+				// Rien n'a été extrait : le dossier mis de côté reprend sa place. Texte tiers filtré
+				// avant d'être échappé (cf. RestoreException).
 				$restored = $this->put_back( $target, $aside );
-				throw RestoreException::failed( esc_html( 'restore stopped before extracting the archive: ' . $e->getMessage() ) )->after_put_back( $restored );
+				throw RestoreException::failed( esc_html( 'restore stopped before extracting the archive: ' . FilteredError::message_of( $e ) ) )->after_put_back( $restored );
 			}
 		}
 
@@ -117,7 +120,7 @@ final class PluginRestorer {
 			if ( $e instanceof RestoreException ) {
 				throw $e->after_put_back( $restored ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message déjà échappé par celui qui l'a levé ; `$restored` est un booléen, pas une sortie.
 			}
-			throw RestoreException::failed( esc_html( 'extraction failed: ' . $e->getMessage() ) )->after_put_back( $restored );
+			throw RestoreException::failed( esc_html( 'extraction failed: ' . FilteredError::message_of( $e ) ) )->after_put_back( $restored );
 		}
 
 		if ( file_exists( $aside ) ) {

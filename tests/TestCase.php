@@ -61,6 +61,10 @@ abstract class TestCase extends PHPUnitTestCase {
 		// Jamais de vrai filet de shutdown pendant les tests : il s'exécuterait à la fin
 		// de PHPUnit, hors de Brain Monkey (cf. ProtectedUpdateTest pour l'observer).
 		Functions\when( 'register_shutdown_function' )->justReturn( null );
+		// Sans effet par défaut (WordPress ≥ 6.2) ; un essai la remplace (filtre
+		// `wp_opcache_invalidate_file` d'une extension qui lève). Définie par Brain Monkey dans un
+		// seul essai, elle lèverait dans tous les suivants.
+		Functions\when( 'wp_opcache_invalidate_directory' )->justReturn( null );
 
 		// Aucune transaction tenue par « ce processus » au début du test, et aucun
 		// filet de shutdown armé : statiques (propres à chaque processus PHP), un test

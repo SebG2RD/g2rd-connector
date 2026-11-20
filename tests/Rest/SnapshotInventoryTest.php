@@ -58,6 +58,9 @@ final class SnapshotInventoryTest extends SnapshotTestCase {
 					'has_update'        => 'bool',
 					'plugin_uri'        => 'string',
 					'author'            => 'string',
+					// Ajout 1.18.0 (cf. SnapshotUpdateSourceTest) : provenance des mises à jour.
+					// Akismet, premier de la liste, n'a pas d'entrée de mise à jour ici : null.
+					'update_source'     => 'null',
 				],
 			],
 			'themes'            => [
@@ -72,6 +75,9 @@ final class SnapshotInventoryTest extends SnapshotTestCase {
 					'author'            => 'string',
 					// Seul ajout (1.14, cf. SnapshotThemeOriginTest) : origine réelle du thème.
 					'wporg'             => 'bool',
+					// Ajout 1.18.0 (cf. SnapshotUpdateSourceTest) : Twenty Twenty-Five, premier de la
+					// liste, est connu de wordpress.org : chaîne.
+					'update_source'     => 'string',
 				],
 			],
 			'translations'      => [

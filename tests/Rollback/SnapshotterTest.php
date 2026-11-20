@@ -75,6 +75,24 @@ final class SnapshotterTest extends FilesystemTestCase {
 		}
 	}
 
+	/**
+	 * Hébergement sans l'extension zip : le texte de PclZip::errorInfo() (chemin absolu de l'archive,
+	 * fichier d'une extension) est filtré une fois, avant d'être échappé, dans le message du refus.
+	 */
+	public function test_a_pclzip_error_is_filtered_before_being_escaped(): void {
+		$file           = $this->make_plugin( 'akismet', '5.7' );
+		\PclZip::$error = "PCLZIP_ERR_READ_OPEN_FAIL (-2) : Unable to open file '/home/u123456789/domains/exemple.fr/public_html/wp-content/plugins/akismet/akismet.php' for contact@exemple.fr";
+
+		try {
+			( new Snapshotter( $this->store, $this->plugins, false ) )->create( $file, [ 'version' => '5.7' ], self::NOW );
+			self::fail( 'Refus attendu.' );
+		} catch ( RestorePointException $e ) {
+			self::assertSame( RestorePointException::FAILED, $e->error_code() );
+			self::assertSame( 'zip failed: PclZip: PCLZIP_ERR_READ_OPEN_FAIL (-2) : Unable to open file &#039;wp-content/plugins/akismet/akismet.php&#039; for [email]', $e->getMessage() );
+		}
+		self::assertSame( [], glob( $this->snapshots . '/*.part' ) );
+	}
+
 	public function test_path_traversal_is_refused(): void {
 		$this->make_plugin( 'akismet' );
 

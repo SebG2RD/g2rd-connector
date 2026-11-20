@@ -14,6 +14,7 @@ use G2RD\Connector\PhpErrors\Buffer;
 use G2RD\Connector\PhpErrors\LogTail;
 use G2RD\Connector\Rest\DbHealth;
 use G2RD\Connector\Rest\SnapshotController;
+use G2RD\Connector\Rollback\Core\ProtectedCoreUpdate;
 use G2RD\Connector\Rollback\UpdateTransaction;
 use G2RD\Connector\Settings;
 use G2RD\Connector\Tests\CommandRuns\FakeOptionsTable;
@@ -114,6 +115,18 @@ final class UninstallTest extends TestCase {
 		$this->uninstall();
 
 		self::assertArrayNotHasKey( UpdateTransaction::RECOVERY_TRACE_KEY, $this->options );
+	}
+
+	/** Version d'avant d'une mise à jour protégée du cœur (bouton du manager, 1.18.0). */
+	public function test_les_informations_du_retour_arriere_de_wordpress_sont_retirees(): void {
+		$this->options[ ProtectedCoreUpdate::RECORD_OPTION ] = [
+			'version_before' => '7.1.4',
+			'until'          => 1,
+		];
+
+		$this->uninstall();
+
+		self::assertArrayNotHasKey( ProtectedCoreUpdate::RECORD_OPTION, $this->options );
 	}
 
 	/** Marqueur de la répartition des tâches WP-Cron (cf. Cron\Phase), sur chaque blog en multisite. */

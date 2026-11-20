@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.17.0
+Stable tag: 1.18.0-rc.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -17,9 +17,9 @@ Connects this WordPress site to the centralized G2RD WP Manager dashboard (https
 = Features =
 
 * **Inventory snapshot** — secure REST endpoint exposing WordPress core, plugins, themes and server info to the manager.
-* **Optional hourly heartbeat** — light telemetry payload (disk usage, active plugin count, user count) sent to your manager instance via WP-Cron. Disabled until you opt in.
-* **Optional event stream** — push real-time notifications (user logins, login failures, plugin activations, core/plugin/theme updates, auto-update failures) to the manager. Login failures are sent with a 2-second cap instead of 15, at most 30 per minute. Disabled until you opt in.
-* **Optional remote commands** — let the manager trigger cache clearing, update checks, core/plugin/theme updates and database maintenance (delete spam comments, delete post revisions, empty trash, delete expired transients, optimize database) remotely. Disabled until you opt in.
+* **Hourly heartbeat** — light telemetry payload (disk usage, active plugin count, user count) sent to your manager instance via WP-Cron. Enabled by default once the site is enrolled; can be turned off in the plugin settings ("Signe de vie horaire").
+* **Event stream** — push real-time notifications (user logins, login failures, plugin activations, core/plugin/theme updates, auto-update failures) to the manager. Login failures are sent with a 2-second cap instead of 15, at most 30 per minute. Enabled by default once the site is enrolled; can be turned off in the plugin settings ("Événements en temps réel").
+* **Remote commands** — let the manager trigger cache clearing, update checks, core/plugin/theme updates and database maintenance (delete spam comments, delete post revisions, empty trash, delete expired transients, optimize database) remotely, and, since 1.18, read the release notes of a plugin or theme update the way WordPress' "View version details" link does, and protect a WordPress update (health check, then automatic return to the previous version, downloaded again from wordpress.org, when the update breaks the site and did not change the database; that previous version can also be put back on request for a limited time; after such a return, WordPress' automatic updates do not reinstall the removed version until a newer one is released). Enabled by default once the site is enrolled; can be turned off in the plugin settings ("Commandes à distance").
 * **Direct login from the manager** — the manager can open this site's dashboard without a password, through a signed one-time link valid for one minute, for staff whose manager account uses two-factor authentication. On by default; can be turned off in the plugin settings ("Allow direct login from G2RD").
 * **Optional PHP error monitoring** — when turned on for this site (off by default), PHP fatal errors raised after the plugin has loaded are kept 7 days, with their message filtered on the site, and sent to the manager with the inventory. Turned on or off by a signed command from the manager, or with the "Relevé des erreurs PHP" setting of the plugin.
 * **Theme integration** — when the parent theme is the optional companion theme `g2rd-theme` (>= 1.19, child themes included), the plugin registers itself as a "Manager G2RD" tab of the theme's options console (*Appearance → G2RD Options* up to theme 1.40, top-level *G2RD* menu from theme 1.41) instead of adding a top-level menu, for a tidy admin UX. Its own settings page stays reachable outside the menu, as a fallback, at `wp-admin/admin.php?page=g2rd-connector`.
@@ -46,6 +46,9 @@ This plugin relies on the **G2RD WP Manager** service operated by G2RD Agence We
 * Since 1.16, only if PHP error monitoring is turned on for this site (off by default): the `/snapshot` answer contains the PHP fatal errors that occurred on the site during the last 7 days, grouped by error (at most 50 groups and 16 KB): level, component (plugin, theme, WordPress core, must-use plugin or unknown, with its slug and version), file path relative to WordPress (only the file name for a file outside WordPress), line, filtered message (server paths, database names, users and connection strings, email addresses, IP addresses, passwords, tokens and SQL queries with their values are removed on the site, before anything is stored), first and last time seen, number of occurrences recorded (at most one per error and per minute) and a fingerprint of the error (SHA-256 of its level, component, file and message), with the date of the reading, the sources in use and whether some errors were left out. When monitoring is off, the answer only says so: no error is sent, not even those kept earlier. If the manager also turns on log reading, the same information is taken from the end of the PHP error log (warnings, deprecations and notices included), only when that log file is inside the WordPress folder and, on a multisite network, only by the main site (the log is shared by the whole network). The filter removes the data listed above, but an error message is written by the plugin or theme that raised it: it may still contain other free text chosen by its author (for example a product name or an order number). Errors are kept on the site 7 days at most while the plugin is active, also after the site is disconnected from the manager, and removed when the plugin is uninstalled. The recording at PHP shutdown does not see the errors raised before this plugin loads (plugins loaded earlier, must-use plugins, WordPress start-up), nor those after which PHP is stopped before its turn: by a custom `wp-content/php-error.php` error page that ends with `exit` (or `die`), by a plugin that asks PHP to stop when the error is displayed (`wp_php_error_args` filter), or, during a recovery mode session (in the browser that opened the link of the recovery email), by WordPress itself, which pauses the faulty plugin or theme and reloads the page. Nor does it see a fatal error followed, during PHP shutdown, by a warning, notice or deprecation (for example raised by another plugin's `shutdown` action): PHP then only reports that last message. If PHP writes these errors to its error log, only log reading, when it is turned on, can find them there.
 * Since 1.16, the `/snapshot` answer also describes how PHP and WordPress log errors (`log_errors`, `display_errors`, `WP_DEBUG`, `WP_DEBUG_LOG`, `WP_DEBUG_DISPLAY`), where the PHP error log is (not set, inside or outside the WordPress folder, missing, refused, or shared by a multisite network) and, when it is inside and checked, whether it is readable and its size. No path is sent.
 * Since 1.17 (off by default): when encrypted backups are enabled in the connector settings, the site sends its database and files, encrypted on the server before leaving it (AES-256-GCM, a new key for each segment of about 64 MiB, sealed for the G2RD key service), to the storage URLs that G2RD WP Manager provides for each backup (S3-compatible object storage, Scaleway, Paris region). Nothing is sent while the setting is off. The `/snapshot` answer then also reports the public signing key of the site, the state of the current backup and the outcome of the last one; never a secret key, never a file name.
+* Since 1.18, the `/snapshot` answer also says, for every plugin and theme, where its updates come from: `wporg` (wordpress.org), `vendor` (its vendor's own update server) or nothing when WordPress does not know. It is read from WordPress' last update check, without any extra request.
+* Since 1.18, when the manager asks for the release notes of a plugin or theme (signed `get_release_notes` command, only if remote commands are enabled), the site makes the request WordPress makes for its "View version details" link. For a plugin or theme from wordpress.org, WordPress asks api.wordpress.org and sends the slug, the WordPress version, the site language and the site address (in its User-Agent header); on some hosts, such as Hostinger, the request goes through the host's proxy. Otherwise, the vendor's own update code asks its server and sends what it usually sends, often the site address and the license key. A plugin or theme that does not come from wordpress.org is never looked up there. Requests made during the command stop after 15 seconds in total, redirects included (at most 3 per request; non-public addresses as WordPress defines them (private, loopback, link-local…) and ports other than 80, 443 and 8080 are refused), and each answer is limited to 8 MB. The site then sends to the manager the changelog section (at most 256 KB), the announced version and the homepage address (https only, without its query string). The command's own code writes nothing; WordPress, the connector's update module (its cached GitHub release information, when the notes asked for are the connector's own) and the vendor's update code may refresh their own caches, as they do when an administrator opens that link.
+* Since 1.18, the result of a protected WordPress update or of a WordPress rollback, sent to the manager with the command result: versions before and after, health check results, database version numbers (`db_version`) before and after, rollback deadline, language of the reinstalled package and, when a rollback was not possible, its reason.
 
 **Nothing is sent before enrollment.** Enrollment is a manual one-shot action that requires an invitation token obtained from your manager admin.
 
@@ -56,6 +59,13 @@ To provide update notifications, the plugin queries the **public GitHub Releases
 * Service: GitHub REST API (https://docs.github.com)
 * Terms of Service: https://docs.github.com/site-policy/github-terms/github-terms-of-service
 * Privacy Policy: https://docs.github.com/site-policy/privacy-policies/github-privacy-statement
+
+= External service: WordPress.org (WordPress rollback) =
+
+Since 1.18, when G2RD WP Manager protects a WordPress update and that update stops while copying files or leaves the site unable to respond normally, or when the manager asks to go back to the previous version, the plugin fetches that previous version from WordPress.org: the SHA-1 checksum and the package of that version (https://downloads.wordpress.org/release/), and the list of WordPress file checksums (https://api.wordpress.org/core/checksums/1.0/). These requests send the WordPress version and the language of the package in their address and, like every request WordPress makes, the WordPress version and the site address in their User-Agent header. WordPress then installs the package itself and, as for every core update, reports the attempt to WordPress.org (its usual update statistics). Nothing is kept: the package is a temporary file, deleted once installed. On some hosts, such as Hostinger, requests to api.wordpress.org go through the host's proxy.
+
+* Service: WordPress.org (https://wordpress.org)
+* Privacy Policy: https://wordpress.org/about/privacy/
 
 == Installation ==
 
@@ -96,6 +106,68 @@ Backups are prepared in wp-content/g2rd-backups, inside a folder whose name is d
 2. Theme-integrated "Manager G2RD" tab in the G2RD theme console (requires `g2rd-theme` >= 1.19 as the theme or its parent theme).
 
 == Changelog ==
+
+= 1.18.0-rc.1 =
+
+Pre-release of the 1.18 line, piloted on one site before it is offered to every site.
+
+* **New: where each update comes from.** The inventory sent to G2RD WP Manager now says, for every
+  plugin and theme, whether its updates come from wordpress.org (`update_source`: `wporg`), from its
+  vendor (`vendor`), or from an unknown source (`null`). It is read from WordPress' last update
+  check, without any network request. An update entry that claims to come from wordpress.org but
+  whose package or page is elsewhere counts as `vendor`. Nothing is removed from the inventory.
+* **New: release notes read by the site (`get_release_notes`).** On a signed request from the
+  manager (remote commands must be enabled), the site returns the release notes that a plugin's or
+  theme's update source gives WordPress for its "View version details" link: the changelog section
+  (at most 256 KB, with a flag when it was cut), the announced version and the homepage address
+  (https only, without its query string). Requests made during the command stop after 15 seconds in
+  total, redirects included (at most 3 per request), and each answer is limited to 8 MB. A plugin
+  or theme that does not come from wordpress.org is never looked up on wordpress.org when its
+  vendor gives no answer. The command's own code writes nothing; WordPress, the connector's update
+  module and the vendor's update code may refresh their own caches, as on the Plugins screen. The
+  command is refused through the command queue and the background route. G2RD WP Manager will use
+  it in a later version.
+* The inventory announces the new `release_notes` capability.
+* **New: protected WordPress updates and WordPress rollback (`rollback_core`).** When G2RD WP Manager
+  asks for it (`snapshot: true` on `update_core`), the site notes the installed WordPress version, the
+  language of its package and the database version (`db_version`), checks that it responds normally
+  before and after the update and, if the update stopped while copying files or the site no longer
+  responds normally, reinstalls the previous version downloaded again from downloads.wordpress.org,
+  provided the database version did not change (otherwise it changes nothing and says why). Nothing is
+  copied or stored on the site: only the previous version, its language and the database version are
+  kept, until the date sent by the manager, in a non-autoloaded option (`g2rd_core_rollback`, removed on
+  uninstall). The new signed command `rollback_core` (also accepted in the background) puts that
+  previous version back on request, with stable refusal codes. The downloaded package must match the
+  SHA-1 checksum published by downloads.wordpress.org, and the reinstalled files the checksums published
+  by api.wordpress.org (WordPress itself no longer verifies core package signatures since 6.6). Without
+  `snapshot: true`, `update_core` is unchanged. After such a return, automatic or requested,
+  WordPress' own automatic updates no longer reinstall the removed version (same guard as for plugins,
+  `auto_update_core` filter) until a newer version is offered. The inventory announces the new
+  `core_rollback` capability when the site can use it (direct file system access and zip support, as
+  for plugin restore points).
+* The "Remote commands" setting's help text now mentions release notes and the requests they make.
+* **Readme fix:** the hourly heartbeat, the event stream and remote commands are enabled by default
+  once the site is enrolled (the readme said they were disabled until you opt in, and called them
+  optional); the plugin's behaviour does not change.
+* **Fix: database queries in PHP error messages are hidden whole.** When PHP error monitoring is on,
+  a database query quoted in an error message ("WordPress database error … for query … made by …")
+  is now removed entirely on the site, whatever its kind (`SHOW`, `CALL`, a trigger, a long column
+  list included) and even when one of its values contains a semicolon, an escaped quote (`\'`) or
+  more than 1,000 characters, or ends with a backslash; before, such a query, or the end of such a
+  value (for example a visitor's name or phone number), could be left readable. Everything between
+  "for query" and WordPress' "made by" list is part of the query.
+* **Fix: error texts from WordPress or other plugins are filtered before they are sent.** The text of
+  an error raised by WordPress, by another plugin or by a library it uses (PclZip, cURL) that the
+  connector reports to G2RD WP Manager now goes through the same filter as PHP error messages, once:
+  server paths, e-mail addresses, IP addresses, tokens and database queries are removed, and it is
+  limited to 500 characters, followed in full by the connector's explanation of what happened and
+  what to do. This covers failed remote commands (background ones included), failed plugin, theme,
+  translation and WordPress updates (`detail` included), the error reported with an update that went
+  on (`upgrade_error`), restore points that could not be created, plugin rollbacks (requested or
+  automatic) and their recovery, the download of a rollback archive, the site health checks made
+  around an update, the type of an unexpected error during a WordPress rollback, and what
+  third-party code or a PHP notice writes while a command runs (`stray_output`). An error
+  without text is reported by its code or type. Before, that text was sent as it was.
 
 = 1.17.0 =
 

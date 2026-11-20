@@ -42,7 +42,7 @@ use G2RD\Connector\Support\MysqlLock;
 final class UpdateGate {
 
 	/** Commandes qui changent le code ou le schéma (liste fermée, § 11.2 point 1). */
-	public const COMMANDS = [ 'update_plugin', 'update_theme', 'update_core', 'update_translations', 'rollback_plugin' ];
+	public const COMMANDS = [ 'update_plugin', 'update_theme', 'update_core', 'update_translations', 'rollback_plugin', 'rollback_core' ];
 
 	private const REASON = 'interrupted_by_update';
 

@@ -31,6 +31,7 @@ declare(strict_types=1);
 namespace G2RD\Connector\Rollback;
 
 use G2RD\Connector\Commands\CommandExecutor;
+use G2RD\Connector\Commands\FilteredError;
 use G2RD\Connector\Cron\RestorePointPurgeJob;
 
 final class ProtectedUpdate {
@@ -323,7 +324,8 @@ final class ProtectedUpdate {
 			$point = $s->snapshotter->create( $plugin_file, $meta, $now );
 		} catch ( RestorePointException $e ) {
 			UpdateTransaction::close();
-			// Refus AVANT toute mise à jour : rien n'a changé sur le site.
+			// Refus AVANT toute mise à jour : rien n'a changé sur le site. Message du connecteur, le
+			// texte tiers qu'il cite (ZipArchive, PclZip) déjà filtré par Snapshotter.
 			return $this->legacy_shape( $plugin_file, $version ) + [
 				'outcome'       => $e->error_code(),
 				'error_code'    => $e->error_code(),
@@ -387,8 +389,8 @@ final class ProtectedUpdate {
 			$s->store->hold( $point['id'], $hold_until );
 			if ( ! self::close_own( $identity ) ) {
 				// Prise par une reprise entre-temps : elle consigne son propre résultat.
-				// Message déjà échappé par celui qui l'a levé (CommandExecutor), suffixe fixe.
-				throw new \RuntimeException( $e->getMessage() . self::TAKEN_OVER_SUFFIX, 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- cf. ci-dessus.
+				// Message filtré (texte tiers) ou déjà filtré et échappé (CommandExecutor), suffixe fixe.
+				throw new FilteredError( FilteredError::message_of( $e ) . self::TAKEN_OVER_SUFFIX, 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- cf. ci-dessus.
 			}
 			throw $e;
 		} finally {
@@ -514,7 +516,8 @@ final class ProtectedUpdate {
 			return $result + [
 				'outcome'       => self::OUTCOME_AUTO_ROLLBACK_FAILED,
 				'error_code'    => $e instanceof RestoreException ? $e->error_code() : RestoreException::FAILED,
-				'error'         => $e->getMessage(),
+				// Texte tiers filtré, une fois (déjà filtré : tel quel, explication comprise).
+				'error'         => FilteredError::message_of( $e ),
 				'health'        => $health,
 				'restore_point' => $this->public_point( $s->store->get( $point['id'] ) ),
 			];
@@ -648,7 +651,7 @@ final class ProtectedUpdate {
 			$detail             = self::LEFT_INACTIVE_DETAILS[ $this->reactivation ]
 				?? ( $inactive_before ? self::REACTIVATED_FILES_UNCHECKED : null );
 			if ( null !== $detail ) {
-				throw self::with_detail( $e, $detail ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message déjà échappé par celui qui l'a levé, suffixe fixe.
+				throw self::with_detail( $e, $detail ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message échappé par celui qui l'a levé (RestoreException) ou filtré puis échappé par with_detail(), suffixe fixe.
 			}
 			throw $e;
 		}
@@ -809,7 +812,7 @@ final class ProtectedUpdate {
 						}
 						if ( self::REACTIVATION_AS_BEFORE === $reactivation ) {
 							// Rien ne le disait : inactive avant, elle n'a pas été essayée.
-							throw self::with_detail( $e, self::LEFT_INACTIVE_AS_BEFORE_UPDATE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message déjà échappé par celui qui l'a levé, suffixe fixe.
+							throw self::with_detail( $e, self::LEFT_INACTIVE_AS_BEFORE_UPDATE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message échappé par celui qui l'a levé (RestoreException) ou filtré puis échappé par with_detail(), suffixe fixe.
 						}
 						throw $e;
 					}
@@ -830,8 +833,10 @@ final class ProtectedUpdate {
 			}
 		} catch ( \Throwable $e ) {
 			$outcome['outcome'] = 'recovery_failed';
-			// Abandon (ci-dessus) : son explication reste, l'erreur du point la complète.
-			$outcome['detail'] = isset( $outcome['detail'] ) ? $outcome['detail'] . ' (' . $e->getMessage() . ')' : $e->getMessage();
+			// Abandon (ci-dessus) : son explication reste, l'erreur du point la complète. Texte tiers
+			// filtré, une fois (déjà filtré : tel quel, explication comprise).
+			$error             = FilteredError::message_of( $e );
+			$outcome['detail'] = isset( $outcome['detail'] ) ? $outcome['detail'] . ' (' . $error . ')' : $error;
 		}
 
 		PendingOutcomes::add( $outcome, $now );
@@ -978,7 +983,7 @@ final class ProtectedUpdate {
 		if ( null !== $upgrade_error ) {
 			$message .= sprintf( self::UPGRADE_ERROR_TOO, $upgrade_error );
 		}
-		throw new \RuntimeException( $message ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- constantes, et `upgrade_error` déjà échappé par CommandExecutor.
+		throw new FilteredError( $message ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- constantes, et `upgrade_error` déjà filtré et échappé par CommandExecutor.
 	}
 
 	private function installed_version( string $plugin_file ): string {
@@ -1097,14 +1102,14 @@ final class ProtectedUpdate {
 	 * L'erreur d'une restauration qui a échoué, complétée de ce qui a été fait de
 	 * l'extension (`$detail`, texte fixe). Même classe et même code pour une
 	 * RestoreException (la plateforme lit `error_code`) ; toute autre erreur devient une
-	 * RuntimeException qui la porte.
+	 * FilteredError qui la porte : son texte tiers filtré une fois, l'explication entière à la
+	 * suite, que le filet de CommandExecutor::run() ne refiltre ni ne coupe.
 	 */
 	private static function with_detail( \Throwable $e, string $detail ): \Throwable {
 		if ( $e instanceof RestoreException ) {
 			return $e->with_detail( $detail );
 		}
-		// Message déjà échappé par celui qui l'a levé, suffixe fixe.
-		return new \RuntimeException( $e->getMessage() . $detail, 0, $e );
+		return new FilteredError( esc_html( FilteredError::message_of( $e ) . $detail ), 0, $e );
 	}
 
 	/**

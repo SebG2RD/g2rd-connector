@@ -25,7 +25,11 @@ use G2RD\Connector\Backup\Commands\BackupCommands;
 use G2RD\Connector\Backup\Commands\BackupRefused;
 use G2RD\Connector\Backup\Gate\UpdateGate;
 use G2RD\Connector\PhpErrors\CaptureCommand;
+use G2RD\Connector\ReleaseNotes\ReleaseNotesCommand;
+use G2RD\Connector\ReleaseNotes\ReleaseNotesRefused;
 use G2RD\Connector\Rest\DbHealth;
+use G2RD\Connector\Rollback\Core\CoreRollbackCommand;
+use G2RD\Connector\Rollback\Core\ProtectedCoreUpdate;
 use G2RD\Connector\Rollback\ProtectedUpdate;
 use G2RD\Connector\Rollback\RestoreCommands;
 use G2RD\Connector\Rollback\Services;
@@ -33,6 +37,7 @@ use G2RD\Connector\Updates\PremiumUpdatesBridge;
 use Language_Pack_Upgrader;
 use Plugin_Upgrader;
 use Theme_Upgrader;
+use WP_Upgrader;
 
 final class CommandExecutor {
 
@@ -56,6 +61,8 @@ final class CommandExecutor {
 		'backup_start',
 		'backup_step',
 		'backup_abort',
+		'get_release_notes',
+		'rollback_core',
 	];
 
 	/**
@@ -66,7 +73,9 @@ final class CommandExecutor {
 	 * sans signature. `set_php_errors_capture` (1.16) : activer le relevé des erreurs
 	 * PHP fait envoyer des données du site. Les quatre commandes `backup_*` (sauvegardes
 	 * chiffrées, Backup\Commands\BackupCommands) reçoivent une clé, copient et envoient le
-	 * site.
+	 * site. `get_release_notes` (1.18.0, ReleaseNotes\ReleaseNotesCommand) fait appeler par le
+	 * site le serveur d'un éditeur ou wordpress.org. `rollback_core` (1.18.0,
+	 * Rollback\Core\CoreRollbackCommand) réinstalle une version du cœur de WordPress.
 	 *
 	 * @var list<string>
 	 */
@@ -79,10 +88,9 @@ final class CommandExecutor {
 		'backup_start',
 		'backup_step',
 		'backup_abort',
+		'get_release_notes',
+		'rollback_core',
 	];
-
-	/** Longueur maximale de la sortie parasite remontée au manager (diagnostic). */
-	private const STRAY_OUTPUT_MAX_CHARS = 500;
 
 	/**
 	 * Ajouté à l'erreur d'une mise à jour interrompue par une exception pendant que
@@ -126,7 +134,8 @@ final class CommandExecutor {
 	 * Exécute une commande. Retourne :
 	 *   - [ 'status' => 'done', 'result' => array<string, mixed> ]
 	 *   - [ 'status' => 'failed', 'error' => string ] (+ `error_code` et `retry_after` pour un refus
-	 *     à code stable : porte des mises à jour, sauvegarde ; contrat backup-refusal-v1.json)
+	 *     à code stable : porte des mises à jour, sauvegarde ; contrat backup-refusal-v1.json ;
+	 *     `error_code` seul pour les notes de version, contrat release-notes-command-v1.json)
 	 *   - null si la commande est inconnue.
 	 *
 	 * Le `$payload` est optionnel pour les commandes legacy (clear_cache,
@@ -174,7 +183,7 @@ final class CommandExecutor {
 			$result = match ( $command ) {
 				'clear_cache'               => self::clear_cache(),
 				'check_updates'             => self::check_updates(),
-				'update_core'               => self::update_core(),
+				'update_core'               => self::update_core( (array) ( $payload ?? [] ) ),
 				'delete_spam_comments'      => self::delete_spam_comments(),
 				'delete_post_revisions'     => self::delete_post_revisions(),
 				'empty_trashed_posts'       => self::empty_trashed_posts(),
@@ -188,6 +197,8 @@ final class CommandExecutor {
 				'set_signature_policy'      => ( new RestoreCommands( Services::make() ) )->set_signature_policy( (array) ( $payload ?? [] ) ),
 				'set_php_errors_capture'    => ( new CaptureCommand() )->run( (array) ( $payload ?? [] ) ),
 				'backup_set_key', 'backup_start', 'backup_step', 'backup_abort' => BackupCommands::run( $command, (array) ( $payload ?? [] ) ),
+				'get_release_notes'         => ( new ReleaseNotesCommand() )->run( (array) ( $payload ?? [] ) ),
+				'rollback_core'             => ( new CoreRollbackCommand( Services::make()->health ) )->run( (array) ( $payload ?? [] ) ),
 			};
 			$outcome = [
 				'status' => 'done',
@@ -195,10 +206,14 @@ final class CommandExecutor {
 			];
 		} catch ( BackupRefused $e ) {
 			$outcome = $e->outcome();
+		} catch ( ReleaseNotesRefused $e ) {
+			$outcome = $e->outcome();
 		} catch ( \Throwable $e ) {
 			$outcome = [
 				'status' => 'failed',
-				'error'  => $e->getMessage(),
+				// Texte d'une exception tierce filtré (PhpErrors\Redactor, 500 caractères au plus) ;
+				// celui que le connecteur a déjà filtré et expliqué (FilteredError) tel quel.
+				'error'  => FilteredError::message_of( $e ),
 			];
 		} finally {
 			// Refermer TOUS les niveaux ouverts pendant la commande, le nôtre compris, et
@@ -235,24 +250,12 @@ final class CommandExecutor {
 		}
 
 		if ( '' !== trim( $stray ) ) {
-			$outcome['stray_output'] = self::truncate_stray( $stray );
+			// Écrit par du code tiers ou une notice PHP : filtré, aplati et borné (500 caractères)
+			// comme tout texte tiers ; il sert au diagnostic, pas à transporter une page entière.
+			$outcome['stray_output'] = FilteredError::text( $stray );
 		}
 
 		return $outcome;
-	}
-
-	/**
-	 * Aplatit et tronque une sortie parasite : elle sert au diagnostic, pas à
-	 * transporter une page d'erreur entière jusqu'au manager.
-	 */
-	private static function truncate_stray( string $stray ): string {
-		$flat = trim( (string) preg_replace( '/\s+/', ' ', $stray ) );
-
-		if ( strlen( $flat ) <= self::STRAY_OUTPUT_MAX_CHARS ) {
-			return $flat;
-		}
-
-		return substr( $flat, 0, self::STRAY_OUTPUT_MAX_CHARS ) . '…';
 	}
 
 	/**
@@ -418,8 +421,8 @@ final class CommandExecutor {
 				// les pages en « erreur critique ». La suite est celle d'une copie réussie :
 				// réactivation nominale (sous réserve du droit de réactiver), relecture de la
 				// version, puis contrôle de santé dans run(). L'erreur est rendue dans le
-				// résultat (`upgrade_error`).
-				$upgrade_error = $e->getMessage();
+				// résultat (`upgrade_error`), filtrée dès ici.
+				$upgrade_error = FilteredError::message_of( $e );
 				$result        = true;
 			} elseif ( $files_installed ) {
 				// Mise à jour simple (connecteur compris), même cas : fichiers complets, comme
@@ -436,14 +439,14 @@ final class CommandExecutor {
 					// de shutdown réessaiera.
 					unset( $reactivation_error );
 				}
-				throw new \RuntimeException( esc_html( $e->getMessage() . ( $reactivated ? self::INSTALLED_THEN_FAILED_REACTIVATED : self::INSTALLED_THEN_FAILED ) ), 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message échappé ; `$e` est l'exception chaînée, pas une sortie.
+				throw new FilteredError( esc_html( FilteredError::message_of( $e ) . ( $reactivated ? self::INSTALLED_THEN_FAILED_REACTIVATED : self::INSTALLED_THEN_FAILED ) ), 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message échappé ; `$e` est l'exception chaînée, pas une sortie.
 			} else {
 				// upgrade() n'a pas rendu la main, la copie n'était pas terminée : du code
 				// branché sur la mise à jour a levé, peut-être en pleine copie. Comme pour une
 				// requête morte, le filet ne réactive pas une extension que le cœur a déjà
 				// désactivée : elle reste désactivée, et l'erreur remontée à la plateforme le dit.
 				if ( $was_active && ! is_plugin_active( $file ) ) {
-					throw new \RuntimeException( esc_html( $e->getMessage() . self::LEFT_INACTIVE_MID_UPDATE ), 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message échappé ; `$e` est l'exception chaînée, pas une sortie.
+					throw new FilteredError( esc_html( FilteredError::message_of( $e ) . self::LEFT_INACTIVE_MID_UPDATE ), 0, $e ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message échappé ; `$e` est l'exception chaînée, pas une sortie.
 				}
 				throw $e;
 			}
@@ -455,8 +458,9 @@ final class CommandExecutor {
 		if ( is_wp_error( $result ) ) {
 			// Le filet shutdown armé plus haut réactivera le plugin (le coeur l'a
 			// peut-être déjà désactivé via deactivate_plugin_before_upgrade avant
-			// d'échouer) — on peut donc jeter sans laisser le site éteint.
-			throw new \RuntimeException( esc_html( $result->get_error_message() ) );
+			// d'échouer) — on peut donc jeter sans laisser le site éteint. Texte filtré avant
+			// d'être échappé : échappé, ses « ' » et « " » ne seraient plus lus par le filtre.
+			throw new FilteredError( esc_html( FilteredError::of_wp_error( $result ) ) );
 		}
 
 		// Réactivation nominale (synchrone) : si le plugin était actif, on le
@@ -498,9 +502,9 @@ final class CommandExecutor {
 			'reason'         => $changed ? null : ( true === $result ? 'version_unchanged' : 'upgrade_failed' ),
 		];
 		if ( null !== $upgrade_error ) {
-			// Le message, échappé : ProtectedUpdate::run() le complète et le rend dans tous
-			// ses résultats (`updated`, `auto_rolled_back`…), ou dans son erreur si une
-			// reprise l'a prise en route.
+			// Le message, filtré (PhpErrors\Redactor, 500 caractères au plus) puis échappé :
+			// ProtectedUpdate::run() le complète et le rend dans tous ses résultats (`updated`,
+			// `auto_rolled_back`…), ou dans son erreur si une reprise l'a prise en route.
 			$outcome['upgrade_error'] = esc_html( $upgrade_error );
 		}
 		return $outcome;
@@ -741,7 +745,8 @@ final class CommandExecutor {
 		$result   = $upgrader->upgrade( $stylesheet );
 
 		if ( is_wp_error( $result ) ) {
-			throw new \RuntimeException( esc_html( $result->get_error_message() ) );
+			// Filtré avant d'être échappé, comme dans update_plugin().
+			throw new FilteredError( esc_html( FilteredError::of_wp_error( $result ) ) );
 		}
 
 		// Re-lire la version installée après upgrade. `false` pour la même raison
@@ -802,7 +807,8 @@ final class CommandExecutor {
 		$results  = $upgrader->bulk_upgrade( $updates );
 
 		if ( is_wp_error( $results ) ) {
-			throw new \RuntimeException( esc_html( $results->get_error_message() ) );
+			// Filtré avant d'être échappé, comme dans update_plugin().
+			throw new FilteredError( esc_html( FilteredError::of_wp_error( $results ) ) );
 		}
 
 		// false global = échec d'init du système de fichiers (droits/credentials).
@@ -864,9 +870,33 @@ final class CommandExecutor {
 	 * Met à jour le cœur WordPress + renvoie les versions avant/après (consommées
 	 * par le manager pour tracer la MAJ : « WordPress 6.4 → 6.5 »).
 	 *
+	 * Mise à jour PROTÉGÉE (contrôle de santé, retour automatique à la version d'avant
+	 * retéléchargée sur wordpress.org, cf. Rollback\Core\ProtectedCoreUpdate) seulement si la
+	 * plateforme le demande (`snapshot: true`) et si le site le permet. Sans le drapeau, le
+	 * chemin historique est strictement inchangé.
+	 *
+	 * @param array<string, mixed> $payload
 	 * @return array<string, mixed>
 	 */
-	private static function update_core(): array {
+	private static function update_core( array $payload ): array {
+		if ( ! empty( $payload['snapshot'] ) && Services::supported() ) {
+			return ( new ProtectedCoreUpdate( Services::make()->health ) )->run( $payload, static fn ( bool $is_protected ): array => self::perform_core_upgrade( $is_protected ) );
+		}
+		return self::perform_core_upgrade( false )[0];
+	}
+
+	/**
+	 * La mise à jour elle-même (chemin historique), partagée par la mise à jour simple et la
+	 * mise à jour protégée : forme historique, et l'erreur de WordPress à part (la mise à jour
+	 * protégée lit son code ; ce qui part au manager ne change pas).
+	 *
+	 * @param bool $is_protected Mise à jour protégée : une exception levée une fois la copie faite
+	 *                           n'arrête pas la mise à jour (cf. plus bas), comme pour les extensions
+	 *                           (perform_plugin_upgrade()). Faux : chemin historique inchangé.
+	 * @return array{0: array<string, mixed>, 1: \WP_Error|null} Mise à jour protégée seulement,
+	 *                                                           plus `upgrade_error` dans ce cas.
+	 */
+	private static function perform_core_upgrade( bool $is_protected ): array {
 		require_once ABSPATH . 'wp-admin/includes/file.php';
 		require_once ABSPATH . 'wp-admin/includes/misc.php';
 		require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
@@ -877,10 +907,13 @@ final class CommandExecutor {
 		$updates = get_core_updates();
 		if ( ! is_array( $updates ) || empty( $updates ) ) {
 			return [
-				'updated'        => false,
-				'reason'         => 'no_updates_available',
-				'version_before' => $version_before,
-				'version_after'  => $version_before,
+				[
+					'updated'        => false,
+					'reason'         => 'no_updates_available',
+					'version_before' => $version_before,
+					'version_after'  => $version_before,
+				],
+				null,
 			];
 		}
 
@@ -894,15 +927,53 @@ final class CommandExecutor {
 		// par défaut de WP_Upgrader ÉCRIT sa progression (show_message() = echo + flush),
 		// ce qui corrompt la réponse REST attendue par le manager.
 		$upgrader = new Core_Upgrader( new Automatic_Upgrader_Skin() );
-		$result   = $upgrader->upgrade( $updates[0] );
-		$updated  = ! is_wp_error( $result );
 
-		return [
+		// Marqueur « fichiers copiés » : update_core() émet `_core_updated_successfully` une fois les
+		// fichiers copiés et la mise à niveau de la base lancée (wp-admin/includes/update-core.php,
+		// WordPress 7.1.5 l. 1919), avant `upgrader_process_complete` (class-core-upgrader.php
+		// l. 222). En premier (PHP_INT_MIN) : un autre crochet de cette action peut lever.
+		$copied      = false;
+		$mark_copied = static function () use ( &$copied ): void {
+			$copied = true;
+		};
+		$upgrade_error = null;
+		add_action( '_core_updated_successfully', $mark_copied, PHP_INT_MIN );
+		try {
+			$result = $upgrader->upgrade( $updates[0] );
+		} catch ( \Throwable $e ) {
+			/** @var bool $copied Passé à vrai par référence, dans $mark_copied. */
+			if ( ! $is_protected || ! $copied ) {
+				throw $e;
+			}
+			// Mise à jour PROTÉGÉE, exception levée APRÈS la copie (crochet d'une extension sur
+			// `upgrader_process_complete`) : la nouvelle version est en place. Relever ferait sauter le
+			// contrôle de santé et le retour automatique (ProtectedCoreUpdate), et dirait au manager
+			// « échouée » une mise à jour faite. Le verrou `core_updater`, que WordPress rend après ce
+			// crochet (l. 266), est rendu ici : sinon la réinstallation serait refusée `locked`
+			// pendant 15 minutes. Il appartient à cet upgrade(), qui vient de le prendre.
+			WP_Upgrader::release_lock( 'core_updater' );
+			$upgrade_error = FilteredError::message_of( $e );
+			$result        = $target;
+		} finally {
+			remove_action( '_core_updated_successfully', $mark_copied, PHP_INT_MIN );
+		}
+		$updated = ! is_wp_error( $result );
+
+		$outcome = [
 			'updated'        => $updated,
 			'version_before' => $version_before,
 			'version_after'  => $updated ? $target : $version_before,
-			'detail'         => is_wp_error( $result ) ? $result->get_error_message() : (string) $result,
+			// Texte de la WP_Error filtré : une extension branchée sur la mise à jour peut l'écrire.
+			'detail'         => is_wp_error( $result ) ? FilteredError::of_wp_error( $result ) : (string) $result,
 		];
+		if ( null !== $upgrade_error ) {
+			// Lu par le manager comme pour une extension (avertissement du site, connecteur 1.13). Texte
+			// d'une extension tierce : filtré comme celui des autres exceptions que rend CommandExecutor
+			// (filet de run(), erreurs et `upgrade_error` des extensions) : chemins du serveur, e-mails,
+			// IP, jetons, requêtes SQL retirés ; 500 caractères au plus.
+			$outcome['upgrade_error'] = esc_html( $upgrade_error . self::INSTALLED_THEN_FAILED );
+		}
+		return [ $outcome, is_wp_error( $result ) ? $result : null ];
 	}
 
 	/**

@@ -6,10 +6,12 @@ namespace G2RD\Connector\Tests\Commands;
 
 use Brain\Monkey\Functions;
 use G2RD\Connector\Commands\CommandExecutor;
+use G2RD\Connector\PhpErrors\Redactor;
 use G2RD\Connector\Rollback\RestorePointStore;
 use G2RD\Connector\Tests\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Plugin_Upgrader;
+use Theme_Upgrader;
 use WP_Error;
 
 /**
@@ -37,6 +39,7 @@ final class UpdatePluginLegacyTest extends TestCase {
 	protected function setUp(): void {
 		parent::setUp();
 		Plugin_Upgrader::reset();
+		Theme_Upgrader::$next_result = true;
 
 		$this->plugins = [ 'akismet/akismet.php' => [ 'Version' => '1.0' ] ];
 		$this->active  = true;
@@ -419,6 +422,36 @@ final class UpdatePluginLegacyTest extends TestCase {
 	}
 
 	/**
+	 * `stray_output` est écrit par du code tiers ou une notice PHP : il part au manager filtré
+	 * (chemin du serveur, identifiant du compte, e-mail retirés) et borné à 500 caractères, sans
+	 * caractère UTF-8 coupé.
+	 */
+	public function test_stray_output_is_filtered_before_it_leaves_the_site(): void {
+		Plugin_Upgrader::$on_complete = static function (): void {
+			echo 'Warning: x in /home/u123456789/domains/exemple.fr/public_html/wp-content/plugins/x/x.php on line 3 for contact@exemple.fr ';
+			echo str_repeat( 'é', 600 );
+			throw new \RuntimeException( 'Language pack download timed out.' );
+		};
+
+		$level = ob_get_level();
+		try {
+			$outcome = CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] );
+		} finally {
+			while ( ob_get_level() > $level ) {
+				ob_end_clean();
+			}
+		}
+
+		$stray = (string) ( $outcome['stray_output'] ?? '' );
+		self::assertStringStartsWith( 'Warning: x in wp-content/plugins/x/x.php on line 3 for [email]', $stray );
+		self::assertStringNotContainsString( '/home/', $stray );
+		self::assertStringNotContainsString( 'u123456789', $stray );
+		self::assertStringNotContainsString( 'contact@exemple.fr', $stray );
+		self::assertLessThanOrEqual( Redactor::MAX_CHARS, mb_strlen( $stray ) );
+		self::assertTrue( mb_check_encoding( $stray, 'UTF-8' ), 'Aucun caractère coupé.' );
+	}
+
+	/**
 	 * Le marqueur « fichiers installés » ne vaut que pour la copie de CETTE extension,
 	 * réussie : une installation d'une autre extension pendant la copie (mise à jour
 	 * imbriquée), ou une copie qu'un filtre `upgrader_post_install` déclare en échec, ne
@@ -484,6 +517,201 @@ final class UpdatePluginLegacyTest extends TestCase {
 		self::assertSame( 'Download interrupted.', $outcome['error'] );
 		self::assertSame( [], $this->activations );
 		self::assertTrue( $this->active );
+	}
+
+	/**
+	 * Texte d'une exception tierce : début attendu une fois filtré, et ce qui ne doit plus en sortir.
+	 *
+	 * @return array<string, array{string, string, list<string>}>
+	 */
+	public static function hostile_errors(): array {
+		return [
+			'chemin du serveur, 14 000 caractères' => [
+				'Fatal in /home/u123456789/domains/exemple.fr/public_html/wp-content/plugins/x/x.php:12 for contact@exemple.fr ' . str_repeat( 'détail ', 2000 ),
+				'Fatal in wp-content/plugins/x/x.php:12 for [email] détail',
+				[ '/home/', 'u123456789', 'contact@exemple.fr' ],
+			],
+			'requête SQL et ses valeurs'           => [
+				'Query failed: INSERT INTO wp_postmeta (meta_key, meta_value) VALUES (\'tel\', \'Jean Dupont 0612345678\') in /home/u123456789/x.php:3',
+				'Query failed: [sql]',
+				[ 'Jean Dupont', '0612345678', 'u123456789' ],
+			],
+		];
+	}
+
+	/**
+	 * Filet de CommandExecutor::run() : le texte d'une exception tierce qui remonte telle quelle
+	 * part au manager filtré par PhpErrors\Redactor, 500 caractères au plus.
+	 *
+	 * @param list<string> $absent
+	 */
+	#[DataProvider( 'hostile_errors' )]
+	public function test_the_error_of_a_third_party_exception_is_filtered_and_bounded( string $message, string $start, array $absent ): void {
+		Plugin_Upgrader::$on_download = static function () use ( $message ): void {
+			throw new \RuntimeException( $message ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- texte d'essai.
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] );
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assert_filtered( $outcome['error'], $start, $absent, '' );
+	}
+
+	/**
+	 * Exception après la copie, extension réactivée : le texte tiers est filtré et borné, puis
+	 * suivi de son explication entière, même après un masque de requête.
+	 *
+	 * @param list<string> $absent
+	 */
+	#[DataProvider( 'hostile_errors' )]
+	public function test_an_error_raised_once_the_files_are_installed_is_filtered_before_its_explanation( string $message, string $start, array $absent ): void {
+		$nets                         = $this->record_shutdown_nets();
+		Plugin_Upgrader::$on_upgrade  = function (): void {
+			$this->plugins['akismet/akismet.php']['Version'] = '2.0';
+			$this->active                                    = false;
+		};
+		Plugin_Upgrader::$on_complete = static function () use ( $message ): void {
+			throw new \RuntimeException( $message ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- texte d'essai.
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] );
+		foreach ( $nets as $net ) {
+			$net();
+		}
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assert_filtered( $outcome['error'], $start, $absent, '; WordPress had already installed the new version when this error occurred (its files are complete), so the plugin was reactivated; check the PHP error log for the code that raised it' );
+	}
+
+	/**
+	 * Exception pendant la copie, extension laissée désactivée : même filtrage, même explication entière.
+	 *
+	 * @param list<string> $absent
+	 */
+	#[DataProvider( 'hostile_errors' )]
+	public function test_an_error_raised_while_upgrading_is_filtered_before_its_explanation( string $message, string $start, array $absent ): void {
+		$nets                        = $this->record_shutdown_nets();
+		Plugin_Upgrader::$on_upgrade = function () use ( $message ): void {
+			$this->active = false;
+			throw new \RuntimeException( $message ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- texte d'essai.
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] );
+		foreach ( $nets as $net ) {
+			$net();
+		}
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assert_filtered( $outcome['error'], $start, $absent, '; the plugin was left inactive: the update stopped while WordPress was replacing it, and its files may be incomplete; check its files and the PHP error log, then update it again, roll it back or reinstall it' );
+	}
+
+	/**
+	 * Texte d'une WP_Error de l'upgrader (échec courant d'une mise à jour, ou updater premium sur
+	 * `upgrader_pre_download`) : valeurs entre apostrophes ou guillemets, que le filtre ne lit
+	 * plus une fois le texte échappé (« ' » devenu « &#039; »).
+	 *
+	 * @return array<string, array{string, string, list<string>}>
+	 */
+	public static function hostile_upgrader_errors(): array {
+		return [
+			'doublon, téléphone'       => [ "Duplicate entry '0612345678' for key 'tel'", 'Duplicate entry', [ '0612345678' ] ],
+			'doublon, nom et téléphone' => [ "Duplicate entry 'Jean Dupont 0612345678' for key 'PRIMARY'", 'Duplicate entry', [ 'Jean Dupont', '0612345678' ] ],
+			'clé de licence en JSON'   => [ 'Licence refusée : {"license_key":"Hx7-ab12-cd34"}', 'Licence refusée', [ 'Hx7-ab12-cd34' ] ],
+		] + self::hostile_errors();
+	}
+
+	/**
+	 * WP_Error rendue par Plugin_Upgrader : son texte est filtré AVANT d'être échappé, puis rendu
+	 * tel quel par le filet de CommandExecutor::run().
+	 *
+	 * @param list<string> $absent
+	 */
+	#[DataProvider( 'hostile_upgrader_errors' )]
+	public function test_the_wp_error_of_the_plugin_upgrader_is_filtered_before_being_escaped( string $message, string $start, array $absent ): void {
+		Plugin_Upgrader::$next_result = new WP_Error( 'download_failed', $message );
+
+		$outcome = CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] );
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assert_filtered( $outcome['error'], $start, $absent, '' );
+	}
+
+	/**
+	 * Même chose pour Theme_Upgrader (update_theme).
+	 *
+	 * @param list<string> $absent
+	 */
+	#[DataProvider( 'hostile_upgrader_errors' )]
+	public function test_the_wp_error_of_the_theme_upgrader_is_filtered_before_being_escaped( string $message, string $start, array $absent ): void {
+		Functions\when( 'wp_get_themes' )->justReturn( [ 'twentytwentyfour' => new \WP_Theme( 'twentytwentyfour', [ 'Version' => '1.0' ] ) ] );
+		Theme_Upgrader::$next_result = new WP_Error( 'download_failed', $message );
+
+		$outcome = CommandExecutor::run( 'update_theme', [ 'stylesheet' => 'twentytwentyfour' ] );
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assert_filtered( $outcome['error'], $start, $absent, '' );
+	}
+
+	/**
+	 * WP_Error sans message (updater premium sur `upgrader_pre_download`, `new WP_Error( 'x' )`) : rien
+	 * à filtrer, son code est rendu, jamais le jeton « [unreadable] » d'un échec du filtre.
+	 */
+	public function test_a_wp_error_without_message_gives_its_code(): void {
+		Plugin_Upgrader::$next_result = new WP_Error( 'download_failed', '' );
+		Functions\when( 'wp_get_themes' )->justReturn( [ 'twentytwentyfour' => new \WP_Theme( 'twentytwentyfour', [ 'Version' => '1.0' ] ) ] );
+		Theme_Upgrader::$next_result = new WP_Error( 'no_package', '' );
+
+		self::assertSame( 'download_failed', CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] )['error'] );
+		self::assertSame( 'no_package', CommandExecutor::run( 'update_theme', [ 'stylesheet' => 'twentytwentyfour' ] )['error'] );
+
+		// Ni message ni code (updater premium sur upgrader_pre_download) : jamais un échec sans texte.
+		Plugin_Upgrader::$next_result = new WP_Error();
+		self::assertSame( 'WP_Error', CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] )['error'] );
+	}
+
+	/**
+	 * Exception tierce sans message (`throw new \Exception()`) : le nom de sa classe, jamais « [unreadable] ».
+	 */
+	public function test_a_third_party_exception_without_message_gives_its_class(): void {
+		Plugin_Upgrader::$on_download = static function (): void {
+			throw new \UnexpectedValueException();
+		};
+
+		self::assertSame( 'UnexpectedValueException', CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] )['error'] );
+	}
+
+	/** Même chose une fois les fichiers copiés : le nom de la classe, puis l'explication entière. */
+	public function test_a_third_party_exception_without_message_once_the_files_are_installed_gives_its_class(): void {
+		$nets                         = $this->record_shutdown_nets();
+		Plugin_Upgrader::$on_upgrade  = function (): void {
+			$this->plugins['akismet/akismet.php']['Version'] = '2.0';
+			$this->active                                    = false;
+		};
+		Plugin_Upgrader::$on_complete = static function (): void {
+			throw new \RuntimeException( '' );
+		};
+
+		$outcome = CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] );
+		foreach ( $nets as $net ) {
+			$net();
+		}
+
+		self::assertSame( 'RuntimeException; WordPress had already installed the new version when this error occurred (its files are complete), so the plugin was reactivated; check the PHP error log for the code that raised it', $outcome['error'] );
+	}
+
+	/**
+	 * @param list<string> $absent Ce qui ne doit plus apparaître.
+	 * @param string       $end    Explication fixe du connecteur, rendue entière après le texte tiers ('' : aucune).
+	 */
+	private static function assert_filtered( string $error, string $start, array $absent, string $end ): void {
+		self::assertStringStartsWith( $start, $error );
+		foreach ( $absent as $text ) {
+			self::assertStringNotContainsString( $text, $error );
+		}
+		if ( '' !== $end ) {
+			self::assertStringEndsWith( $end, $error );
+		}
+		self::assertLessThanOrEqual( Redactor::MAX_CHARS + mb_strlen( $end ), mb_strlen( $error ) );
 	}
 
 	/**

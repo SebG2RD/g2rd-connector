@@ -1,0 +1,57 @@
+{
+  "description": "Contrat de la commande signée get_release_notes du connecteur G2RD 1.18.0 (spécification « Notes de version » du manager, § 5.2 et § 5.3) : tests/fixtures/release-notes-command-v1.json du connecteur et backend/tests/fixtures/release-notes-command-v1.json du manager, identiques à l'octet (comparés par cmp). Lecture seule, par POST /wp-json/g2rd/v1/command uniquement : signature toujours exigée ; refusée par la file des commandes (« queue_result ») et par la route en arrière-plan (« command_run_refused ») ; route absente quand « Commandes à distance » est coupé (404 rest_no_route de WordPress). Capacité annoncée par /snapshot : « capability ». Appels faits pendant la commande bornés (« limits ») : budget total, redirections comprises, taille des réponses. « codes » : refus de la commande par /command, aucun réessayable par lui-même. Les clés de « variable_keys » changent d'une réponse à l'autre ; les autres valeurs sont exactes. signature_check et stray_output peuvent s'ajouter au corps, comme pour toute commande. « update_source » : provenance des mises à jour, clé de chaque extension et de chaque thème de /snapshot (à préférer au champ wporg des thèmes quand les deux se contredisent). Ne pas modifier sans mettre à jour les deux dépôts.",
+  "version": 1,
+  "command": "get_release_notes",
+  "capability": "release_notes",
+  "signed_only": true,
+  "payload": {
+    "plugin": { "kind": "plugin", "file": "advanced-custom-fields-pro/acf.php" },
+    "theme": { "kind": "theme", "stylesheet": "premium-pro" }
+  },
+  "limits": { "notes_max_bytes": 262144, "http_budget_seconds": 15, "http_response_max_bytes": 8388608, "http_max_redirects": 3, "homepage_scheme": "https" },
+  "update_source": { "values": [ "wporg", "vendor", null ], "in": [ "plugins[].update_source", "themes[].update_source" ] },
+  "codes": [ "release_notes_invalid_request", "release_notes_not_installed", "release_notes_not_provided", "release_notes_source_unavailable" ],
+  "command_done": {
+    "route": "POST /wp-json/g2rd/v1/command",
+    "http_status": 200,
+    "body": {
+      "command": "get_release_notes",
+      "status": "done",
+      "result": {
+        "notes_html": "<h4>6.8.11</h4><ul><li>Fix: field groups.</li></ul>",
+        "truncated": false,
+        "version": "6.8.11",
+        "homepage": "https://www.advancedcustomfields.com/"
+      },
+      "error": null,
+      "at": "2026-11-16T15:00:00+00:00"
+    },
+    "variable_keys": [ "at" ],
+    "types": { "command": "string", "status": "string", "result.notes_html": "string", "result.truncated": "boolean", "result.version": "string|null", "result.homepage": "string|null", "error": "null", "at": "string" }
+  },
+  "command_failed": {
+    "route": "POST /wp-json/g2rd/v1/command",
+    "http_status": 500,
+    "body": {
+      "command": "get_release_notes",
+      "status": "failed",
+      "result": null,
+      "error": "…",
+      "error_code": "release_notes_not_provided",
+      "at": "2026-11-16T15:00:00+00:00"
+    },
+    "variable_keys": [ "error", "at" ],
+    "types": { "command": "string", "status": "string", "result": "null", "error": "string", "error_code": "string", "at": "string" }
+  },
+  "command_run_refused": {
+    "route": "POST /wp-json/g2rd/v1/command-runs",
+    "http_status": 400,
+    "body": { "code": "g2rd_connector_command_not_async", "message": "…", "data": { "status": 400 } },
+    "variable_keys": [ "message" ]
+  },
+  "queue_result": {
+    "route": "POST /api/agent/sites/{id}/commands/{commandId}/result",
+    "body": { "status": "failed", "result": { "error_code": "release_notes_queue_unsupported" }, "error": "…" },
+    "variable_keys": [ "error" ]
+  }
+}

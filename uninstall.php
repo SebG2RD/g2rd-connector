@@ -108,8 +108,9 @@ if ( class_exists( \G2RD\Connector\Rollback\RestorePointStore::class ) ) {
 	unset( $g2rd_store, $g2rd_point_id, $g2rd_dir, $g2rd_guard, $g2rd_left );
 }
 // `g2rd_update_txn_recovery` : trace d'une reprise sur une transaction impossible à
-// retirer (cf. Rollback\UpdateTransaction::RECOVERY_TRACE_KEY).
-foreach ( [ 'g2rd_restore_points', 'g2rd_update_txn', 'g2rd_update_txn_recovery', 'g2rd_pending_outcomes', 'g2rd_blocked_versions' ] as $g2rd_option ) {
+// retirer (cf. Rollback\UpdateTransaction::RECOVERY_TRACE_KEY). `g2rd_core_rollback` :
+// version d'avant d'une mise à jour protégée du cœur (cf. Rollback\Core\ProtectedCoreUpdate).
+foreach ( [ 'g2rd_restore_points', 'g2rd_update_txn', 'g2rd_update_txn_recovery', 'g2rd_pending_outcomes', 'g2rd_blocked_versions', 'g2rd_core_rollback' ] as $g2rd_option ) {
 	delete_option( $g2rd_option );
 }
 unset( $g2rd_option );
