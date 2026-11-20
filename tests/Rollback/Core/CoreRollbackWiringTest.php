@@ -16,6 +16,7 @@ use G2RD\Connector\Rollback\PluginRestorer;
 use G2RD\Connector\Rollback\RestorePointStore;
 use G2RD\Connector\Rollback\Services;
 use G2RD\Connector\Rollback\Snapshotter;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * `rollback_core` est une commande du site, signée, admise en arrière-plan, derrière la porte des
@@ -102,6 +103,40 @@ final class CoreRollbackWiringTest extends CoreRollbackTestCase {
 		self::assertSame( 'healthy', $outcome['result']['health']['verdict'] );
 		self::assertIsInt( $outcome['result']['restore_until'] );
 		self::assertArrayNotHasKey( 'outcome', $outcome['result'] );
+	}
+
+	/**
+	 * Rien à protéger (version de développement, offre `latest`) : chemin historique ; une exception
+	 * levée après la copie remonte comme sans `snapshot`, jamais avalée en `upgrade_error` sans
+	 * contrôle de santé.
+	 *
+	 * @return iterable<string, array{string, string, string}>
+	 */
+	public static function rien_a_proteger(): iterable {
+		yield 'version de développement' => [ '7.2-beta1', 'upgrade', '7.1.5' ];
+		yield 'offre latest' => [ '7.1.4', 'latest', '7.1.4' ];
+	}
+
+	#[DataProvider( 'rien_a_proteger' )]
+	public function test_update_core_rien_a_proteger_l_exception_apres_la_copie_remonte( string $loaded, string $response, string $offered ): void {
+		$this->loaded_version = $loaded;
+		$this->install( '7.1.4' );
+		Functions\when( 'get_core_updates' )->justReturn(
+			[
+				(object) [
+					'response' => $response,
+					'version'  => $offered,
+					'locale'   => 'en_US',
+				],
+			]
+		);
+		$this->upgrade_throws( true, $offered );
+
+		$outcome = CommandExecutor::run( 'update_core', [ 'snapshot' => true ] );
+
+		self::assertSame( 'failed', $outcome['status'] );
+		self::assertSame( 'Fatal in upgrader_process_complete', $outcome['error'] );
+		self::assertArrayNotHasKey( 'result', $outcome );
 	}
 
 	public function test_rollback_core_par_la_commande(): void {

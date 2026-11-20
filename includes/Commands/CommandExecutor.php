@@ -25,6 +25,7 @@ use G2RD\Connector\Backup\Commands\BackupCommands;
 use G2RD\Connector\Backup\Commands\BackupRefused;
 use G2RD\Connector\Backup\Gate\UpdateGate;
 use G2RD\Connector\PhpErrors\CaptureCommand;
+use G2RD\Connector\PhpErrors\Redactor;
 use G2RD\Connector\ReleaseNotes\ReleaseNotesCommand;
 use G2RD\Connector\ReleaseNotes\ReleaseNotesRefused;
 use G2RD\Connector\Rest\DbHealth;
@@ -890,7 +891,7 @@ final class CommandExecutor {
 	 */
 	private static function update_core( array $payload ): array {
 		if ( ! empty( $payload['snapshot'] ) && Services::supported() ) {
-			return ( new ProtectedCoreUpdate( Services::make()->health ) )->run( $payload, static fn (): array => self::perform_core_upgrade( true ) );
+			return ( new ProtectedCoreUpdate( Services::make()->health ) )->run( $payload, static fn ( bool $is_protected ): array => self::perform_core_upgrade( $is_protected ) );
 		}
 		return self::perform_core_upgrade( false )[0];
 	}
@@ -976,8 +977,10 @@ final class CommandExecutor {
 			'detail'         => is_wp_error( $result ) ? $result->get_error_message() : (string) $result,
 		];
 		if ( null !== $upgrade_error ) {
-			// Lu par le manager comme pour une extension (avertissement du site, connecteur 1.13).
-			$outcome['upgrade_error'] = esc_html( $upgrade_error . self::INSTALLED_THEN_FAILED );
+			// Lu par le manager comme pour une extension (avertissement du site, connecteur 1.13). Texte
+			// d'une extension tierce : filtré comme les autres messages qui quittent le site (chemins du
+			// serveur, e-mails, IP, jetons, requêtes SQL retirés ; 500 caractères au plus).
+			$outcome['upgrade_error'] = esc_html( Redactor::redact( $upgrade_error ) . self::INSTALLED_THEN_FAILED );
 		}
 		return [ $outcome, is_wp_error( $result ) ? $result : null ];
 	}

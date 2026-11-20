@@ -69,6 +69,12 @@ abstract class CoreRollbackTestCase extends TestCase {
 	/** @var list<string> Fichiers temporaires rendus par download_url(). */
 	protected array $downloads = [];
 
+	/** @var (\Closure(): void)|null Appelée pendant chaque téléchargement (ce qu'un autre processus change entre-temps). */
+	protected ?\Closure $on_download = null;
+
+	/** Message de l'exception levée par upgrade_throws(). */
+	protected string $upgrade_message = 'Fatal in upgrader_process_complete';
+
 	protected function setUp(): void {
 		parent::setUp();
 		Core_Upgrader::reset();
@@ -88,6 +94,7 @@ abstract class CoreRollbackTestCase extends TestCase {
 		$this->wporg          = [];
 		$this->requested      = [];
 		$this->downloads      = [];
+		$this->on_download    = null;
 		$this->publish( '7.1.4', 'en_US' );
 		$this->install( '7.1.5' );
 
@@ -111,6 +118,9 @@ abstract class CoreRollbackTestCase extends TestCase {
 		Functions\when( 'download_url' )->alias(
 			function ( string $url ) {
 				$this->requested[] = $url;
+				if ( null !== $this->on_download ) {
+					( $this->on_download )();
+				}
 				if ( 200 !== ( $this->wporg[ $url ]['code'] ?? 0 ) ) {
 					return new WP_Error( 'http_404', 'Not Found' );
 				}
@@ -267,7 +277,7 @@ abstract class CoreRollbackTestCase extends TestCase {
 				$this->install( (string) $offer->version );
 				( $marker )( $offer->version );
 			}
-			throw new \RuntimeException( 'Fatal in upgrader_process_complete' );
+			throw new \RuntimeException( $this->upgrade_message );
 		};
 	}
 }

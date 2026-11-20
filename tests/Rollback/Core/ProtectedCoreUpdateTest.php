@@ -79,6 +79,18 @@ final class ProtectedCoreUpdateTest extends CoreRollbackTestCase {
 		self::assertArrayNotHasKey( UpdateTransaction::OPTION_KEY, $this->options, 'transaction fermée' );
 	}
 
+	/** `grace_seconds` borné par le haut (365 jours) : l'échéance reste un entier, et les informations gardées lisibles. */
+	public function test_grace_seconds_plafonne(): void {
+		$before = time();
+
+		$result = ( new ProtectedCoreUpdate( $this->health ) )->run( [ 'grace_seconds' => PHP_INT_MAX ] + self::PAYLOAD, $this->update_to_7_1_5() );
+
+		self::assertIsInt( $result['restore_until'] );
+		self::assertGreaterThanOrEqual( $before + 31536000, $result['restore_until'] );
+		self::assertLessThanOrEqual( time() + 31536000, $result['restore_until'] );
+		self::assertNotNull( ProtectedCoreUpdate::kept( time() ), 'le bouton reste possible' );
+	}
+
 	public function test_sans_keep_on_success_rien_n_est_garde(): void {
 		$this->options[ ProtectedCoreUpdate::RECORD_OPTION ] = [ 'version_before' => '7.1.3' ];
 
@@ -360,7 +372,7 @@ final class ProtectedCoreUpdateTest extends CoreRollbackTestCase {
 		$this->breaks_on = '7.1.5';
 		$this->upgrade_throws( true, '7.1.5' );
 
-		$result = ( new ProtectedCoreUpdate( $this->health ) )->run( self::PAYLOAD, self::perform_core_upgrade( true ) );
+		$result = ( new ProtectedCoreUpdate( $this->health ) )->run( self::PAYLOAD, self::perform_core_upgrade() );
 
 		self::assertSame( 'broken', $result['health']['verdict'] );
 		self::assertTrue( $result['rolled_back'] );
@@ -380,7 +392,7 @@ final class ProtectedCoreUpdateTest extends CoreRollbackTestCase {
 		$this->breaks_on = '7.1.5';
 		$this->upgrade_throws( true, '7.1.5', '7.1.4' );
 
-		$result = ( new ProtectedCoreUpdate( $this->health ) )->run( self::PAYLOAD, self::perform_core_upgrade( true ) );
+		$result = ( new ProtectedCoreUpdate( $this->health ) )->run( self::PAYLOAD, self::perform_core_upgrade() );
 
 		self::assertTrue( $result['rolled_back'] );
 		self::assertSame( '7.1.4', $result['version_after'] );
@@ -395,13 +407,30 @@ final class ProtectedCoreUpdateTest extends CoreRollbackTestCase {
 	public function test_exception_apres_la_copie_site_sain_mise_a_jour_faite(): void {
 		$this->upgrade_throws( true, '7.1.5' );
 
-		$result = ( new ProtectedCoreUpdate( $this->health ) )->run( self::PAYLOAD, self::perform_core_upgrade( true ) );
+		$result = ( new ProtectedCoreUpdate( $this->health ) )->run( self::PAYLOAD, self::perform_core_upgrade() );
 
 		self::assertTrue( $result['updated'] );
 		self::assertSame( '7.1.5', $result['version_after'] );
 		self::assertSame( 'healthy', $result['health']['verdict'] );
 		self::assertFalse( $result['rolled_back'] );
 		self::assertArrayHasKey( 'upgrade_error', $result );
+	}
+
+	/**
+	 * Le texte d'une exception tierce part au manager filtré comme les autres messages
+	 * (PhpErrors\Redactor) : sans chemin du serveur, borné en longueur.
+	 */
+	public function test_upgrade_error_filtre_et_borne(): void {
+		$this->upgrade_message = 'Fatal in /home/u123456789/domains/exemple.fr/public_html/wp-content/plugins/x/x.php:12 for contact@exemple.fr ' . str_repeat( 'détail ', 2000 );
+		$this->upgrade_throws( true, '7.1.5' );
+
+		$result = ( new ProtectedCoreUpdate( $this->health ) )->run( self::PAYLOAD, self::perform_core_upgrade() );
+
+		self::assertStringStartsWith( 'Fatal in wp-content/plugins/x/x.php:12 for [email] détail', $result['upgrade_error'] );
+		self::assertStringNotContainsString( 'u123456789', $result['upgrade_error'] );
+		self::assertStringNotContainsString( '/home/', $result['upgrade_error'] );
+		self::assertStringEndsWith( 'WordPress had already installed the new version when this error occurred (its files are complete); check the PHP error log for the code that raised it', $result['upgrade_error'] );
+		self::assertLessThanOrEqual( 700, mb_strlen( $result['upgrade_error'] ) );
 	}
 
 	/**
@@ -421,19 +450,20 @@ final class ProtectedCoreUpdateTest extends CoreRollbackTestCase {
 
 		$this->expectExceptionMessage( 'Fatal in upgrader_process_complete' );
 		if ( $is_protected ) {
-			( new ProtectedCoreUpdate( $this->health ) )->run( self::PAYLOAD, self::perform_core_upgrade( true ) );
+			( new ProtectedCoreUpdate( $this->health ) )->run( self::PAYLOAD, self::perform_core_upgrade() );
 		} else {
-			self::perform_core_upgrade( false )();
+			self::perform_core_upgrade()( false );
 		}
 	}
 
 	/**
-	 * Le vrai CommandExecutor::perform_core_upgrade().
+	 * Le vrai CommandExecutor::perform_core_upgrade(), appelé comme par CommandExecutor::update_core() :
+	 * ProtectedCoreUpdate dit s'il protège la mise à jour.
 	 *
-	 * @return callable(): array{0: array<string, mixed>, 1: WP_Error|null}
+	 * @return callable(bool=): array{0: array<string, mixed>, 1: WP_Error|null}
 	 */
-	private static function perform_core_upgrade( bool $is_protected ): callable {
-		return static fn (): array => ( new \ReflectionMethod( CommandExecutor::class, 'perform_core_upgrade' ) )->invoke( null, $is_protected );
+	private static function perform_core_upgrade(): callable {
+		return static fn ( bool $is_protected = true ): array => ( new \ReflectionMethod( CommandExecutor::class, 'perform_core_upgrade' ) )->invoke( null, $is_protected );
 	}
 
 	/**

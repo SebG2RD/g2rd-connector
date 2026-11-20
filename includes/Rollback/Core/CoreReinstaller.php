@@ -24,47 +24,58 @@ use WP_Upgrader;
 final class CoreReinstaller {
 
 	/**
+	 * @param (\Closure(): void)|null $before_copy Appelée une fois le paquet téléchargé et vérifié, juste
+	 *                                            avant la copie : contrôles de l'appelant à refaire après
+	 *                                            un téléchargement de plusieurs minutes. Ce qu'elle lève
+	 *                                            arrête tout (paquet supprimé, rien de copié).
 	 * @return string Langue du paquet réinstallé (`$locale`, ou `en_US` en repli).
 	 * @throws CoreRollbackRefused BUSY (verrou `core_updater` de WordPress tenu), WPORG_UNREACHABLE,
-	 *                             INTEGRITY, FAILED.
+	 *                             INTEGRITY, FAILED, ou le refus de `$before_copy`.
 	 */
-	public static function reinstall( string $version, string $locale ): string {
+	public static function reinstall( string $version, string $locale, ?\Closure $before_copy = null ): string {
 		require_once ABSPATH . 'wp-admin/includes/file.php';
 		require_once ABSPATH . 'wp-admin/includes/misc.php';
 		require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
 
 		$package = CorePackage::fetch( $version, $locale );
-		// Signe de vie après le téléchargement (SHA-1 et empreintes : 30 s chacun, paquet : 300 s au
-		// plus) : la copie repart avec 10 minutes devant elle avant qu'une reprise tienne la transaction
-		// pour morte (UpdateTransaction::STALE_AFTER_SECONDS). Sans effet hors transaction.
-		UpdateTransaction::touch();
-		// Marqueur « fichiers copiés », comme CommandExecutor::perform_core_upgrade() : update_core()
-		// émet `_core_updated_successfully` une fois la copie faite, avant `upgrader_process_complete`.
-		$copied      = false;
-		$mark_copied = static function () use ( &$copied ): void {
-			$copied = true;
-		};
-		add_action( '_core_updated_successfully', $mark_copied, PHP_INT_MIN );
 		try {
-			$upgrader = new Core_Upgrader( new Automatic_Upgrader_Skin() );
-			// pre_check_md5 à faux : il ne sert qu'à choisir un paquet partiel, exclu pour `reinstall`.
-			$result = $upgrader->upgrade( self::offer( $version, $package['locale'], $package['path'] ), [ 'pre_check_md5' => false ] );
-		} catch ( \Throwable $e ) {
-			/** @var bool $copied Passé à vrai par référence, dans $mark_copied. */
-			if ( ! $copied ) {
-				// Classe seulement : le texte d'une exception peut porter un chemin du serveur.
-				throw CoreRollbackRefused::because( CoreRollbackRefused::FAILED, get_class( $e ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- phrase fixe (CoreRollbackRefused), détail court, jamais affichée en HTML.
+			// Signe de vie après le téléchargement (SHA-1 et empreintes : 30 s chacun, paquet : 300 s au
+			// plus) : la copie repart avec 10 minutes devant elle avant qu'une reprise tienne la
+			// transaction pour morte (UpdateTransaction::STALE_AFTER_SECONDS). Sans effet hors transaction.
+			UpdateTransaction::touch();
+			if ( null !== $before_copy ) {
+				$before_copy();
 			}
-			// Exception APRÈS la copie (crochet d'une extension sur `upgrader_process_complete`) : la
-			// version d'avant est en place, les empreintes tranchent. Verrou `core_updater` rendu ici,
-			// WordPress ne le rendant qu'après ce crochet (sinon `locked` pendant 15 minutes) ; il
-			// appartient à cet upgrade(), qui vient de le prendre.
-			WP_Upgrader::release_lock( 'core_updater' );
-			$result = $version;
+			// Marqueur « fichiers copiés », comme CommandExecutor::perform_core_upgrade() : update_core()
+			// émet `_core_updated_successfully` une fois la copie faite, avant `upgrader_process_complete`.
+			$copied      = false;
+			$mark_copied = static function () use ( &$copied ): void {
+				$copied = true;
+			};
+			add_action( '_core_updated_successfully', $mark_copied, PHP_INT_MIN );
+			try {
+				$upgrader = new Core_Upgrader( new Automatic_Upgrader_Skin() );
+				// pre_check_md5 à faux : il ne sert qu'à choisir un paquet partiel, exclu pour `reinstall`.
+				$result = $upgrader->upgrade( self::offer( $version, $package['locale'], $package['path'] ), [ 'pre_check_md5' => false ] );
+			} catch ( \Throwable $e ) {
+				/** @var bool $copied Passé à vrai par référence, dans $mark_copied. */
+				if ( ! $copied ) {
+					// Classe seulement : le texte d'une exception peut porter un chemin du serveur.
+					throw CoreRollbackRefused::because( CoreRollbackRefused::FAILED, get_class( $e ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- phrase fixe (CoreRollbackRefused), détail court, jamais affichée en HTML.
+				}
+				// Exception APRÈS la copie (crochet d'une extension sur `upgrader_process_complete`) : la
+				// version d'avant est en place, les empreintes tranchent. Verrou `core_updater` rendu ici,
+				// WordPress ne le rendant qu'après ce crochet (sinon `locked` pendant 15 minutes) ; il
+				// appartient à cet upgrade(), qui vient de le prendre.
+				WP_Upgrader::release_lock( 'core_updater' );
+				$result = $version;
+			} finally {
+				remove_action( '_core_updated_successfully', $mark_copied, PHP_INT_MIN );
+			}
 		} finally {
-			remove_action( '_core_updated_successfully', $mark_copied, PHP_INT_MIN );
 			// Supprimé par WP_Upgrader::unpack_package() une fois décompressé ; reste quand
-			// Core_Upgrader s'arrête avant (verrou, système de fichiers).
+			// Core_Upgrader s'arrête avant (verrou, système de fichiers), ou sur une erreur ou un
+			// refus survenu entre le téléchargement et la copie.
 			if ( file_exists( $package['path'] ) ) {
 				wp_delete_file( $package['path'] );
 			}

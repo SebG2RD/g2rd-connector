@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Tests\Rollback\Core;
 
+use Brain\Monkey\Actions;
 use Core_Upgrader;
 use G2RD\Connector\Rollback\Core\CoreReinstaller;
 use G2RD\Connector\Rollback\Core\CoreRollbackRefused;
@@ -132,6 +133,60 @@ final class CoreReinstallerTest extends CoreRollbackTestCase {
 		}
 		self::assertSame( [], Core_Upgrader::$calls );
 		self::assertSame( '7.1.5', $this->version_on_disk() );
+	}
+
+	/** Une erreur entre le téléchargement et la copie (signe de vie de la transaction) ne laisse pas le paquet sur le disque. */
+	public function test_paquet_supprime_meme_sur_une_erreur_avant_la_copie(): void {
+		UpdateTransaction::open(
+			[
+				'plugin_file' => '',
+				'kind'        => 'core',
+			],
+			time()
+		);
+		Actions\expectDone( 'g2rd_connector_update_txn_progress' )->whenHappen(
+			static function (): void {
+				throw new \RuntimeException( 'base injoignable' );
+			}
+		);
+
+		try {
+			CoreReinstaller::reinstall( '7.1.4', 'en_US' );
+			self::fail( 'exception attendue' );
+		} catch ( \RuntimeException $error ) {
+			self::assertSame( 'base injoignable', $error->getMessage() );
+		} finally {
+			UpdateTransaction::close();
+		}
+		self::assertCount( 1, $this->downloads );
+		self::assertFileDoesNotExist( $this->downloads[0] );
+		self::assertSame( [], Core_Upgrader::$calls );
+	}
+
+	/**
+	 * Contrôles de l'appelant refaits APRÈS le téléchargement, avant la copie : un refus arrête tout,
+	 * paquet supprimé, rien de copié.
+	 */
+	public function test_un_refus_avant_la_copie_arrete_tout(): void {
+		$seen = null;
+
+		try {
+			CoreReinstaller::reinstall(
+				'7.1.4',
+				'en_US',
+				function () use ( &$seen ): void {
+					$seen = is_file( $this->downloads[0] ?? '' );
+					throw CoreRollbackRefused::because( CoreRollbackRefused::DB_CHANGED );
+				}
+			);
+			self::fail( 'refus attendu' );
+		} catch ( CoreRollbackRefused $refused ) {
+			self::assertSame( CoreRollbackRefused::DB_CHANGED, $refused->error_code() );
+		}
+		self::assertTrue( $seen, 'appelée une fois le paquet téléchargé' );
+		self::assertSame( [], Core_Upgrader::$calls );
+		self::assertSame( '7.1.5', $this->version_on_disk() );
+		self::assertFileDoesNotExist( $this->downloads[0] );
 	}
 
 	/**

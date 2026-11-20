@@ -182,6 +182,43 @@ final class CoreRollbackCommandTest extends CoreRollbackTestCase {
 	}
 
 	/**
+	 * Le téléchargement peut durer six minutes : un autre processus a pu mettre WordPress ou sa base
+	 * à jour entre-temps. Contrôles refaits juste avant la copie : refus à code stable, paquet
+	 * supprimé, rien de copié, informations gardées intactes.
+	 *
+	 * @return iterable<string, array{\Closure(self): void, string}>
+	 */
+	public static function changes_during_download(): iterable {
+		yield 'WordPress mis à jour pendant le téléchargement' => [
+			static function ( self $test ): void {
+				file_put_contents( ABSPATH . 'wp-includes/version.php', "<?php \$wp_version = '7.1.6';\n" );
+			},
+			'core_rollback_version_changed',
+		];
+		yield 'base mise à jour pendant le téléchargement' => [
+			static function ( self $test ): void {
+				$test->table->rows['db_version']['value'] = '61900';
+			},
+			'core_rollback_db_changed',
+		];
+	}
+
+	#[DataProvider( 'changes_during_download' )]
+	public function test_controles_refaits_apres_le_telechargement( \Closure $change, string $code ): void {
+		$this->on_download = fn () => $change( $this );
+		$kept              = $this->options[ ProtectedCoreUpdate::RECORD_OPTION ];
+
+		$result = ( new CoreRollbackCommand( $this->health ) )->run( self::PAYLOAD );
+
+		self::assertSame( $code, $result['outcome'] );
+		self::assertSame( [], Core_Upgrader::$calls, 'rien de copié' );
+		self::assertCount( 1, $this->downloads );
+		self::assertFileDoesNotExist( $this->downloads[0] );
+		self::assertSame( $kept, $this->options[ ProtectedCoreUpdate::RECORD_OPTION ], 'retour redemandable' );
+		self::assertArrayNotHasKey( UpdateTransaction::OPTION_KEY, $this->options );
+	}
+
+	/**
 	 * Une extension lève sur `upgrader_process_complete` après la copie de 7.1.4 : le retour a eu
 	 * lieu, il est dit réussi (santé mesurée, informations gardées effacées, verrou de WordPress rendu).
 	 */

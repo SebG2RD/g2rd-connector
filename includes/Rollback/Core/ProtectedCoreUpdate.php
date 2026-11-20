@@ -70,9 +70,14 @@ final class ProtectedCoreUpdate {
 	public function __construct( private readonly HealthChecker $health ) {
 	}
 
+	/** Plafond de `grace_seconds` (365 jours) : au-delà, l'échéance déborderait en nombre décimal. */
+	public const GRACE_MAX_SECONDS = 31536000;
+
 	/**
-	 * @param array<string, mixed>                                            $payload        keep_on_success, grace_seconds.
-	 * @param callable(): array{0: array<string, mixed>, 1: \WP_Error|null} $perform_update Mise à jour historique (CommandExecutor).
+	 * @param array<string, mixed>                                                $payload        keep_on_success, grace_seconds.
+	 * @param callable(bool): array{0: array<string, mixed>, 1: \WP_Error|null} $perform_update Mise à jour historique (CommandExecutor),
+	 *                                                                                           protégée ou non : une exception levée après
+	 *                                                                                           la copie ne l'arrête que si elle ne l'est pas.
 	 * @return array<string, mixed>
 	 * @throws \RuntimeException Une autre mise à jour protégée tourne, ou a repris la transaction
 	 *                           avant la mise à jour : rien n'a changé
@@ -83,8 +88,10 @@ final class ProtectedCoreUpdate {
 		$offered = CorePackage::is_version( $before ) ? self::offered_version() : null;
 		if ( null === $offered ) {
 			// Version de développement : aucun paquet publié à retélécharger. Rien à mettre à jour :
-			// rien à protéger. Chemin historique dans les deux cas, sans contrôle ni verrou.
-			return $perform_update()[0];
+			// rien à protéger. Chemin historique dans les deux cas, sans contrôle ni verrou ; une
+			// exception levée après la copie remonte comme sans `snapshot` (aucun contrôle de santé ne
+			// la suivrait).
+			return $perform_update( false )[0];
 		}
 
 		// Reprise d'une mise à jour d'extension morte, AVANT d'ouvrir (cf. ProtectedUpdate::run()) :
@@ -147,8 +154,8 @@ final class ProtectedCoreUpdate {
 	}
 
 	/**
-	 * @param array<string, mixed>                                            $payload
-	 * @param callable(): array{0: array<string, mixed>, 1: \WP_Error|null} $perform_update
+	 * @param array<string, mixed>                                                $payload
+	 * @param callable(bool): array{0: array<string, mixed>, 1: \WP_Error|null} $perform_update
 	 * @return array<string, mixed>
 	 */
 	private function protect( array $payload, callable $perform_update, string $before, string $offered, int $now ): array {
@@ -161,7 +168,7 @@ final class ProtectedCoreUpdate {
 			throw new \RuntimeException( UpdateTransaction::BUSY_MESSAGE ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- constante, texte fixe.
 		}
 
-		[ $result, $error ] = $perform_update();
+		[ $result, $error ] = $perform_update( true );
 		$updated = true === ( $result['updated'] ?? false );
 		$reason  = null;
 		if ( $updated && UpdateTransaction::step( UpdateTransaction::STEP_HEALTH ) ) {
@@ -261,7 +268,8 @@ final class ProtectedCoreUpdate {
 
 	/**
 	 * Garde les informations du bouton si le manager le demande et que la base n'a pas changé (sinon
-	 * `$db_version` est null) ; sinon efface celles d'une mise à jour précédente.
+	 * `$db_version` est null) ; sinon efface celles d'une mise à jour précédente. `grace_seconds`
+	 * ramené entre 0 et GRACE_MAX_SECONDS.
 	 *
 	 * @param array<string, mixed> $payload
 	 * @return int|null Échéance (horodatage Unix), ou null si rien n'est gardé.
@@ -271,7 +279,7 @@ final class ProtectedCoreUpdate {
 			delete_option( self::RECORD_OPTION );
 			return null;
 		}
-		$until = $now + max( 0, (int) ( $payload['grace_seconds'] ?? 0 ) );
+		$until = $now + min( self::GRACE_MAX_SECONDS, max( 0, (int) ( $payload['grace_seconds'] ?? 0 ) ) );
 		update_option(
 			self::RECORD_OPTION,
 			[
