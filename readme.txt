@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.17.0
+Stable tag: 1.18.0-rc.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -106,6 +106,49 @@ Backups are prepared in wp-content/g2rd-backups, inside a folder whose name is d
 2. Theme-integrated "Manager G2RD" tab in the G2RD theme console (requires `g2rd-theme` >= 1.19 as the theme or its parent theme).
 
 == Changelog ==
+
+= 1.18.0-rc.1 =
+
+Pre-release of the 1.18 line, piloted on one site before it is offered to every site.
+
+* **New: where each update comes from.** The inventory sent to G2RD WP Manager now says, for every
+  plugin and theme, whether its updates come from wordpress.org (`update_source`: `wporg`), from its
+  vendor (`vendor`), or from an unknown source (`null`). It is read from WordPress' last update
+  check, without any network request. An update entry that claims to come from wordpress.org but
+  whose package or page is elsewhere counts as `vendor`. Nothing is removed from the inventory.
+* **New: release notes read by the site (`get_release_notes`).** On a signed request from the
+  manager (remote commands must be enabled), the site returns the release notes that a plugin's or
+  theme's update source gives WordPress for its "View version details" link: the changelog section
+  (at most 256 KB, with a flag when it was cut), the announced version and the homepage address
+  (https only, without its query string). Requests made during the command stop after 15 seconds in
+  total, redirects included (at most 3 per request), and each answer is limited to 8 MB. A plugin
+  or theme that does not come from wordpress.org is never looked up on wordpress.org when its
+  vendor gives no answer. The command's own code writes nothing; WordPress, the connector's update
+  module and the vendor's update code may refresh their own caches, as on the Plugins screen. The
+  command is refused through the command queue and the background route. G2RD WP Manager will use
+  it in a later version.
+* The inventory announces the new `release_notes` capability.
+* **New: protected WordPress updates and WordPress rollback (`rollback_core`).** When G2RD WP Manager
+  asks for it (`snapshot: true` on `update_core`), the site notes the installed WordPress version, the
+  language of its package and the database version (`db_version`), checks that it responds normally
+  before and after the update and, if the update stopped while copying files or the site no longer
+  responds normally, reinstalls the previous version downloaded again from downloads.wordpress.org,
+  provided the database version did not change (otherwise it changes nothing and says why). Nothing is
+  copied or stored on the site: only the previous version, its language and the database version are
+  kept, until the date sent by the manager, in a non-autoloaded option (`g2rd_core_rollback`, removed on
+  uninstall). The new signed command `rollback_core` (also accepted in the background) puts that
+  previous version back on request, with stable refusal codes. The downloaded package must match the
+  SHA-1 checksum published by downloads.wordpress.org, and the reinstalled files the checksums published
+  by api.wordpress.org (WordPress itself no longer verifies core package signatures since 6.6). Without
+  `snapshot: true`, `update_core` is unchanged. After such a return, automatic or requested,
+  WordPress' own automatic updates no longer reinstall the removed version (same guard as for plugins,
+  `auto_update_core` filter) until a newer version is offered. The inventory announces the new
+  `core_rollback` capability when the site can use it (direct file system access and zip support, as
+  for plugin restore points).
+* The "Remote commands" setting's help text now mentions release notes and the requests they make.
+* **Readme fix:** the hourly heartbeat, the event stream and remote commands are enabled by default
+  once the site is enrolled (the readme said they were disabled until you opt in); the plugin's
+  behaviour does not change.
 
 = 1.17.0 =
 
