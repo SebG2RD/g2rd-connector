@@ -135,6 +135,18 @@ final class CoreReinstallerTest extends CoreRollbackTestCase {
 		self::assertSame( '7.1.5', $this->version_on_disk() );
 	}
 
+	/** Paquet traduit absent (`.sha1` en 404) : le paquet anglais est réinstallé, et rendu comme tel. */
+	public function test_paquet_de_langue_absent_repli_anglais(): void {
+		$this->wporg['https://downloads.wordpress.org/release/fr_FR/wordpress-7.1.4.zip.sha1'] = [
+			'code' => 404,
+			'body' => '',
+		];
+
+		self::assertSame( 'en_US', CoreReinstaller::reinstall( '7.1.4', 'fr_FR' ) );
+		self::assertSame( 'en_US', Core_Upgrader::$calls[0]['offer']->locale );
+		self::assertSame( '7.1.4', $this->version_on_disk() );
+	}
+
 	/** Une erreur entre le téléchargement et la copie (signe de vie de la transaction) ne laisse pas le paquet sur le disque. */
 	public function test_paquet_supprime_meme_sur_une_erreur_avant_la_copie(): void {
 		UpdateTransaction::open(

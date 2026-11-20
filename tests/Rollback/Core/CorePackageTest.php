@@ -171,10 +171,13 @@ final class CorePackageTest extends CoreRollbackTestCase {
 		];
 		self::assertSame( [], CorePackage::mismatched_files( $extras, ABSPATH ), 'absents tolérés' );
 		file_put_contents( ABSPATH . 'wp-config-sample.php', "<?php // modifié\n" );
+		file_put_contents( ABSPATH . 'readme.html', '<p>modifié</p>' );
 		try {
+			// readme.html présent mais modifié : jamais contrôlé (comme update_core()) ; wp-config-sample.php l'est.
 			self::assertSame( [ 'wp-config-sample.php' ], CorePackage::mismatched_files( $extras, ABSPATH ), 'présent mais modifié' );
 		} finally {
 			unlink( ABSPATH . 'wp-config-sample.php' );
+			unlink( ABSPATH . 'readme.html' );
 		}
 	}
 }

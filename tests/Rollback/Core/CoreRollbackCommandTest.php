@@ -182,6 +182,32 @@ final class CoreRollbackCommandTest extends CoreRollbackTestCase {
 	}
 
 	/**
+	 * Chaque moitié de la condition de version : la version installée doit être celle qu'attend le
+	 * manager ET celle que la mise à jour protégée a installée.
+	 *
+	 * @return iterable<string, array{string, string}>
+	 */
+	public static function versions_qui_ne_correspondent_pas(): iterable {
+		yield 'le manager attend une autre version' => [ '7.1.5', '7.1.6' ];
+		yield 'version installée par une autre mise à jour' => [ '7.1.6', '7.1.6' ];
+	}
+
+	#[DataProvider( 'versions_qui_ne_correspondent_pas' )]
+	public function test_version_installee_differente( string $installed, string $expected ): void {
+		$this->loaded_version = $installed;
+
+		$result = ( new CoreRollbackCommand( $this->health ) )->run(
+			[
+				'expected_current' => $expected,
+				'target'           => '7.1.4',
+			]
+		);
+
+		self::assertSame( 'core_rollback_version_changed', $result['outcome'] );
+		self::assertSame( [], $this->requested, 'refusé avant tout téléchargement' );
+	}
+
+	/**
 	 * Le téléchargement peut durer six minutes : un autre processus a pu mettre WordPress ou sa base
 	 * à jour entre-temps. Contrôles refaits juste avant la copie : refus à code stable, paquet
 	 * supprimé, rien de copié, informations gardées intactes.
