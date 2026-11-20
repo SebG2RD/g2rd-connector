@@ -4,11 +4,14 @@
  * l'ensemble des appels, redirections comprises (spécification « Notes de version », § 5.3), 3
  * redirections au plus par appel, 8 Mio gardés par réponse, adresses sûres seulement, quel que
  * soit le code qui appelle (WordPress vers api.wordpress.org, ou l'updater d'un éditeur vers son
- * serveur, tant qu'il passe par l'API HTTP de WordPress). Le budget est mesuré sur une horloge
- * monotone (hrtime()) et ne couvre que ces appels : le travail hors réseau de la commande n'y est
- * pas compté. Les 8 Mio (`limit_response_size`, `max_bytes` de Requests) bornent ce que le
- * transport garde du corps, pas ce qu'il lit : la suite est lue et jetée jusqu'à la fin de la
- * réponse ou jusqu'au délai. Avec cURL, ce sont les octets décompressés (cURL décompresse
+ * serveur, tant qu'il passe par l'API HTTP de WordPress). Le budget est une échéance posée au
+ * début de around() et mesurée sur une horloge monotone (hrtime()) : tout le temps passé ensuite,
+ * réseau ou non (fichiers d'administration chargés, filtres des éditeurs, lecture des réponses,
+ * résolution DNS de wp_http_validate_url()), le consomme. Mais seuls les appels HTTP sont bornés :
+ * le travail hors réseau n'est jamais interrompu, et ce qui suit around() n'est pas compté.
+ * Les 8 Mio (`limit_response_size`, `max_bytes` de Requests) bornent ce que le transport garde
+ * du corps, pas ce qu'il lit : la suite est lue et jetée jusqu'à la fin de la réponse ou jusqu'au
+ * délai. Avec cURL, ce sont les octets décompressés (cURL décompresse
  * lui-même) ; avec fsockopen, les octets reçus, décompressés ensuite par Requests : un corps
  * compressé peut alors dépasser 8 Mio une fois décompressé. Trois crochets, posés au début de la
  * commande et retirés à la fin, même sur une exception :

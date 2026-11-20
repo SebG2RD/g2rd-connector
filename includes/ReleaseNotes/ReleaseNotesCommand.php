@@ -21,9 +21,11 @@
  *    « extension introuvable », ou les notes d'un homonyme. Refus NOT_PROVIDED, sans appel ;
  *  - les appels HTTP faits par l'API HTTP de WordPress pendant la commande sont bornés
  *    (HttpLimits : 15 s pour l'ensemble de ces appels, redirections comprises, 8 Mio gardés par
- *    réponse, adresses sûres). Le budget ne couvre pas toute la commande : le travail hors réseau
- *    (chargement des fichiers d'administration, filtres des éditeurs, lecture de la réponse), la
- *    résolution DNS et un appel qui contourne l'API HTTP n'y sont pas comptés.
+ *    réponse, adresses sûres). Le budget ne borne pas toute la commande : le travail hors réseau
+ *    fait pendant les appels (chargement des fichiers d'administration, filtres des éditeurs,
+ *    lecture de la réponse) consomme le budget sans être interrompu ; la mise en forme de la
+ *    réponse (NotesAnswer) n'y est pas comptée ; la résolution DNS de wp_http_validate_url() et un
+ *    appel qui contourne l'API HTTP ne sont pas bornés.
  *
  * Signature toujours exigée (CommandExecutor::SIGNED_ONLY). Par `/command` seulement : soumise au
  * réglage « Commandes à distance » (la route n'existe pas sans lui), refusée par la file du
