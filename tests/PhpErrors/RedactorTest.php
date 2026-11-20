@@ -129,6 +129,7 @@ final class RedactorTest extends PHPUnitTestCase {
 		yield 'plus de 300 caractères entre SELECT et FROM' => [ $error . 'SELECT ' . implode( ', ', array_map( static fn ( int $i ): string => 's.col_' . $i, range( 10, 41 ) ) ) . ' FROM wp_wc_order_stats s WHERE s.note = \'Jean Dupont 0612345678\' made by f' ];
 		yield 'requête SHOW' => [ $error . 'SHOW TABLES LIKE \'Jean Dupont 0612345678\' made by do_action(\'x\')' ];
 		yield 'requête CALL' => [ $error . 'CALL wp_enregistre_contact(\'Jean Dupont\', \'0612345678\') made by f' ];
+		yield 'requête SHOW sur plusieurs lignes' => [ $error . "SHOW TABLES\nLIKE 'x'\r\nOR 'Jean Dupont 0612345678'\nmade by f" ];
 	}
 
 	#[DataProvider( 'requetes_aux_valeurs_piegees' )]
