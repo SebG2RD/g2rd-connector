@@ -191,6 +191,9 @@ final class NotesAnswerTest extends TestCase {
 		yield 'espace dedans' => [ 'https://example.com/a b', null ];
 		yield 'guillemet' => [ 'https://example.com/"onmouseover=x', null ];
 		yield 'non ASCII' => [ 'https://exemple.fr/café', null ];
+		yield 'hôte encodé' => [ 'https://exa%41mple.com/', null ];
+		yield 'hôte IPv6' => [ 'https://[::1]/notes', null ];
+		yield 'hôte au libellé vide' => [ 'https://.example.com/', null ];
 		yield 'trop longue' => [ 'https://example.com/' . str_repeat( 'a', 2049 ), null ];
 		yield 'pas un texte' => [ [ 'https://example.com/' ], null ];
 	}

@@ -19,8 +19,11 @@
  *  - un composant dont la provenance n'est pas wordpress.org (Updates\UpdateSource : `vendor` ou
  *    inconnue) n'est jamais demandé à wordpress.org quand aucun éditeur n'a répondu : il rendrait
  *    « extension introuvable », ou les notes d'un homonyme. Refus NOT_PROVIDED, sans appel ;
- *  - les appels faits pendant la commande sont bornés (HttpLimits : 15 s en tout, redirections
- *    comprises, 8 Mio par réponse, adresses sûres).
+ *  - les appels HTTP faits par l'API HTTP de WordPress pendant la commande sont bornés
+ *    (HttpLimits : 15 s pour l'ensemble de ces appels, redirections comprises, 8 Mio gardés par
+ *    réponse, adresses sûres). Le budget ne couvre pas toute la commande : le travail hors réseau
+ *    (chargement des fichiers d'administration, filtres des éditeurs, lecture de la réponse), la
+ *    résolution DNS et un appel qui contourne l'API HTTP n'y sont pas comptés.
  *
  * Signature toujours exigée (CommandExecutor::SIGNED_ONLY). Par `/command` seulement : soumise au
  * réglage « Commandes à distance » (la route n'existe pas sans lui), refusée par la file du

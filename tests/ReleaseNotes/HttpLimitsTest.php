@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Tests\ReleaseNotes;
 
+use Brain\Monkey\Actions;
+use Brain\Monkey\Filters;
 use G2RD\Connector\ReleaseNotes\HttpLimits;
 use G2RD\Connector\Tests\TestCase;
 
@@ -22,6 +24,23 @@ final class HttpLimitsTest extends TestCase {
 		self::assertSame( 8388608, HttpLimits::RESPONSE_MAX_BYTES );
 		self::assertSame( 3, HttpLimits::MAX_REDIRECTS );
 		self::assertSame( 'g2rd-time-budget-spent:', HttpLimits::BUDGET_SPENT_LOCATION );
+	}
+
+	/** Horloge monotone : un recalage de l'heure du système (NTP) ne rend ni ne retire de temps au budget. */
+	public function test_l_horloge_par_defaut_est_monotone(): void {
+		$clock = ( new \ReflectionProperty( HttpLimits::class, 'clock' ) )->getValue( new HttpLimits() );
+
+		self::assertEqualsWithDelta( hrtime( true ) / 1e9, $clock(), 1.0 );
+	}
+
+	/** Chaque crochet reçoit tous ses arguments (2, 3 et 5), en dernier. */
+	public function test_les_crochets_recoivent_tous_leurs_arguments(): void {
+		$limits = $this->limits();
+		Filters\expectAdded( 'http_request_args' )->once()->with( [ $limits, 'bound' ], PHP_INT_MAX, 2 );
+		Filters\expectAdded( 'pre_http_request' )->once()->with( [ $limits, 'stop_when_spent' ], PHP_INT_MAX, 3 );
+		Actions\expectAdded( 'requests-requests.before_redirect' )->once()->with( [ $limits, 'before_redirect' ], PHP_INT_MAX, 5 );
+
+		self::assertTrue( $limits->around( static fn (): bool => true ) );
 	}
 
 	public function test_le_delai_est_ramene_au_temps_qui_reste(): void {

@@ -2,12 +2,18 @@
 /**
  * Bornes des appels réseau faits pendant la commande `get_release_notes` (1.18.0) : 15 s pour
  * l'ensemble des appels, redirections comprises (spécification « Notes de version », § 5.3), 3
- * redirections au plus par appel, 8 Mio par réponse, adresses sûres seulement, quel que soit le
- * code qui appelle (WordPress vers api.wordpress.org, ou l'updater d'un éditeur vers son serveur,
- * tant qu'il passe par l'API HTTP de WordPress). Trois crochets, posés au début de la commande et
- * retirés à la fin, même sur une exception :
+ * redirections au plus par appel, 8 Mio gardés par réponse, adresses sûres seulement, quel que
+ * soit le code qui appelle (WordPress vers api.wordpress.org, ou l'updater d'un éditeur vers son
+ * serveur, tant qu'il passe par l'API HTTP de WordPress). Le budget est mesuré sur une horloge
+ * monotone (hrtime()) et ne couvre que ces appels : le travail hors réseau de la commande n'y est
+ * pas compté. Les 8 Mio (`limit_response_size`, `max_bytes` de Requests) bornent ce que le
+ * transport garde du corps, pas ce qu'il lit : la suite est lue et jetée jusqu'à la fin de la
+ * réponse ou jusqu'au délai. Avec cURL, ce sont les octets décompressés (cURL décompresse
+ * lui-même) ; avec fsockopen, les octets reçus, décompressés ensuite par Requests : un corps
+ * compressé peut alors dépasser 8 Mio une fois décompressé. Trois crochets, posés au début de la
+ * commande et retirés à la fin, même sur une exception :
  *  - filtre `http_request_args`, en dernier (PHP_INT_MAX) : délai de chaque appel ramené au temps
- *    qui reste (une seconde au moins), taille de la réponse bornée, redirections plafonnées,
+ *    qui reste (une seconde au moins), taille gardée de la réponse bornée, redirections plafonnées,
  *    `reject_unsafe_urls` (WordPress refuse alors les adresses non publiques au sens de sa version,
  *    les ports autres que 80, 443 et 8080, les hôtes non résolus par gethostbyname(), y compris
  *    après une redirection) ;
@@ -35,7 +41,7 @@ final class HttpLimits {
 	/** Budget de la commande, en secondes. */
 	public const BUDGET_SECONDS = 15;
 
-	/** Taille maximale d'une réponse, en octets (8 Mio). */
+	/** Taille gardée d'une réponse, en octets (8 Mio) : cf. docblock de la classe pour ce qui est compté. */
 	public const RESPONSE_MAX_BYTES = 8388608;
 
 	/** Redirections suivies au plus par appel (5 par défaut dans WordPress). */
@@ -53,10 +59,12 @@ final class HttpLimits {
 	private float $deadline = 0.0;
 
 	/**
-	 * @param (\Closure(): float)|null $clock Horloge en secondes (tests) ; microtime( true ) sinon.
+	 * @param (\Closure(): float)|null $clock Horloge en secondes (tests) ; hrtime() sinon, monotone : un
+	 *                                       recalage de l'heure du système (NTP) ne rend ni ne retire
+	 *                                       de temps au budget.
 	 */
 	public function __construct( ?\Closure $clock = null ) {
-		$this->clock = $clock ?? static fn (): float => microtime( true );
+		$this->clock = $clock ?? static fn (): float => hrtime( true ) / 1e9;
 	}
 
 	/**

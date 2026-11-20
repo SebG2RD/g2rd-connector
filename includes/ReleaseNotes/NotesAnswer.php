@@ -28,6 +28,9 @@ final class NotesAnswer {
 	/** Caractères admis dans une adresse (RFC 3986) : ni espace, ni guillemet, ni chevron, ni caractère non ASCII. */
 	private const URL_PATTERN = '/^[A-Za-z0-9._~:\/?#\[\]@!$&\'()*+,;=%-]+$/D';
 
+	/** Hôte, en minuscules : libellés de lettres, chiffres et tirets, séparés par des points (ni « % », ni « : », ni libellé vide). */
+	private const HOST_PATTERN = '/^[a-z0-9-]+(?:\.[a-z0-9-]+)*$/D';
+
 	/** Longueur maximale de la page d'accueil, en octets. */
 	private const URL_MAX_BYTES = 2048;
 
@@ -117,8 +120,9 @@ final class NotesAnswer {
 
 	/**
 	 * Adresse https absolue, sans identifiants (« https://nom@hôte » trompe le lecteur) ni caractère
-	 * hors RFC 3986, rendue avec le schéma et l'hôte en minuscules et **sans requête ni fragment**
-	 * (une clé de licence peut s'y trouver) ; null sinon.
+	 * hors RFC 3986, à l'hôte en lettres, chiffres, tirets et points (HOST_PATTERN : ni hôte encodé,
+	 * ni adresse IPv6), rendue avec le schéma et l'hôte en minuscules et **sans requête ni
+	 * fragment** (une clé de licence peut s'y trouver) ; null sinon.
 	 *
 	 * @param mixed $url Adresse annoncée.
 	 */
@@ -132,17 +136,22 @@ final class NotesAnswer {
 		}
 		$parts = wp_parse_url( $url );
 		if ( ! is_array( $parts ) || 'https' !== strtolower( (string) ( $parts['scheme'] ?? '' ) )
-			|| '' === (string) ( $parts['host'] ?? '' ) || isset( $parts['user'] ) || isset( $parts['pass'] ) ) {
+			|| isset( $parts['user'] ) || isset( $parts['pass'] ) ) {
+			return null;
+		}
+		$host = strtolower( (string) ( $parts['host'] ?? '' ) );
+		if ( 1 !== preg_match( self::HOST_PATTERN, $host ) ) {
 			return null;
 		}
 
-		return 'https://' . strtolower( (string) $parts['host'] )
+		return 'https://' . $host
 			. ( isset( $parts['port'] ) ? ':' . (int) $parts['port'] : '' )
 			. (string) ( $parts['path'] ?? '' );
 	}
 
 	/**
 	 * Section `changelog` (nom comparé sans tenir compte de la casse), si c'est un texte non vide.
+	 * « Non vide » sans trim() : il recopierait la section entière (jusqu'à 8 Mio) pour la jeter.
 	 *
 	 * @param mixed $sections Sections de la réponse (tableau ; objet toléré).
 	 */
@@ -154,7 +163,8 @@ final class NotesAnswer {
 			return null;
 		}
 		foreach ( $sections as $name => $content ) {
-			if ( 'changelog' === strtolower( (string) $name ) && is_string( $content ) && '' !== trim( $content ) ) {
+			// Mêmes blancs que trim() par défaut.
+			if ( 'changelog' === strtolower( (string) $name ) && is_string( $content ) && strspn( $content, " \t\n\r\0\x0B" ) < strlen( $content ) ) {
 				return $content;
 			}
 		}
