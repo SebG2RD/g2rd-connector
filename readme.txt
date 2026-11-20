@@ -165,7 +165,8 @@ Pre-release of the 1.18 line, piloted on one site before it is offered to every 
   translation and WordPress updates (`detail` included), the error reported with an update that went
   on (`upgrade_error`), restore points that could not be created, plugin rollbacks (requested or
   automatic) and their recovery, the download of a rollback archive, the site health checks made
-  around an update, and the type of an unexpected error during a WordPress rollback. An error
+  around an update, the type of an unexpected error during a WordPress rollback, and what
+  third-party code or a PHP notice writes while a command runs (`stray_output`). An error
   without text is reported by its code or type. Before, that text was sent as it was.
 
 = 1.17.0 =

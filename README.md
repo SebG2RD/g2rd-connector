@@ -276,7 +276,8 @@ refiltrée ni coupée : le message d'une `Commands\FilteredError` ou d'une `Roll
 `CommandExecutor::run()` et d'une commande en arrière-plan, `upgrade_error` des extensions et du
 cœur, `detail` d'`update_core`, `error` de `snapshot_failed*`, d'`auto_rollback_failed` et des
 échecs de `rollback_plugin`, `detail` de `recovery_failed`, `reason` des sondes de `health`, refus
-`core_rollback_failed` (classe de l'exception).
+`core_rollback_failed` (classe de l'exception), `stray_output` d'une commande (ce que du code tiers
+ou une notice PHP écrit pendant qu'elle s'exécute).
 
 ### Origine des thèmes dans l'inventaire
 
