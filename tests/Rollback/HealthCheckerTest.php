@@ -118,6 +118,24 @@ final class HealthCheckerTest extends TestCase {
 		self::assertSame( 'unverifiable', $probe['admin']['state'] );
 	}
 
+	/**
+	 * `reason` part au manager dans `health` : le texte d'une erreur de transport (WordPress, cURL, ou
+	 * une extension branchée sur `pre_http_request`) y est filtré ; jamais « [unreadable] » pour un vide.
+	 */
+	public function test_the_reason_of_a_transport_error_is_filtered(): void {
+		$path  = '/home/u123456789/domains/exemple.fr/public_html/wp-includes/certificates/ca-bundle.crt';
+		$probe = $this->checker( [ 'code' => 0, 'body' => '', 'error' => 'cURL error 77: error setting certificate verify locations: CAfile: ' . $path ], [ 'code' => 0, 'body' => '', 'error' => '' ] )->measure();
+		self::assertSame( 'cURL error 77: error setting certificate verify locations: CAfile: wp-includes/certificates/ca-bundle.crt', $probe['home']['reason'] );
+		self::assertSame( '', $probe['admin']['reason'] );
+
+		$throws = new HealthChecker(
+			static function () use ( $path ): array {
+				throw new \RuntimeException( 'pre_http_request: ' . $path . ' for contact@exemple.fr' ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- texte d'essai.
+			}
+		);
+		self::assertSame( 'transport: pre_http_request: wp-includes/certificates/ca-bundle.crt for [email]', $throws->measure()['home']['reason'] );
+	}
+
 	public function test_admin_answer_without_our_token_is_unverifiable(): void {
 		$probe = $this->checker( [ 'code' => 200, 'body' => 'ok' ], [ 'code' => 200, 'body' => '{"ok":true,"token":"autre"}' ] )->measure();
 		self::assertSame( 'unverifiable', $probe['admin']['state'], 'une réponse de cache ou de pare-feu ne prouve rien' );

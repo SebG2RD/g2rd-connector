@@ -525,6 +525,8 @@ final class AfterResponseRunnerTest extends TestCase {
 			'sans point final' => [ 'Disque plein', 'Disque plein. Elle a pu être appliquée en partie.' ],
 			'avec point final' => [ 'Disque plein.', 'Disque plein. Elle a pu être appliquée en partie.' ],
 			'message vide'     => [ '', 'RuntimeException. Elle a pu être appliquée en partie.' ],
+			// Texte tiers : filtré (chemins du serveur, e-mails…) avant de partir au manager.
+			'chemin du serveur' => [ 'Fatal in /home/u123456789/domains/exemple.fr/public_html/wp-content/plugins/x/x.php:12 for contact@exemple.fr.', 'Fatal in wp-content/plugins/x/x.php:12 for [email]. Elle a pu être appliquée en partie.' ],
 		];
 	}
 

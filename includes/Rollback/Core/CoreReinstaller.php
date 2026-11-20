@@ -18,6 +18,7 @@ namespace G2RD\Connector\Rollback\Core;
 
 use Automatic_Upgrader_Skin;
 use Core_Upgrader;
+use G2RD\Connector\Commands\FilteredError;
 use G2RD\Connector\Rollback\UpdateTransaction;
 use WP_Upgrader;
 
@@ -61,7 +62,7 @@ final class CoreReinstaller {
 				/** @var bool $copied Passé à vrai par référence, dans $mark_copied. */
 				if ( ! $copied ) {
 					// Classe seulement : le texte d'une exception peut porter un chemin du serveur.
-					throw CoreRollbackRefused::because( CoreRollbackRefused::FAILED, get_class( $e ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- phrase fixe (CoreRollbackRefused), détail court, jamais affichée en HTML.
+					throw CoreRollbackRefused::because( CoreRollbackRefused::FAILED, FilteredError::text( get_class( $e ) ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- phrase fixe (CoreRollbackRefused), détail court, jamais affichée en HTML.
 				}
 				// Exception APRÈS la copie (crochet d'une extension sur `upgrader_process_complete`) : la
 				// version d'avant est en place, les empreintes tranchent. Verrou `core_updater` rendu ici,

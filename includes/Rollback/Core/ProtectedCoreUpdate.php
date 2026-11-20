@@ -48,6 +48,7 @@ namespace G2RD\Connector\Rollback\Core;
 
 use G2RD\Connector\CommandRuns\OptionRow;
 use G2RD\Connector\CommandRuns\StoreUnavailable;
+use G2RD\Connector\Commands\FilteredError;
 use G2RD\Connector\Rollback\AutoUpdateGuard;
 use G2RD\Connector\Rollback\HealthChecker;
 use G2RD\Connector\Rollback\ProtectedUpdate;
@@ -226,7 +227,7 @@ final class ProtectedCoreUpdate {
 		} catch ( CoreRollbackRefused $e ) {
 			return $result + $protected + self::refusal( $e );
 		} catch ( \Throwable $e ) {
-			return $result + $protected + self::refusal( CoreRollbackRefused::because( CoreRollbackRefused::FAILED, get_class( $e ) ) );
+			return $result + $protected + self::refusal( CoreRollbackRefused::because( CoreRollbackRefused::FAILED, FilteredError::text( get_class( $e ) ) ) );
 		}
 		UpdateTransaction::touch();
 		$health['after_rollback'] = $this->health->measure();

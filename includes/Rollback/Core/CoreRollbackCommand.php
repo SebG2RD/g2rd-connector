@@ -27,6 +27,7 @@ declare(strict_types=1);
 
 namespace G2RD\Connector\Rollback\Core;
 
+use G2RD\Connector\Commands\FilteredError;
 use G2RD\Connector\Rollback\AutoUpdateGuard;
 use G2RD\Connector\Rollback\HealthChecker;
 use G2RD\Connector\Rollback\ProtectedUpdate;
@@ -69,8 +70,9 @@ final class CoreRollbackCommand {
 				UpdateTransaction::close();
 			}
 		} catch ( \Throwable $e ) {
-			// Exception imprévue : code stable, et sa classe seulement (son texte peut porter un chemin du serveur).
-			$refused = $e instanceof CoreRollbackRefused ? $e : CoreRollbackRefused::because( CoreRollbackRefused::FAILED, get_class( $e ) );
+			// Exception imprévue : code stable, et sa classe seulement (son texte peut porter un chemin du
+			// serveur), filtrée : le nom d'une classe anonyme cite le fichier qui la déclare.
+			$refused = $e instanceof CoreRollbackRefused ? $e : CoreRollbackRefused::because( CoreRollbackRefused::FAILED, FilteredError::text( get_class( $e ) ) );
 			// Version changée : celle écrite sur le disque (un autre processus a mis WordPress à jour),
 			// pas celle chargée au début de la requête ; celle-ci si le fichier est illisible.
 			$on_disk = CoreRollbackRefused::VERSION_CHANGED === $refused->error_code() ? self::version_on_disk() : '';

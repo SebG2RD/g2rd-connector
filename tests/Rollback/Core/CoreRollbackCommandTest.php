@@ -296,6 +296,25 @@ final class CoreRollbackCommandTest extends CoreRollbackTestCase {
 		];
 	}
 
+	/**
+	 * Exception imprévue d'une classe anonyme : PHP met dans son nom le chemin absolu du fichier qui la
+	 * déclare, après un octet nul. Ce nom est filtré comme un texte tiers.
+	 */
+	public function test_exception_imprevue_d_une_classe_anonyme(): void {
+		Functions\when( 'get_option' )->alias(
+			static function (): never {
+				throw new class( 'x' ) extends \ErrorException {};
+			}
+		);
+
+		$result = ( new CoreRollbackCommand( $this->health ) )->run( self::PAYLOAD );
+
+		self::assertSame( 'core_rollback_failed', $result['outcome'] );
+		self::assertStringNotContainsString( "\0", $result['error'] );
+		self::assertStringNotContainsString( 'CoreRollbackCommandTest', $result['error'] );
+		self::assertStringEndsWith( '(ErrorException@anonymous [path])', $result['error'] );
+	}
+
 	#[DataProvider( 'unexpected_exceptions' )]
 	public function test_exception_imprevue( \Closure $setup ): void {
 		$setup( $this );
