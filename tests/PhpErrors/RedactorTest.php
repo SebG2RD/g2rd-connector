@@ -124,6 +124,11 @@ final class RedactorTest extends PHPUnitTestCase {
 		yield 'guillemet échappé puis « ; »' => [ $error . 'INSERT INTO wp_postmeta (post_id, meta_key, meta_value) VALUES (7, "note", "Il a dit \\"oui; rappelez Jean Dupont au 0612345678\\"")' ];
 		yield 'valeur finie par une barre, sans échappement par barre' => [ $error . 'INSERT INTO wp_postmeta (meta_key, meta_value) VALUES (\'C:\\\', \'Jean Dupont; 0612345678\') made by f' ];
 		yield 'requête de plus de 1 000 caractères' => [ $error . 'INSERT INTO wp_postmeta (meta_key, meta_value) VALUES (\'note\', \'' . str_repeat( 'x', 1100 ) . ' Jean Dupont 0612345678\') made by f' ];
+		// En-tête non reconnu par les motifs de requête : seule la règle « for query » la masque.
+		yield '« ; » entre SELECT et FROM' => [ $error . 'SELECT CONCAT(\';\', meta_value) FROM wp_usermeta WHERE meta_value = \'Jean Dupont 0612345678\' made by do_action(\'x\')' ];
+		yield 'plus de 300 caractères entre SELECT et FROM' => [ $error . 'SELECT ' . implode( ', ', array_map( static fn ( int $i ): string => 's.col_' . $i, range( 10, 41 ) ) ) . ' FROM wp_wc_order_stats s WHERE s.note = \'Jean Dupont 0612345678\' made by f' ];
+		yield 'requête SHOW' => [ $error . 'SHOW TABLES LIKE \'Jean Dupont 0612345678\' made by do_action(\'x\')' ];
+		yield 'requête CALL' => [ $error . 'CALL wp_enregistre_contact(\'Jean Dupont\', \'0612345678\') made by f' ];
 	}
 
 	#[DataProvider( 'requetes_aux_valeurs_piegees' )]
@@ -160,6 +165,7 @@ final class RedactorTest extends PHPUnitTestCase {
 		yield 'requête en minuscules aux chaînes ouvertes' => [ 'update wp_x set a = ' . str_repeat( '"\\', 1900 ) ];
 		yield 'for query répété' => [ str_repeat( 'for query [sql] made by ', 160 ) ];
 		yield 'for query sans made by' => [ 'for query [sql]' . str_repeat( ' made b', 500 ) ];
+		yield 'for query répété sans masque ni made by' => [ str_repeat( 'for query x made b ', 210 ) ];
 	}
 
 	#[DataProvider( 'textes_hostiles_sous_la_borne' )]
@@ -284,8 +290,13 @@ final class RedactorTest extends PHPUnitTestCase {
 			"View '[secret].wp_vue_commandes' references invalid table(s) or column(s) or function(s) or definer/invoker of view lack rights to use them",
 		];
 		yield 'définisseur entre accents graves' => [
+			'SQLSTATE[42000]: Access denied; you need (at least one of) the SUPER privilege(s) for this operation: CREATE DEFINER=`u123456789_wp`@`localhost` TRIGGER `wp_x_ai` AFTER INSERT ON `wp_x` FOR EACH ROW BEGIN END',
+			'SQLSTATE[42000]: Access denied; you need (at least one of) the SUPER privilege(s) for this operation: CREATE DEFINER=[secret] TRIGGER `wp_x_ai` AFTER INSERT ON `wp_x` FOR EACH ROW BEGIN END',
+		];
+		// Après « for query », la requête entière part, définisseur compris.
+		yield 'définisseur entre accents graves après « for query »' => [
 			'Access denied; you need (at least one of) the SUPER privilege(s) for this operation for query CREATE DEFINER=`u123456789_wp`@`localhost` TRIGGER `wp_x_ai` AFTER INSERT ON `wp_x` FOR EACH ROW BEGIN END',
-			'Access denied; you need (at least one of) the SUPER privilege(s) for this operation for query CREATE DEFINER=[secret] TRIGGER `wp_x_ai` AFTER INSERT ON `wp_x` FOR EACH ROW BEGIN END',
+			'Access denied; you need (at least one of) the SUPER privilege(s) for this operation for query [sql]',
 		];
 	}
 

@@ -287,10 +287,12 @@ final class Redactor {
 			'/\b(?:SELECT\b[^;]{0,300}?\bFROM\b|INSERT\s++(?:IGNORE\s++)?INTO\b|REPLACE\s++INTO\b|UPDATE\s++`?[\w.]++`?\s++SET\b|DELETE\s++FROM\b|(?:ALTER|DROP|CREATE|TRUNCATE)\s++TABLE\b)' . self::SQL_TAIL . '/u' => self::MASK_SQL,
 			'/\b(?:select\b[^;]{0,300}?\bfrom\s++`?\w*_\w*|insert\s++(?:ignore\s++)?into\s++`?\w*_\w*|update\s++`?\w*_\w*`?\s++set\b|delete\s++from\s++`?\w*_\w*)' . self::SQL_TAIL . '/iu' => self::MASK_SQL,
 			// Après « for query » (wpdb::print_error(), « for query %s made by %s ») : tout ce qui suit
-			// le masque appartient à la requête jusqu'au dernier « made by » (pile d'appels de
-			// WordPress), sinon jusqu'à la fin, quelle que soit la lecture des guillemets (une valeur
-			// finie par « \ » sous NO_BACKSLASH_ESCAPES décale SQL_TAIL). Même règle que le manager.
-			'/(?<=\bfor query )' . preg_quote( self::MASK_SQL, '/' ) . '(?:.*(?=\s++made\s++by\b)|.*+)/u' => self::MASK_SQL,
+			// est la requête jusqu'au dernier « made by » (pile d'appels de WordPress), sinon jusqu'à la
+			// fin, que son en-tête soit reconnu ou non par les deux motifs précédents (SHOW, CALL,
+			// CREATE TRIGGER, « ; » ou plus de 300 caractères entre SELECT et FROM) et quelle que soit la
+			// lecture des guillemets (une valeur finie par « \ » sous NO_BACKSLASH_ESCAPES décale
+			// SQL_TAIL). Le manager ne l'applique qu'après un masque déjà posé.
+			'/(\bfor query )(?:.*(?=\s++made\s++by\b)|.*+)/u' => '$1' . self::MASK_SQL,
 			// Chaînes de connexion (PDO, Redis, Memcached).
 			'/\b(?:mysqli?|pgsql|sqlite|sqlsrv|rediss?|memcached?):(?:\/\/)?[^\s"\'<>]{1,500}+/i' => self::MASK_DSN,
 			// Compte de base de données : sur Hostinger, il commence par l'identifiant du compte.
