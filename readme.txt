@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.18.0-rc.1
+Stable tag: 1.18.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -106,6 +106,35 @@ Backups are prepared in wp-content/g2rd-backups, inside a folder whose name is d
 2. Theme-integrated "Manager G2RD" tab in the G2RD theme console (requires `g2rd-theme` >= 1.19 as the theme or its parent theme).
 
 == Changelog ==
+
+= 1.18.0 =
+
+Stable release of the 1.18 line, piloted on one site since 20 November as 1.18.0-rc.1 (details in
+the entry below). Without a request from G2RD WP Manager, updates run exactly as before.
+
+* **New: where each update comes from.** The inventory sent to G2RD WP Manager says, for every
+  plugin and theme, whether its updates come from wordpress.org (`update_source`: `wporg`), from its
+  vendor (`vendor`) or from an unknown source (`null`), read from WordPress' last update check
+  without any network request. Nothing is removed from the inventory.
+* **New: release notes read by the site (`get_release_notes`).** On a signed request from the
+  manager (remote commands must be enabled), the site returns the release notes that a plugin's or
+  theme's update source gives WordPress for its "View version details" link, with strict limits on
+  size, redirects and duration. The inventory announces the new `release_notes` capability, and the
+  "Remote commands" help text mentions it.
+* **New: protected WordPress updates and WordPress rollback (`rollback_core`).** When the manager
+  asks for it (`snapshot: true` on `update_core`), the site checks that it responds normally before
+  and after the update and, if the update fails, reinstalls the previous version (checked against the
+  checksums published by wordpress.org) provided the database version did not change. The new signed
+  command `rollback_core` puts the previous version back on request. The inventory announces the
+  `core_rollback` capability. Without `snapshot: true`, `update_core` is unchanged.
+* **Fix: database queries in PHP error messages are hidden whole**, whatever their kind and even
+  when a value contains a semicolon, an escaped quote, more than 1,000 characters or ends with a
+  backslash.
+* **Fix: error texts from WordPress or other plugins are filtered before they are sent** (server
+  paths, e-mail addresses, IP addresses, tokens and database queries removed, 500 characters at most),
+  for failed commands, updates, restore points, rollbacks, health checks and stray output.
+* **Readme fix:** the hourly heartbeat, the event stream and remote commands are enabled by default
+  once the site is enrolled; the plugin's behaviour does not change.
 
 = 1.18.0-rc.1 =
 
