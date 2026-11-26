@@ -248,9 +248,12 @@ final class RedactorTest extends PHPUnitTestCase {
 	 * redact(), entités HTML décodées et blancs ramenés à une espace comme dans redact().
 	 */
 	public function test_le_repere_sql_est_lu_sur_le_texte_entier(): void {
-		self::assertTrue( Redactor::is_sql_error( str_repeat( 'Lorem ipsum ', 400 ) . 'Duplicate entry ' ) );
+		self::assertTrue( Redactor::is_sql_error( str_repeat( 'Lorem ipsum ', 400 ) . "Duplicate entry 'x" ) );
 		self::assertTrue( Redactor::is_sql_error( 'Erreur : the right syntax to use near &#039;x' ) );
-		self::assertTrue( Redactor::is_sql_error( "Duplicate\n\tentry" ) );
+		self::assertTrue( Redactor::is_sql_error( "Duplicate\n\tentry 'x" ) );
+		self::assertTrue( Redactor::is_sql_error( 'Duplicate entry [sql] for key' ) );
+		self::assertFalse( Redactor::is_sql_error( 'Uncaught JsonException: Syntax error in /x/wp-content/plugins/p/x.php:42' ) );
+		self::assertFalse( Redactor::is_sql_error( "Duplicate entry d'un" ) );
 		self::assertFalse( Redactor::is_sql_error( 'syntax error, unexpected token "}"' ) );
 		self::assertFalse( Redactor::is_sql_error( 'Undefined array key "near"' ) );
 	}
@@ -385,7 +388,7 @@ final class RedactorTest extends PHPUnitTestCase {
 	 * SQL, tout part dès la première apostrophe (ou guillemet, ou accent grave) hors d'un mot qui
 	 * suit le premier repère : une valeur choisit ses guillemets, sa propre fermeture « ' at line N »,
 	 * « for query » et « made by », et l'endroit où le message est coupé (saut de ligne et « Stack
-	 * trace: », ligne du journal finie par « in x:1 ») ; rien de ce qu'elle écrit ne reste. « at line
+	 * trace: », ligne du journal finie par « in x:1 ») ; rien de ce qu'elle écrit dans ce message ne reste (limite connue : une ligne entière du journal). « at line
 	 * N », « for query » et « made by » partent avec elle. Formes MySQL, MariaDB, wpdb, PDO, mysqli,
 	 * message enveloppé (apostrophe avant le repère), sortie d'un connecteur plus ancien.
 	 *

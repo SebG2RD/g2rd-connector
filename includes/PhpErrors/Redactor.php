@@ -148,13 +148,18 @@ final class Redactor {
 	}
 
 	/**
-	 * Vrai si le texte brut contient un repère d'erreur SQL (SQL_MARKERS), lu comme redact() le lit
-	 * (entités HTML décodées, blancs ramenés à une espace) mais sans la coupe à 4 000 caractères ni
-	 * celle à 500 du texte rendu : le masque [sql] peut tomber au-delà d'elles, pas le repère. Borné
-	 * à 16 000 octets comme redact() (une ligne du journal en fait 8 Ko au plus).
+	 * Vrai si le texte brut est une erreur SQL au sens de la règle unique de redact() : un repère
+	 * d'erreur SQL (SQL_MARKERS) suivi d'une apostrophe, d'un guillemet ou d'un accent grave hors d'un
+	 * mot, ou du masque [sql] déjà posé. Un repère seul n'en est pas une (« Uncaught JsonException:
+	 * Syntax error » garde son fichier et sa ligne). Lu comme redact() le lit (entités HTML décodées,
+	 * blancs ramenés à une espace) mais sans la coupe à 4 000 caractères ni celle à 500 du texte
+	 * rendu : le masque [sql] peut tomber au-delà d'elles, pas le repère. Borné à 16 000 octets comme
+	 * redact() (une ligne du journal en fait 8 Ko au plus).
 	 */
 	public static function is_sql_error( string $text ): bool {
-		return 1 === preg_match( '/' . self::SQL_MARKERS . '/iu', self::normalize( $text, self::INPUT_MAX_BYTES ) );
+		$normalized = self::normalize( $text, self::INPUT_MAX_BYTES );
+
+		return 1 === preg_match( '/(?:' . self::SQL_MARKERS . ').*?(?:(?<![\p{L}\p{N}])[\'"`]|' . preg_quote( self::MASK_SQL, '/' ) . ')/isu', $normalized );
 	}
 
 	/**
@@ -309,7 +314,7 @@ final class Redactor {
 			// recopie (« near '… », « Duplicate entry '… », « Incorrect … value: '… »), et la valeur choisit
 			// ses guillemets, ses repères, sa propre fermeture et l'endroit où le message est coupé (saut de
 			// ligne et « Stack trace: », ligne du journal finie par « in x:1 ») : rien de ce qu'elle écrit
-			// ne reste. « at line N », « for key », « for query » et « made by » partent avec elle. Le texte
+			// dans ce message ne reste (limite connue : une ligne entière du journal, lue à part). « at line N », « for key », « for query » et « made by » partent avec elle. Le texte
 			// avant le repère suit les autres motifs. Ancré, premier repère gardé (groupe atomique) : une
 			// seule lecture du texte.
 			'/\A((?>.*?(?:' . self::SQL_MARKERS . ')).*?)(?<![\p{L}\p{N}])[\'"`].*+/isu' => '$1' . self::MASK_SQL,
