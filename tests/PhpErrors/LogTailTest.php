@@ -210,6 +210,23 @@ final class LogTailTest extends TestCase {
 		self::assertSame( 'notice', $groups[0]['level'] );
 	}
 
+	/**
+	 * Une valeur du fragment d'une erreur de syntaxe SQL qui écrit « in x:1 » puis un saut de ligne
+	 * finit la ligne du journal (LINE) : le texte qu'elle écrit après son faux « at line N » part
+	 * avec le fragment.
+	 */
+	public function test_une_ligne_du_journal_forgee_dans_un_fragment_sql_ne_laisse_rien_lisible(): void {
+		$date  = '[' . gmdate( 'd-M-Y H:i:s', $this->now - 60 ) . ' UTC]';
+		$error = 'Uncaught PDOException: SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near ';
+		$this->write( $date . ' PHP Fatal error:  ' . $error . "'a' at line 1 Jean Dupont 0612345678 in x:1\nb' at line 1 in /x/y.php:3\nStack trace:\n#0 {main}\n  thrown in /x/y.php on line 3\n" );
+
+		LogTail::run( $this->now, $this->probe() );
+
+		$groups = array_values( Buffer::read( $this->now )['groups'] );
+		self::assertCount( 1, $groups );
+		self::assertSame( $error . '[sql]', $groups[0]['message'] );
+	}
+
 	public function test_le_rappel_ne_prend_aucun_argument(): void {
 		self::assertSame( 0, ( new \ReflectionMethod( LogTail::class, 'run_now' ) )->getNumberOfParameters() );
 	}

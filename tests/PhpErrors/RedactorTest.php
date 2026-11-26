@@ -445,6 +445,17 @@ final class RedactorTest extends PHPUnitTestCase {
 			"SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'a' at line 1 made by 0612345678 Dupont for query b')' at line 1",
 			'SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql]',
 		];
+		// MySQL et MariaDB n'écrivent rien après « at line N » (wpdb y colle « for query ») : un texte
+		// qui va jusqu'à la fin vient de la valeur, qui choisit où le message est coupé (saut de ligne
+		// et « Stack trace: », ligne du journal finie par « in x:1 »). Il part avec le fragment.
+		yield 'texte sans guillemet jusqu\'à une coupe forgée' => [
+			"You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'a' at line 1 Jean Dupont 0612345678",
+			'You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql]',
+		];
+		yield 'texte sans guillemet jusqu\'à une coupe forgée, forme PDO' => [
+			"SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'a' at line 1 Jean Dupont 0612345678",
+			'SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql]',
+		];
 	}
 
 	#[DataProvider( 'erreurs_de_syntaxe_sql' )]
