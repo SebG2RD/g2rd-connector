@@ -266,6 +266,27 @@ final class NormalizerTest extends TestCase {
 		self::assertSame( $error . '[sql]', $occurrence['message'] );
 	}
 
+	/**
+	 * La valeur écrit sa propre fermeture, « for query » puis « made by » avant la même coupe : son
+	 * « made by » ne passe pas pour la pile d'appels de WordPress, tout ce qui suit « near » part.
+	 */
+	public function test_une_pile_d_appels_forgee_apres_for_query_et_made_by_forges_ne_laisse_rien_lisible(): void {
+		$file  = WP_CONTENT_DIR . '/plugins/exemple/x.php';
+		$error = 'Uncaught PDOException: SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near ';
+
+		$occurrence = Normalizer::occurrence_from_error(
+			[
+				'type'    => E_ERROR,
+				'message' => $error . "'a' at line 1 for query x made by Jean Dupont 0612345678\nStack trace: b' at line 1 in {$file}:3\nStack trace:\n#0 {main}\n  thrown in {$file} on line 3",
+				'file'    => $file,
+				'line'    => 3,
+			]
+		);
+
+		self::assertNotNull( $occurrence );
+		self::assertSame( $error . '[sql]', $occurrence['message'] );
+	}
+
 	public function test_une_erreur_sans_gravite_n_est_pas_une_occurrence(): void {
 		self::assertNull(
 			Normalizer::occurrence_from_error(

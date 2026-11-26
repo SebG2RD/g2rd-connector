@@ -243,6 +243,23 @@ final class LogTailTest extends TestCase {
 		self::assertSame( $error . '[sql]', $groups[0]['message'] );
 	}
 
+	/**
+	 * La valeur écrit sa propre fermeture, « for query » puis « made by » avant la même fin de
+	 * ligne : son « made by » ne passe pas pour la pile d'appels de WordPress, tout ce qui suit
+	 * « near » part.
+	 */
+	public function test_une_ligne_du_journal_forgee_apres_for_query_et_made_by_forges_ne_laisse_rien_lisible(): void {
+		$date  = '[' . gmdate( 'd-M-Y H:i:s', $this->now - 60 ) . ' UTC]';
+		$error = 'Uncaught PDOException: SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near ';
+		$this->write( $date . ' PHP Fatal error:  ' . $error . "'a' at line 1 for query x made by Jean Dupont 0612345678 in x:1\nb' at line 1 in /x/y.php:3\nStack trace:\n#0 {main}\n  thrown in /x/y.php on line 3\n" );
+
+		LogTail::run( $this->now, $this->probe() );
+
+		$groups = array_values( Buffer::read( $this->now )['groups'] );
+		self::assertCount( 1, $groups );
+		self::assertSame( $error . '[sql]', $groups[0]['message'] );
+	}
+
 	public function test_le_rappel_ne_prend_aucun_argument(): void {
 		self::assertSame( 0, ( new \ReflectionMethod( LogTail::class, 'run_now' ) )->getNumberOfParameters() );
 	}

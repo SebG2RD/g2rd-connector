@@ -202,8 +202,8 @@ final class RedactorTest extends PHPUnitTestCase {
 		yield 'masque répété sans made by' => [ str_repeat( '[sql] made b', 330 ) ];
 		yield 'near et masque répétés' => [ str_repeat( 'near [sql] at ', 280 ) ];
 		yield 'fragment de syntaxe répété' => [ str_repeat( 'near [sql] at line 1 ', 190 ) ];
-		// « made by » ne finit pas la suite gardée : ni « for query » ni la fin du texte juste après le
-		// premier « at line 1 », tout part d'une seule lecture jusqu'à la fin.
+		// « made by » ne finit pas la suite gardée : pas de fin du texte juste après le premier
+		// « at line 1 », tout part d'une seule lecture jusqu'à la fin.
 		yield 'fragment de syntaxe suivi de made by' => [ str_repeat( 'near [sql] at line 1 ' . str_repeat( 'fm', 95 ) . ' made by ', 18 ) ];
 		// Couches forgées (« at line N », suite fermée par un guillemet devant un autre « at line N ») :
 		// 300 couches d'un seul tenant, puis 110 fragments qui en ont chacun une.
@@ -357,14 +357,17 @@ final class RedactorTest extends PHPUnitTestCase {
 
 	/**
 	 * Erreur de syntaxe SQL (1064) : le fragment « near '…' at line N » recopie un morceau de la
-	 * requête avec ses valeurs (souvent une valeur collée sans préparation).
+	 * requête avec ses valeurs (souvent une valeur collée sans préparation). Seul « near [sql] at
+	 * line N » à la fin du texte garde sa suite : une valeur peut écrire sa propre fermeture, puis
+	 * « for query » et « made by », et couper le message avant les vrais, ce que wpdb::print_error()
+	 * écrit après « at line N » part donc aussi.
 	 *
 	 * @return iterable<string, array{string, string}>
 	 */
 	public static function erreurs_de_syntaxe_sql(): iterable {
 		yield 'valeurs de formulaire' => [
 			"You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'Dupont', '06 12 34 56 78', 'Hunter2x')' at line 1 for query INSERT INTO wp_contacts (prenom, nom, tel, code) VALUES ('Jean', 'O'Dupont', '06 12 34 56 78', 'Hunter2x')",
-			'You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near [sql] at line 1 for query [sql]',
+			'You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near [sql]',
 		];
 		yield 'PDO, fragment seul' => [
 			"SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'Jean Dupont' WHERE ID = 5' at line 3",
@@ -379,46 +382,45 @@ final class RedactorTest extends PHPUnitTestCase {
 		// elle écrit « made by » ou « for query' », ou si un motif de requête en mangerait la fermeture.
 		yield 'fin de fragment forgée par une valeur' => [
 			"You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'Dupont', 'x' at line 1 c', '0612345678')' at line 1 for query INSERT INTO wp_contacts (nom, message, tel) VALUES ('O'Dupont', 'x' at line 1 c', '0612345678')",
-			'You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near [sql] at line 1 for query [sql]',
+			'You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near [sql]',
 		];
 		yield 'fin de fragment forgée suivie de made by' => [
 			"You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'Dupont', 'x' at line 1 made by', '0612345678')' at line 1 for query INSERT INTO wp_contacts (nom, message, tel) VALUES ('O'Dupont', 'x' at line 1 made by', '0612345678') made by do_action('wp_ajax_contact')",
-			'You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near [sql] at line 1 for query [sql]',
+			'You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near [sql]',
 		];
 		yield 'fin de fragment forgée suivie de for query collé' => [
 			"You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'Dupont', 'x' at line 1 for query', '0612345678')' at line 1 for query INSERT INTO wp_contacts (nom, message, tel) VALUES ('O'Dupont', 'x' at line 1 for query', '0612345678')",
-			'You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near [sql] at line 1 for query [sql]',
+			'You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near [sql]',
 		];
 		yield 'fin de fragment forgée suivie d\'une requête' => [
 			"You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'Dupont', 'x' at line 1 0612345678 INSERT INTO a', 'b')' at line 1 for query INSERT INTO wp_contacts (nom, message, tel) VALUES ('O'Dupont', 'x' at line 1 0612345678 INSERT INTO a', 'b')",
-			'You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near [sql] at line 1 for query [sql]',
+			'You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near [sql]',
 		];
 		yield 'deux couches forgées' => [
 			"You have an error in your SQL syntax near 'Dupont', 'x' at line 1 y' at line 1 made by', '0612345678')' at line 1 for query INSERT INTO wp_contacts (nom, message, tel) VALUES ('O'Dupont', 'x' at line 1 y' at line 1 made by', '0612345678')",
-			'You have an error in your SQL syntax near [sql] at line 1 for query [sql]',
+			'You have an error in your SQL syntax near [sql]',
 		];
 		// La couche forgée écrit « for query » puis « made by » suivi d'un guillemet et de « at line N » :
 		// ce « made by » n'est pas la pile d'appels de WordPress, il ne finit pas la requête.
 		yield 'couche forgée avec for query puis made by' => [
 			"You have an error in your SQL syntax near 'Dupont', 'x' at line 1 for query z made by', '0612345678')' at line 1 for query INSERT INTO wp_contacts (nom, message, tel) VALUES ('O'Dupont', 'x' at line 1 for query z made by', '0612345678') made by do_action('wp_ajax_contact')",
-			'You have an error in your SQL syntax near [sql] at line 1 for query [sql]',
+			'You have an error in your SQL syntax near [sql]',
 		];
 		yield 'couche forgée avec for query puis made by, guillemets autour' => [
 			"You have an error in your SQL syntax near 'Dupont', 'x' at line 1 for query z' made by w', '0612345678')' at line 1 for query INSERT INTO wp_contacts (nom, message, tel) VALUES ('O'Dupont', 'x' at line 1 for query z' made by w', '0612345678') made by do_action('wp_ajax_contact')",
-			'You have an error in your SQL syntax near [sql] at line 1 for query [sql]',
+			'You have an error in your SQL syntax near [sql]',
 		];
 		yield 'couche forgée avec for query puis made by, forme PDO' => [
 			"SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'Dupont', 'x' at line 1 for query z made by', '0612345678')' at line 1",
-			'SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql] at line 1 for query [sql]',
+			'SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql]',
 		];
-		// « for query' » forgé ne finit pas la suite gardée : seul « for query » suivi d'une espace compte.
+		// « for query' » forgé, puis une valeur qui écrit « for query » : rien ne reste après le masque.
 		yield 'for query collé forgé puis valeur avec for query' => [
 			"WordPress database error You have an error in your SQL syntax near 'y' at line 1 for query', '0612345678', 'for query z')' at line 1 for query INSERT INTO wp_contacts (nom, tel, msg) VALUES ('x' y' at line 1 for query', '0612345678', 'for query z') made by do_action('x')",
 			'WordPress database error You have an error in your SQL syntax near [sql]',
 		];
-		// wpdb::print_error() écrit « for query » juste après « at line N » : du texte sans guillemet
-		// entre les deux, puis un « for query » (ou une requête) écrit par la valeur, n'est pas le
-		// message, il part avec le fragment.
+		// Du texte sans guillemet après « at line N », puis un « for query » (ou une requête) écrit
+		// par la valeur, n'est pas le message : il part avec le fragment.
 		yield 'couche forgée sans guillemet puis for query' => [
 			"You have an error in your SQL syntax near 'Dupont', 'x' at line 1 0612345678 for query ', 'b')' at line 1 for query INSERT INTO wp_contacts (nom, message, tel) VALUES ('O'Dupont', 'x' at line 1 0612345678 for query ', 'b') made by do_action('wp_ajax_contact')",
 			'You have an error in your SQL syntax near [sql]',
@@ -445,9 +447,9 @@ final class RedactorTest extends PHPUnitTestCase {
 			"SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'a' at line 1 made by 0612345678 Dupont for query b')' at line 1",
 			'SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql]',
 		];
-		// MySQL et MariaDB n'écrivent rien après « at line N » (wpdb y colle « for query ») : un texte
-		// qui va jusqu'à la fin vient de la valeur, qui choisit où le message est coupé (saut de ligne
-		// et « Stack trace: », ligne du journal finie par « in x:1 »). Il part avec le fragment.
+		// MySQL et MariaDB n'écrivent rien après « at line N » : un texte qui va jusqu'à la fin vient
+		// de la valeur, qui choisit où le message est coupé (saut de ligne et « Stack trace: », ligne
+		// du journal finie par « in x:1 »). Il part avec le fragment.
 		yield 'texte sans guillemet jusqu\'à une coupe forgée' => [
 			"You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'a' at line 1 Jean Dupont 0612345678",
 			'You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql]',
@@ -455,6 +457,20 @@ final class RedactorTest extends PHPUnitTestCase {
 		yield 'texte sans guillemet jusqu\'à une coupe forgée, forme PDO' => [
 			"SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'a' at line 1 Jean Dupont 0612345678",
 			'SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql]',
+		];
+		// La valeur écrit sa fermeture, « for query » puis « made by » avant la coupe : la vraie pile
+		// d'appels a disparu, son « made by » serait pris pour celui de WordPress.
+		yield 'fermeture, for query et made by forgés jusqu\'à une coupe forgée, forme PDO' => [
+			"SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'a' at line 1 for query x made by Jean Dupont 0612345678",
+			'SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql]',
+		];
+		yield 'fermeture, for query et made by forgés jusqu\'à une coupe forgée, wpdb' => [
+			"WordPress database error You have an error in your SQL syntax near 'a' at line 1 for query x made by Jean Dupont 0612345678",
+			'WordPress database error You have an error in your SQL syntax near [sql]',
+		];
+		yield 'fermeture, for query et made by forgés, sortie d\'un connecteur plus ancien' => [
+			'You have an error in your SQL syntax near [sql] at line 1 for query [sql] made by Jean Dupont 0612345678',
+			'You have an error in your SQL syntax near [sql]',
 		];
 		// Le numéro de ligne gardé a quatre chiffres ASCII au plus : un numéro plus long (un téléphone
 		// écrit par la valeur), ou en chiffres d'une autre écriture, n'est pas celui de MySQL.
@@ -475,8 +491,8 @@ final class RedactorTest extends PHPUnitTestCase {
 			'SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql]',
 		];
 		yield 'numéro de ligne à quatre chiffres' => [
-			"You have an error in your SQL syntax near 'Dupont' at line 9999 for query INSERT INTO wp_contacts (nom) VALUES ('Dupont')",
-			'You have an error in your SQL syntax near [sql] at line 9999 for query [sql]',
+			"You have an error in your SQL syntax near 'Dupont' at line 9999",
+			'You have an error in your SQL syntax near [sql] at line 9999',
 		];
 		// Une valeur qui écrit la coupe du message (saut de ligne et « Stack trace: », ligne du journal
 		// finie par « in x:1 ») avant la fermeture « ' at line N » laisse un « near ' » ouvert : tout
