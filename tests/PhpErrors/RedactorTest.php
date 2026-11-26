@@ -416,6 +416,25 @@ final class RedactorTest extends PHPUnitTestCase {
 			"WordPress database error You have an error in your SQL syntax near 'y' at line 1 for query', '0612345678', 'for query z')' at line 1 for query INSERT INTO wp_contacts (nom, tel, msg) VALUES ('x' y' at line 1 for query', '0612345678', 'for query z') made by do_action('x')",
 			'WordPress database error You have an error in your SQL syntax near [sql]',
 		];
+		// wpdb::print_error() écrit « for query » juste après « at line N » : du texte sans guillemet
+		// entre les deux, puis un « for query » (ou une requête) écrit par la valeur, n'est pas le
+		// message, il part avec le fragment.
+		yield 'couche forgée sans guillemet puis for query' => [
+			"You have an error in your SQL syntax near 'Dupont', 'x' at line 1 0612345678 for query ', 'b')' at line 1 for query INSERT INTO wp_contacts (nom, message, tel) VALUES ('O'Dupont', 'x' at line 1 0612345678 for query ', 'b') made by do_action('wp_ajax_contact')",
+			'You have an error in your SQL syntax near [sql]',
+		];
+		yield 'couche forgée sans guillemet puis requête et for query' => [
+			"You have an error in your SQL syntax near 'Dupont', 'x' at line 1 0612345678 INSERT INTO a for query ', 'b')' at line 1 for query INSERT INTO wp_contacts (nom, message, tel) VALUES ('O'Dupont', 'x' at line 1 0612345678 INSERT INTO a for query ', 'b') made by do_action('wp_ajax_contact')",
+			'You have an error in your SQL syntax near [sql]',
+		];
+		yield 'texte sans guillemet puis for query forgé' => [
+			"You have an error in your SQL syntax near 'a' at line 1 Jean Dupont 0612345678 for query b', 'x')' at line 1 for query INSERT INTO wp_contacts (nom, tel) VALUES ('a' at line 1 Jean Dupont 0612345678 for query b', 'x') made by do_action('wp_ajax_contact')",
+			'You have an error in your SQL syntax near [sql]',
+		];
+		yield 'texte sans guillemet puis for query forgé, forme PDO' => [
+			"SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'a' at line 1 Jean Dupont 0612345678 for query b')' at line 1",
+			'SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql]',
+		];
 	}
 
 	#[DataProvider( 'erreurs_de_syntaxe_sql' )]
