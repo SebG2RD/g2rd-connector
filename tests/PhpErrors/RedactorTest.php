@@ -219,7 +219,7 @@ final class RedactorTest extends PHPUnitTestCase {
 		// de suite, puis 12 séries de 37 « made by » refusés chacun à la lecture de la série.
 		yield 'made by forgés répétés' => [ str_repeat( "for query x made by y' at line 1 ", 120 ) ];
 		yield 'séries de made by forgés' => [ 'for query x' . str_repeat( str_repeat( ' made by', 37 ) . "' at line 1", 12 ) ];
-		// Repère « near '…' at line N » : 1 000 caractères lus au plus après chaque « near ' ».
+		// Repère « near ' » répété : le premier suffit, une seule lecture.
 		yield 'near ouvert répété' => [ str_repeat( "near 'x ", 450 ) ];
 		// Premier repère gardé, puis aucune apostrophe hors d'un mot : une seule lecture.
 		yield 'repère SQL puis apostrophes dans les mots' => [ 'syntax error ' . str_repeat( "d'x ", 990 ) ];
@@ -534,12 +534,21 @@ final class RedactorTest extends PHPUnitTestCase {
 			"Uncaught Exception: Couldn't insert row: You have an error in your SQL syntax near 'a' at line 1 Jean Dupont 0612345678",
 			"Uncaught Exception: Couldn't insert row: You have an error in your SQL syntax near [sql]",
 		];
-		// Erreur d'analyse de MySQL sans « SQL syntax » (« %s near '%-.80s' at line %d ») : le repère
-		// est alors « near '…' at line N » lui-même.
+		// Erreur d'analyse de MySQL sans « SQL syntax » (« %s near '%-.80s' at line %d »), ou de SQLite
+		// (« near "…": syntax error », repère après la valeur) : le repère est alors « near » suivi d'un
+		// guillemet, que MySQL écrit avant la valeur et qu'aucune coupe ne retire. Hors message SQL, un
+		// « near ' » part aussi (texte d'un gabarit) : la confidentialité passe avant le diagnostic.
 		yield 'erreur d\'analyse sans SQL syntax, forme mysqli' => [
 			"Uncaught mysqli_sql_exception: memory exhausted near 'Jean Dupont 0612345678' at line 1",
 			'Uncaught mysqli_sql_exception: memory exhausted near [sql]',
 		];
+		yield 'erreur d\'analyse sans SQL syntax, fragment coupé avant sa fermeture' => [
+			"Uncaught mysqli_sql_exception: memory exhausted near 'Jean Dupont 0612345678",
+			'Uncaught mysqli_sql_exception: memory exhausted near [sql]',
+		];
+		yield 'erreur de syntaxe de SQLite, repère après la valeur' => [ 'near "Jean Dupont 0612345678": syntax error', 'near [sql]' ];
+		yield 'near sans numéro de ligne' => [ "Unexpected character near 'é' in template", 'Unexpected character near [sql]' ];
+		yield 'near ouvert hors message SQL' => [ "Unexpected character near 'é", 'Unexpected character near [sql]' ];
 		// Sortie d'un connecteur plus ancien sans repère : ce qui suit un masque [sql] part.
 		yield 'sortie d\'un connecteur plus ancien sans repère' => [ 'Erreur near [sql] at line 1 0612345678 [sql]', 'Erreur near [sql]' ];
 	}
@@ -623,9 +632,6 @@ final class RedactorTest extends PHPUnitTestCase {
 		yield 'colonne en deux parties' => [ "Unknown column 'wp_posts.foo' in 'field list'" ];
 		yield 'colonne en deux parties entre accents graves' => [ 'Champ `wp_posts`.`post_title` vide' ];
 		yield 'vue d\'un gabarit' => [ "View 'admin.settings' not found" ];
-		yield 'near sans numéro de ligne' => [ "Unexpected character near 'é' in template" ];
-		// Un « near ' » resté ouvert n'est masqué que dans un message d'erreur SQL.
-		yield 'near ouvert hors message SQL' => [ "Unexpected character near 'é" ];
 		yield 'version à trois nombres' => [ "Requires version '6.4.0' of WordPress" ];
 		// La règle de la valeur incorrecte ne vise que « Incorrect <type> value: '…' ».
 		yield 'valeur incorrecte hors de MySQL' => [ "Incorrect value for field 'email' in form 'contact'" ];
