@@ -284,7 +284,9 @@ final class LogTail {
 		}
 		foreach ( array_keys( Redactor::default_roots() ) as $root ) {
 			if ( str_starts_with( $path, $root ) ) {
-				return is_file( $path );
+				// Un lien symbolique du site vers un dossier hors open_basedir passe les deux gardes : PHP
+				// refuse le chemin résolu. Avertissement tu, il recopierait le chemin dans le journal.
+				return @is_file( $path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- chemin écrit par une valeur : aucun avertissement (il recopierait le chemin dans le journal).
 			}
 		}
 

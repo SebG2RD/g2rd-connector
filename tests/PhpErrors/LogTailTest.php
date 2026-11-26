@@ -396,6 +396,69 @@ final class LogTailTest extends TestCase {
 		self::assertStringNotContainsString( 'Dupont', (string) json_encode( $groups[0] ) );
 	}
 
+	/**
+	 * Lien symbolique du site vers un dossier hors open_basedir : le chemin est court et sans « .. »,
+	 * is_file() est donc appelé ; PHP y refuse le chemin résolu. L'avertissement doit être tu (@) :
+	 * sans cela PHP l'écrirait dans le journal avec le chemin écrit par la valeur.
+	 */
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_un_lien_symbolique_hors_open_basedir_n_ecrit_aucun_avertissement(): void {
+		$root = str_replace( '\\', '/', (string) realpath( ABSPATH ) ) . '/';
+		$link = $root . 'g2rd-lien-hors-open-basedir';
+		if ( is_link( $link ) ) {
+			unlink( $link ); // Reste d'un essai précédent : open_basedir interdit de le retirer à la fin.
+		}
+		if ( ! function_exists( 'symlink' ) || ! @symlink( dirname( __DIR__, 3 ), $link ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- essai : pas de lien possible, cas sauté.
+			self::markTestSkipped( 'symlink() indisponible.' );
+		}
+		try {
+			$this->write( '[' . gmdate( 'd-M-Y H:i:s', $this->now - 60 ) . " UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry 'Jean in " . $link . "/Jean_Dupont_0612345678:1
+' for key 'tel' in /x/y.php:3
+" );
+			ini_set( 'open_basedir', sys_get_temp_dir() . PATH_SEPARATOR . dirname( __DIR__, 2 ) );
+			stream_wrapper_restore( 'file' );
+			$warnings = [];
+			error_reporting( E_ALL );
+			// Un avertissement tu par @ arrive quand même au gestionnaire : seul compte celui que PHP écrirait.
+			set_error_handler(
+				static function ( int $errno, string $errstr ) use ( &$warnings ): bool {
+					if ( ( error_reporting() & $errno ) !== 0 ) {
+						$warnings[] = $errstr;
+					}
+					return true;
+				},
+				E_WARNING
+			);
+			try {
+				LogTail::run( $this->now, $this->probe() );
+			} finally {
+				restore_error_handler();
+			}
+
+			self::assertSame( [], $warnings );
+			$groups = array_values( Buffer::read( $this->now )['groups'] );
+			self::assertCount( 1, $groups );
+			self::assertSame( '[path]/unknown', $groups[0]['file'] );
+			self::assertStringNotContainsString( 'Dupont', (string) json_encode( $groups[0] ) );
+		} finally {
+			@unlink( $link ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- open_basedir (posé par l'essai) le refuse : le lien est retiré au prochain passage.
+		}
+	}
+
+	/** « Syntax error » seul (json_decode avec JSON_THROW_ON_ERROR) n'est pas une erreur SQL : fichier et ligne gardés. */
+	public function test_une_json_exception_garde_son_fichier_et_sa_ligne(): void {
+		$root = str_replace( '\\', '/', (string) realpath( ABSPATH ) ) . '/';
+		$this->write( '[' . gmdate( 'd-M-Y H:i:s', $this->now - 60 ) . ' UTC] PHP Fatal error:  Uncaught JsonException: Syntax error in ' . $root . "wp-content/plugins/p/x.php:42\nStack trace:\n#0 {main}\n  thrown in " . $root . "wp-content/plugins/p/x.php on line 42\n" );
+
+		LogTail::run( $this->now, $this->probe() );
+
+		$groups = array_values( Buffer::read( $this->now )['groups'] );
+		self::assertCount( 1, $groups );
+		self::assertSame( 'wp-content/plugins/p/x.php', $groups[0]['file'] );
+		self::assertSame( 42, $groups[0]['line'] );
+	}
+
 	public function test_le_rappel_ne_prend_aucun_argument(): void {
 		self::assertSame( 0, ( new \ReflectionMethod( LogTail::class, 'run_now' ) )->getNumberOfParameters() );
 	}
