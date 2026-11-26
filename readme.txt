@@ -107,6 +107,16 @@ Backups are prepared in wp-content/g2rd-backups, inside a folder whose name is d
 
 == Changelog ==
 
+= Unreleased =
+
+* **Fix: a visitor's value can no longer keep part of an SQL syntax error readable.** When PHP error
+  monitoring is on, the piece of the query that MySQL quotes in a syntax error ("near '…' at line N")
+  is removed on the site. A value containing `' at line 1` (a badly escaped query, an unbalanced
+  quote) made the connector stop too early, so the rest of that piece, for example a phone number,
+  was sent as it was. Now the text after "near … at line N" is only kept when nothing in quotes
+  follows before WordPress' "for query", its "made by" list or the end of the message; otherwise it
+  is removed up to "made by".
+
 = 1.18.0-rc.1 =
 
 Pre-release of the 1.18 line, piloted on one site before it is offered to every site.

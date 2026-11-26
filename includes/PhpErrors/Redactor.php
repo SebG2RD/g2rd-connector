@@ -277,6 +277,11 @@ final class Redactor {
 		// Suite d'une valeur incorrecte recopiée par MySQL : colonne, fonction, requête de WordPress,
 		// fichier d'une exception (« in wp-includes/… »), ou fin du texte.
 		$value_end = '(?=\s++(?:for\s++(?:column|function|query)|in)\b|\s*+\z)';
+		// Suite gardée de « near [sql] » (erreur de syntaxe, 1064) : « at line N », puis rien de
+		// guillemeté jusqu'à « for query », « made by » ou la fin du texte (200 caractères au plus).
+		// Une valeur qui contient « ' at line N » arrête le premier motif avant la fin du fragment :
+		// le reste du fragment, qui se ferme par une apostrophe, n'est alors pas gardé.
+		$near_line_end = '\s++at\s++line\s++\d++(?:(?!\bfor\s++query\b|\bmade\s++by\b)[^\'"]){0,200}+(?:\bfor\s++query\b|\bmade\s++by\b|\z)';
 
 		return [
 			// Erreur de syntaxe SQL (1064) : « near '…' at line N » recopie un morceau de la requête et
@@ -298,9 +303,10 @@ final class Redactor {
 			'/(\bfor query )(?:.*(?=\s++made\s++by\b)|.*+)/su' => '$1' . self::MASK_SQL,
 			// De même après un masque de requête déjà posé, « for query » ou non (seconde barrière du
 			// manager) : une valeur finie par « \ » arrête SQL_TAIL avant la fin de la requête. Sauf le
-			// fragment d'une erreur de syntaxe, « near [sql] » suivi de « at line N » : la suite est le
+			// fragment d'une erreur de syntaxe, « near [sql] » suivi de « at line N » sans rien de
+			// guillemeté avant « for query », « made by » ou la fin ($near_line_end) : la suite est le
 			// message. Un « near [sql] » sans « at line » (requête collée après « near ») est pris.
-			'/((?<!near )' . $sql . '|' . $sql . '(?!\s++at\s++line\s++\d))(?:.*(?=\s++made\s++by\b)|.*+)/su' => '$1',
+			'/((?<!near )' . $sql . '|' . $sql . '(?!' . $near_line_end . '))(?:.*(?=\s++made\s++by\b)|.*+)/su' => '$1',
 			// Chaînes de connexion (PDO, Redis, Memcached).
 			'/\b(?:mysqli?|pgsql|sqlite|sqlsrv|rediss?|memcached?):(?:\/\/)?[^\s"\'<>]{1,500}+/i' => self::MASK_DSN,
 			// Compte de base de données : sur Hostinger, il commence par l'identifiant du compte.
