@@ -202,8 +202,8 @@ final class RedactorTest extends PHPUnitTestCase {
 		yield 'masque répété sans made by' => [ str_repeat( '[sql] made b', 330 ) ];
 		yield 'near et masque répétés' => [ str_repeat( 'near [sql] at ', 280 ) ];
 		yield 'fragment de syntaxe répété' => [ str_repeat( 'near [sql] at line 1 ', 190 ) ];
-		// « made by » ne finit pas la suite gardée : 18 lectures de 200 caractères sans « for query » ni
-		// fin, puis tout est pris jusqu'au dernier « made by ».
+		// « made by » ne finit pas la suite gardée : ni « for query » ni la fin du texte juste après le
+		// premier « at line 1 », tout part d'une seule lecture jusqu'à la fin.
 		yield 'fragment de syntaxe suivi de made by' => [ str_repeat( 'near [sql] at line 1 ' . str_repeat( 'fm', 95 ) . ' made by ', 18 ) ];
 		// Couches forgées (« at line N », suite fermée par un guillemet devant un autre « at line N ») :
 		// 300 couches d'un seul tenant, puis 110 fragments qui en ont chacun une.
@@ -454,6 +454,39 @@ final class RedactorTest extends PHPUnitTestCase {
 		];
 		yield 'texte sans guillemet jusqu\'à une coupe forgée, forme PDO' => [
 			"SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'a' at line 1 Jean Dupont 0612345678",
+			'SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql]',
+		];
+		// Le numéro de ligne gardé a quatre chiffres ASCII au plus : un numéro plus long (un téléphone
+		// écrit par la valeur), ou en chiffres d'une autre écriture, n'est pas celui de MySQL.
+		yield 'numéro de ligne forgé, wpdb' => [
+			"WordPress database error You have an error in your SQL syntax near 'a' at line 10612345678 for query b', 'x')' at line 1 for query INSERT INTO wp_contacts (nom, tel) VALUES ('a' at line 10612345678 for query b', 'x') made by do_action('wp_ajax_contact')",
+			'WordPress database error You have an error in your SQL syntax near [sql]',
+		];
+		yield 'numéro de ligne forgé, forme PDO' => [
+			"SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'a' at line 10612345678",
+			'SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql]',
+		];
+		yield 'numéro de ligne forgé, sortie d\'un connecteur plus ancien' => [
+			'You have an error in your SQL syntax near [sql] at line 10612345678 for query [sql]',
+			'You have an error in your SQL syntax near [sql]',
+		];
+		yield 'numéro de ligne en chiffres d\'une autre écriture' => [
+			"SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'a' at line 1٠٦١٢٣٤٥٦٧٨",
+			'SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql]',
+		];
+		yield 'numéro de ligne à quatre chiffres' => [
+			"You have an error in your SQL syntax near 'Dupont' at line 9999 for query INSERT INTO wp_contacts (nom) VALUES ('Dupont')",
+			'You have an error in your SQL syntax near [sql] at line 9999 for query [sql]',
+		];
+		// Une valeur qui écrit la coupe du message (saut de ligne et « Stack trace: », ligne du journal
+		// finie par « in x:1 ») avant la fermeture « ' at line N » laisse un « near ' » ouvert : tout
+		// ce qui le suit part.
+		yield 'fragment coupé avant sa fermeture' => [
+			"You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'Jean Dupont 0612345678",
+			'You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql]',
+		];
+		yield 'fragment coupé avant sa fermeture, forme PDO' => [
+			"SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'Jean Dupont 0612345678",
 			'SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql]',
 		];
 	}
