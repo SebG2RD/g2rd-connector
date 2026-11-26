@@ -126,10 +126,12 @@ Backups are prepared in wp-content/g2rd-backups, inside a folder whose name is d
   example "You have an error in your SQL syntax; … near [sql]" or "Duplicate entry [sql]". Lost on
   purpose: "at line N", "for key '…'", "for column '…'", "at row N", the table or column named after
   the quote, WordPress' "for query … made by …", and the quoted text after "near" in a message that
-  is not an SQL error. When such a value also writes "in <file>:<line>" then a line break, the line
-  of PHP's error log ends inside it: for an SQL error, the file and line read from the log are now
-  kept only when they name a real file of the site, otherwise they are sent as "[path]/unknown" and
-  line 0.
+  is not an SQL error. Quotes written as HTML entities ("&#039;", "&quot;"), as in an exception
+  raised with esc_html( $wpdb->last_error ) or the error that wpdb prints in HTML, are decoded
+  first and count as quotes. When such a value also writes "in <file>:<line>" then a line break,
+  the line of PHP's error log ends inside it: for an SQL error read from the log, the line is now
+  always sent as 0, and the file is kept only when it exists on the site, otherwise it is sent as
+  "[path]/unknown". The line of an SQL error caught as a fatal error by PHP itself is kept.
 
 = 1.18.0-rc.1 =
 

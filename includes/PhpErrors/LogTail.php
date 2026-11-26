@@ -240,10 +240,12 @@ final class LogTail {
 		$level      = self::LEVELS[ $matches['kind'] ];
 		$number     = null !== $matches['line'] ? (int) $matches['line'] : (int) ( $matches['line2'] ?? 0 );
 		$occurrence = Normalizer::occurrence( $level, (string) $matches['file'], $number, (string) $matches['message'], Normalizer::SOURCE_LOG );
-		if ( str_contains( $occurrence['message'], Redactor::MASK_SQL ) && ! self::site_file( (string) $matches['file'] ) ) {
+		if ( str_contains( $occurrence['message'], Redactor::MASK_SQL ) ) {
 			// Une valeur recopiée par MySQL qui écrit « in <fichier>:<ligne> » puis un saut de ligne finit
-			// la ligne : le fichier et la ligne lus viennent d'elle, pas de PHP.
-			$occurrence = Normalizer::occurrence( $level, Redactor::MASK_PATH . '/unknown', 0, (string) $matches['message'], Normalizer::SOURCE_LOG );
+			// la ligne : le fichier et la ligne lus peuvent venir d'elle. Le fichier n'est gardé que s'il
+			// existe sur le site ; un vrai fichier ne prouve pas la ligne, toujours 0.
+			$file       = self::site_file( (string) $matches['file'] ) ? (string) $matches['file'] : Redactor::MASK_PATH . '/unknown';
+			$occurrence = Normalizer::occurrence( $level, $file, 0, (string) $matches['message'], Normalizer::SOURCE_LOG );
 		}
 		$at         = self::date( (string) $matches['date'], $now );
 		$key        = $occurrence['type'] . '|' . ( $occurrence['slug'] ?? '' );

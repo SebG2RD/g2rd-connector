@@ -238,12 +238,15 @@ final class Redactor {
 	/**
 	 * Texte borné à 16 000 octets avant tout traitement (mémoire et temps constants quelle que
 	 * soit la taille du message), octets invalides remplacés (sinon json_encode() refuserait tout
-	 * le bloc ; un caractère coupé par la borne l'est aussi), texte ramené à 4 000 caractères,
+	 * le bloc ; un caractère coupé par la borne l'est aussi), entités HTML décodées comme dans
+	 * PhpErrorText::clean() du manager (« &#039; » d'un esc_html( $wpdb->last_error ) ou de
+	 * wpdb::print_error() ouvre une valeur comme une apostrophe), texte ramené à 4 000 caractères,
 	 * caractères de contrôle, de mise en forme invisibles et blancs ramenés à une espace.
 	 */
 	private static function normalize( string $text ): string {
 		$text  = substr( $text, 0, self::INPUT_MAX_BYTES );
 		$text  = htmlspecialchars_decode( htmlspecialchars( $text, ENT_NOQUOTES | ENT_SUBSTITUTE, 'UTF-8' ), ENT_NOQUOTES );
+		$text  = html_entity_decode( $text, ENT_QUOTES | ENT_HTML5, 'UTF-8' );
 		$text  = mb_substr( $text, 0, self::INPUT_MAX_CHARS );
 		$clean = preg_replace( '/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\s]++/u', ' ', $text );
 
