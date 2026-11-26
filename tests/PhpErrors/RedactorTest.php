@@ -202,8 +202,13 @@ final class RedactorTest extends PHPUnitTestCase {
 		yield 'masque répété sans made by' => [ str_repeat( '[sql] made b', 330 ) ];
 		yield 'near et masque répétés' => [ str_repeat( 'near [sql] at ', 280 ) ];
 		yield 'fragment de syntaxe répété' => [ str_repeat( 'near [sql] at line 1 ', 190 ) ];
-		// Chaque fragment est gardé (« made by » sans guillemet avant) : 18 lectures de 200 caractères.
+		// « made by » ne finit pas la suite gardée : 18 lectures de 200 caractères sans « for query » ni
+		// fin, puis tout est pris jusqu'au dernier « made by ».
 		yield 'fragment de syntaxe suivi de made by' => [ str_repeat( 'near [sql] at line 1 ' . str_repeat( 'fm', 95 ) . ' made by ', 18 ) ];
+		// Couches forgées (« at line N », suite fermée par un guillemet devant un autre « at line N ») :
+		// 300 couches d'un seul tenant, puis 110 fragments qui en ont chacun une.
+		yield 'couches forgées à la suite' => [ 'near [sql]' . str_repeat( " at line 1 x'", 300 ) ];
+		yield 'fragments forgés répétés' => [ str_repeat( "near [sql] at line 1 x' at line 1 ", 110 ) ];
 	}
 
 	#[DataProvider( 'textes_hostiles_sous_la_borne' )]
@@ -365,11 +370,28 @@ final class RedactorTest extends PHPUnitTestCase {
 			"You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '' at line 1",
 			'You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql] at line 1',
 		];
-		// Une valeur qui contient « ' at line 1 » arrête le fragment trop tôt : la suite, guillemetée,
-		// appartient encore au fragment et part avec lui.
+		// Une valeur qui contient « ' at line 1 » arrête le fragment trop tôt : chaque couche forgée,
+		// jusqu'au guillemet qui précède la vraie fin « ' at line N », part avec le fragment, même si
+		// elle écrit « made by » ou « for query' », ou si un motif de requête en mangerait la fermeture.
 		yield 'fin de fragment forgée par une valeur' => [
 			"You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'Dupont', 'x' at line 1 c', '0612345678')' at line 1 for query INSERT INTO wp_contacts (nom, message, tel) VALUES ('O'Dupont', 'x' at line 1 c', '0612345678')",
-			'You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near [sql]',
+			'You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near [sql] at line 1 for query [sql]',
+		];
+		yield 'fin de fragment forgée suivie de made by' => [
+			"You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'Dupont', 'x' at line 1 made by', '0612345678')' at line 1 for query INSERT INTO wp_contacts (nom, message, tel) VALUES ('O'Dupont', 'x' at line 1 made by', '0612345678') made by do_action('wp_ajax_contact')",
+			'You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near [sql] at line 1 for query [sql]',
+		];
+		yield 'fin de fragment forgée suivie de for query collé' => [
+			"You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'Dupont', 'x' at line 1 for query', '0612345678')' at line 1 for query INSERT INTO wp_contacts (nom, message, tel) VALUES ('O'Dupont', 'x' at line 1 for query', '0612345678')",
+			'You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near [sql] at line 1 for query [sql]',
+		];
+		yield 'fin de fragment forgée suivie d\'une requête' => [
+			"You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'Dupont', 'x' at line 1 0612345678 INSERT INTO a', 'b')' at line 1 for query INSERT INTO wp_contacts (nom, message, tel) VALUES ('O'Dupont', 'x' at line 1 0612345678 INSERT INTO a', 'b')",
+			'You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near [sql] at line 1 for query [sql]',
+		];
+		yield 'deux couches forgées' => [
+			"You have an error in your SQL syntax near 'Dupont', 'x' at line 1 y' at line 1 made by', '0612345678')' at line 1 for query INSERT INTO wp_contacts (nom, message, tel) VALUES ('O'Dupont', 'x' at line 1 y' at line 1 made by', '0612345678')",
+			'You have an error in your SQL syntax near [sql] at line 1 for query [sql]',
 		];
 	}
 
