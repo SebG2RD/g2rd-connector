@@ -126,7 +126,10 @@ Backups are prepared in wp-content/g2rd-backups, inside a folder whose name is d
   "at line 10612345678" to pass a phone number off as the line number, or use digits of another
   script. When a value places that cut before the closing `' at line N`, the piece is left open: in
   an SQL error message ("SQL syntax", "SQLSTATE", "database error" or "syntax error" before it),
-  everything after "near '" is now removed up to the end of the message.
+  everything after "near '" is now removed up to the end of the message. This only applies when no
+  quote comes before "near", as in every real syntax error: a value that MySQL copies between
+  quotes ("Duplicate entry '…' for key", "Incorrect integer value: '…' for column") and that writes
+  "near '" itself is still removed whole, and "for key" or "for column" stays readable.
 
 = 1.18.0-rc.1 =
 

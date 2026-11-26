@@ -299,7 +299,9 @@ final class Redactor {
 			// coupe du message (saut de ligne et « Stack trace: », ligne du journal finie par « in x:1 »)
 			// avant la fermeture « ' at line N ». Tout part jusqu'à la fin du texte. Ancré, premier
 			// repère gardé (groupe atomique) : une seule lecture du texte.
-			'/\A((?>.*?(?i:sql syntax|sqlstate\[|database error|syntax error)).*?\bnear\s++)\'.*+/su' => '$1' . self::MASK_SQL,
+			// Aucune apostrophe avant « near » : le début d'une vraie erreur 1064 (MySQL, wpdb, PDO, mysqli)
+			// n'en a jamais, une valeur recopiée par MySQL (« Duplicate entry '… », repère compris) en ouvre une.
+			'/\A((?>[^\']*?(?i:sql syntax|sqlstate\[|database error|syntax error))[^\']*?\bnear\s++)\'.*+/su' => '$1' . self::MASK_SQL,
 			// Une valeur qui contient « ' at line N » arrête le motif précédent avant la vraie fin du
 			// fragment : chaque couche forgée (« at line N », puis une suite fermée par un guillemet suivi
 			// d'un autre « at line N ») part avec lui, avant que les motifs de requête n'en mangent la
