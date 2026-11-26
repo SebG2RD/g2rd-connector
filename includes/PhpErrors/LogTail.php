@@ -272,9 +272,16 @@ final class LogTail {
 		];
 	}
 
-	/** Vrai fichier du site : sous ABSPATH ou WP_CONTENT_DIR, et présent. */
+	/**
+	 * Vrai fichier du site : sous ABSPATH ou WP_CONTENT_DIR, et présent. Un chemin qui remonte
+	 * (« .. ») ou plus long que PHP_MAXPATHLEN n'est pas passé à is_file() : sous open_basedir, PHP
+	 * écrirait dans le journal un avertissement qui recopie ce chemin, écrit par la valeur.
+	 */
 	private static function site_file( string $file ): bool {
 		$path = str_replace( '\\', '/', $file );
+		if ( str_contains( $path, '..' ) || strlen( $path ) >= PHP_MAXPATHLEN ) {
+			return false;
+		}
 		foreach ( array_keys( Redactor::default_roots() ) as $root ) {
 			if ( str_starts_with( $path, $root ) ) {
 				return is_file( $path );
