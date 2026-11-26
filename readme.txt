@@ -116,8 +116,9 @@ Backups are prepared in wp-content/g2rd-backups, inside a folder whose name is d
   was sent as it was. Now every part of that piece forged by a value (up to the quote before the
   real closing `' at line N`) is removed with it, even when the value writes "made by", "for query"
   or a query of its own. The text after "near … at line N" is then only kept when nothing in quotes
-  follows before WordPress' "for query" or the end of the message; otherwise it is removed up to
-  WordPress' "made by" list.
+  follows before WordPress' "for query " (followed by a space) or the end of the message; otherwise
+  it is removed up to WordPress' "made by" list. A "made by" followed by a quote and "at line N" is
+  written by a value, not by WordPress: the query is removed past it.
 
 = 1.18.0-rc.1 =
 

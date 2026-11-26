@@ -280,7 +280,12 @@ final class Redactor {
 		// Suite gardée de « near [sql] » (erreur de syntaxe, 1064) : « at line N », puis rien de
 		// guillemeté jusqu'à « for query » ou la fin du texte (200 caractères au plus). « made by »
 		// ne compte pas : wpdb::print_error() écrit toujours « for query » avant, une valeur peut l'écrire.
-		$near_line_end = '\s++at\s++line\s++\d++(?:(?!\bfor\s++query\b)[^\'"]){0,200}+(?:\bfor\s++query\b|\z)';
+		// « for query » suivi d'une espace seulement, comme la règle des couches et la règle « for query ».
+		$near_line_end = '\s++at\s++line\s++\d++(?:(?!\bfor query )[^\'"]){0,200}+(?:\bfor query |\z)';
+		// Fin de la requête avant la pile d'appels de WordPress : un « made by » suivi, dans les 300
+		// caractères, d'un guillemet collé à « at line N » est écrit par une valeur (le vrai fragment
+		// est coupé à 80 caractères par MySQL et MariaDB). Répétition possessive bornée : coût linéaire.
+		$made_by = '(?=\s++made\s++by\b(?!(?:[^\'"]|[\'"](?!\s++at\s++line\s++\d)){0,300}+[\'"]\s++at\s++line\s++\d))';
 
 		return [
 			// Erreur de syntaxe SQL (1064) : « near '…' at line N » recopie un morceau de la requête et
@@ -298,20 +303,20 @@ final class Redactor {
 			'/\b(?:SELECT\b[^;]{0,300}?\bFROM\b|INSERT\s++(?:IGNORE\s++)?INTO\b|REPLACE\s++INTO\b|UPDATE\s++`?[\w.]++`?\s++SET\b|DELETE\s++FROM\b|(?:ALTER|DROP|CREATE|TRUNCATE)\s++TABLE\b)' . self::SQL_TAIL . '/u' => self::MASK_SQL,
 			'/\b(?:select\b[^;]{0,300}?\bfrom\s++`?\w*_\w*|insert\s++(?:ignore\s++)?into\s++`?\w*_\w*|update\s++`?\w*_\w*`?\s++set\b|delete\s++from\s++`?\w*_\w*)' . self::SQL_TAIL . '/iu' => self::MASK_SQL,
 			// Après « for query » (wpdb::print_error(), « for query %s made by %s ») : tout ce qui suit
-			// est la requête jusqu'au dernier « made by » (pile d'appels de WordPress), sinon jusqu'à la
+			// est la requête jusqu'au dernier « made by » (pile d'appels de WordPress, $made_by), sinon jusqu'à la
 			// fin, que son en-tête soit reconnu ou non par les deux motifs précédents (SHOW, CALL,
 			// CREATE TRIGGER, « ; » ou plus de 300 caractères entre SELECT et FROM) et quelle que soit la
 			// lecture des guillemets (une valeur finie par « \ » sous NO_BACKSLASH_ESCAPES décale
 			// SQL_TAIL). Le manager ne l'applique qu'après un masque déjà posé. Drapeau s : une requête
 			// sur plusieurs lignes est prise entière, même si normalize() ne ramenait plus les sauts de
 			// ligne à une espace.
-			'/(\bfor query )(?:.*(?=\s++made\s++by\b)|.*+)/su' => '$1' . self::MASK_SQL,
+			'/(\bfor query )(?:.*' . $made_by . '|.*+)/su' => '$1' . self::MASK_SQL,
 			// De même après un masque de requête déjà posé, « for query » ou non (seconde barrière du
 			// manager) : une valeur finie par « \ » arrête SQL_TAIL avant la fin de la requête. Sauf le
 			// fragment d'une erreur de syntaxe, « near [sql] » suivi de « at line N » sans rien de
 			// guillemeté avant « for query » ou la fin ($near_line_end) : la suite est le
 			// message. Un « near [sql] » sans « at line » (requête collée après « near ») est pris.
-			'/((?<!near )' . $sql . '|' . $sql . '(?!' . $near_line_end . '))(?:.*(?=\s++made\s++by\b)|.*+)/su' => '$1',
+			'/((?<!near )' . $sql . '|' . $sql . '(?!' . $near_line_end . '))(?:.*' . $made_by . '|.*+)/su' => '$1',
 			// Chaînes de connexion (PDO, Redis, Memcached).
 			'/\b(?:mysqli?|pgsql|sqlite|sqlsrv|rediss?|memcached?):(?:\/\/)?[^\s"\'<>]{1,500}+/i' => self::MASK_DSN,
 			// Compte de base de données : sur Hostinger, il commence par l'identifiant du compte.
