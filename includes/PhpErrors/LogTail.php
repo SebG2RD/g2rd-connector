@@ -240,6 +240,11 @@ final class LogTail {
 		$level      = self::LEVELS[ $matches['kind'] ];
 		$number     = null !== $matches['line'] ? (int) $matches['line'] : (int) ( $matches['line2'] ?? 0 );
 		$occurrence = Normalizer::occurrence( $level, (string) $matches['file'], $number, (string) $matches['message'], Normalizer::SOURCE_LOG );
+		if ( str_contains( $occurrence['message'], Redactor::MASK_SQL ) && ! self::site_file( (string) $matches['file'] ) ) {
+			// Une valeur recopiée par MySQL qui écrit « in <fichier>:<ligne> » puis un saut de ligne finit
+			// la ligne : le fichier et la ligne lus viennent d'elle, pas de PHP.
+			$occurrence = Normalizer::occurrence( $level, Redactor::MASK_PATH . '/unknown', 0, (string) $matches['message'], Normalizer::SOURCE_LOG );
+		}
 		$at         = self::date( (string) $matches['date'], $now );
 		$key        = $occurrence['type'] . '|' . ( $occurrence['slug'] ?? '' );
 		if ( ! array_key_exists( $key, $versions ) ) {
@@ -262,6 +267,18 @@ final class LogTail {
 			'last_seen'  => $at,
 			'count'      => 1,
 		];
+	}
+
+	/** Vrai fichier du site : sous ABSPATH ou WP_CONTENT_DIR, et présent. */
+	private static function site_file( string $file ): bool {
+		$path = str_replace( '\\', '/', $file );
+		foreach ( array_keys( Redactor::default_roots() ) as $root ) {
+			if ( str_starts_with( $path, $root ) ) {
+				return is_file( $path );
+			}
+		}
+
+		return false;
 	}
 
 	/** Date d'une ligne (« 25-Oct-2026 06:00:12 UTC ») ; à défaut, ou dans le futur, l'heure du passage. */

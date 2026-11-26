@@ -101,10 +101,11 @@ final class Redactor {
 	 * préfixe de wpdb::print_error(), valeurs recopiées par MySQL (en double, incorrectes,
 	 * tronquées), valeur trop longue, et « near » suivi d'un guillemet (erreur d'analyse sans « SQL
 	 * syntax », « memory exhausted near '… », ou de SQLite, « near "…": syntax error »). Chacun est
-	 * écrit avant la valeur : aucune coupe choisie par elle ne le retire. Même liste que
-	 * PhpErrorText::SQL_MARKERS du manager.
+	 * écrit avant la valeur : aucune coupe choisie par elle ne le retire. « syntax error, unexpected »
+	 * est l'erreur d'analyse de PHP (E_PARSE, ParseError), du code et jamais une valeur : les erreurs
+	 * SQL en ont un autre repère avant la valeur. Même liste que PhpErrorText::SQL_MARKERS du manager.
 	 */
-	private const SQL_MARKERS = 'sql syntax|sqlstate\[|database error|syntax error|duplicate entry|incorrect (?:[^\s:\']{1,32}+ ){1,3}value|truncated incorrect|data too long|\bnear(?= [\'"`])';
+	private const SQL_MARKERS = 'sql syntax|sqlstate\[|database error|syntax error(?!, unexpected\b)|duplicate entry|incorrect (?:[^\s:\']{1,32}+ ){1,3}value|truncated incorrect|data too long|\bnear(?= [\'"`])';
 
 	/**
 	 * Texte filtré, `$max_chars` caractères au plus.
