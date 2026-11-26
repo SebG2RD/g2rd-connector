@@ -435,6 +435,16 @@ final class RedactorTest extends PHPUnitTestCase {
 			"SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'a' at line 1 Jean Dupont 0612345678 for query b')' at line 1",
 			'SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql]',
 		];
+		// Le « made by » écrit par la valeur avant son faux « for query » n'est pas la pile d'appels de
+		// WordPress : rien de ce qui suit « near [sql] » ne reste.
+		yield 'texte sans guillemet puis made by et for query forgés' => [
+			"You have an error in your SQL syntax near 'a' at line 1 Jean Dupont made by 0612345678 for query b', 'x')' at line 1 for query INSERT INTO wp_contacts (nom, tel) VALUES ('a' at line 1 Jean Dupont made by 0612345678 for query b', 'x') made by do_action('wp_ajax_contact')",
+			'You have an error in your SQL syntax near [sql]',
+		];
+		yield 'made by puis for query forgés, forme PDO' => [
+			"SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'a' at line 1 made by 0612345678 Dupont for query b')' at line 1",
+			'SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql]',
+		];
 	}
 
 	#[DataProvider( 'erreurs_de_syntaxe_sql' )]
