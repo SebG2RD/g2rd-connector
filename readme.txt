@@ -131,7 +131,9 @@ Backups are prepared in wp-content/g2rd-backups, inside a folder whose name is d
   first and count as quotes. When such a value also writes "in <file>:<line>" then a line break,
   the line of PHP's error log ends inside it: for an SQL error read from the log, the line is now
   always sent as 0, and the file is kept only when it exists on the site, otherwise it is sent as
-  "[path]/unknown". The line of an SQL error caught as a fatal error by PHP itself is kept.
+  "[path]/unknown". The marker is looked for in the whole message of the log line, not only in the
+  500 characters that are sent: a long message, for example one wrapped by a plugin, is covered
+  too. The line of an SQL error caught as a fatal error by PHP itself is kept.
 
 = 1.18.0-rc.1 =
 

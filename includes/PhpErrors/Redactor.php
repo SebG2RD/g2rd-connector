@@ -148,6 +148,16 @@ final class Redactor {
 	}
 
 	/**
+	 * Vrai si le texte brut contient un repère d'erreur SQL (SQL_MARKERS), lu comme redact() le lit
+	 * (entités HTML décodées, blancs ramenés à une espace) mais sans la coupe à 4 000 caractères ni
+	 * celle à 500 du texte rendu : le masque [sql] peut tomber au-delà d'elles, pas le repère. Borné
+	 * à 16 000 octets comme redact() (une ligne du journal en fait 8 Ko au plus).
+	 */
+	public static function is_sql_error( string $text ): bool {
+		return 1 === preg_match( '/' . self::SQL_MARKERS . '/iu', self::normalize( $text, self::INPUT_MAX_BYTES ) );
+	}
+
+	/**
 	 * Valeurs du site masquées par la barrière propre au connecteur : DB_NAME, DB_USER, DB_HOST et
 	 * DB_PASSWORD quand ces constantes sont définies, plus l'hôte de DB_HOST sans son port ni sa
 	 * socket (« srv123.hstgr.io:3306 » donne aussi « srv123.hstgr.io »). DB_PASSWORD rattrape un
@@ -240,14 +250,15 @@ final class Redactor {
 	 * soit la taille du message), octets invalides remplacés (sinon json_encode() refuserait tout
 	 * le bloc ; un caractère coupé par la borne l'est aussi), entités HTML décodées comme dans
 	 * PhpErrorText::clean() du manager (« &#039; » d'un esc_html( $wpdb->last_error ) ou de
-	 * wpdb::print_error() ouvre une valeur comme une apostrophe), texte ramené à 4 000 caractères,
-	 * caractères de contrôle, de mise en forme invisibles et blancs ramenés à une espace.
+	 * wpdb::print_error() ouvre une valeur comme une apostrophe), texte ramené à `$max_chars`
+	 * caractères (4 000), caractères de contrôle, de mise en forme invisibles et blancs ramenés à
+	 * une espace.
 	 */
-	private static function normalize( string $text ): string {
+	private static function normalize( string $text, int $max_chars = self::INPUT_MAX_CHARS ): string {
 		$text  = substr( $text, 0, self::INPUT_MAX_BYTES );
 		$text  = htmlspecialchars_decode( htmlspecialchars( $text, ENT_NOQUOTES | ENT_SUBSTITUTE, 'UTF-8' ), ENT_NOQUOTES );
 		$text  = html_entity_decode( $text, ENT_QUOTES | ENT_HTML5, 'UTF-8' );
-		$text  = mb_substr( $text, 0, self::INPUT_MAX_CHARS );
+		$text  = mb_substr( $text, 0, $max_chars );
 		$clean = preg_replace( '/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\s]++/u', ' ', $text );
 
 		return null === $clean ? '' : $clean;
