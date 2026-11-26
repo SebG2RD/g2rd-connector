@@ -606,6 +606,15 @@ final class RedactorTest extends PHPUnitTestCase {
 		// Sortie d'un connecteur plus ancien : la valeur coupée avant sa fermeture suit « '[secret]' ».
 		yield 'valeur en double, sortie d\'un connecteur plus ancien' => [ "WordPress database error Duplicate entry '[secret]'Dupont 0612345678", 'WordPress database error Duplicate entry [sql]' ];
 		yield 'valeur incorrecte, sortie d\'un connecteur plus ancien' => [ "Incorrect integer value: '[secret]'Dupont 0612345678", 'Incorrect integer value: [sql]' ];
+		// Apostrophes en entités HTML : exception levée avec esc_html( $wpdb->last_error ) (WPCS 3),
+		// erreur affichée par wpdb::print_error() (htmlspecialchars, ENT_QUOTES), reprise en sortie parasite.
+		yield 'valeur en double échappée par esc_html()' => [ 'Uncaught Exception: Duplicate entry &#039;Jean Dupont 0612345678&#039; for key &#039;email&#039;', 'Uncaught Exception: Duplicate entry [sql]' ];
+		yield 'erreur affichée en HTML par wpdb::print_error()' => [
+			'<div id="error"><p class="wpdberror"><strong>WordPress database error:</strong> [Duplicate entry &#039;Jean Dupont 0612345678&#039; for key &#039;email&#039;]<br /><code>INSERT INTO wp_x (a) VALUES (&#039;Jean Dupont 0612345678&#039;)</code></p></div>',
+			'<div id="error"><p class="wpdberror"><strong>WordPress database error:</strong> [Duplicate entry [sql]',
+		];
+		yield 'valeur incorrecte, apostrophe en entité HTML5' => [ 'Incorrect integer value: &apos;O&apos;Dupont 0612345678&apos; for column &apos;tel&apos;', 'Incorrect integer value: [sql]' ];
+		yield 'erreur de SQLite, guillemets en entités HTML' => [ 'near &quot;Jean Dupont 0612345678&quot;: syntax error', 'near [sql]' ];
 	}
 
 	#[DataProvider( 'valeurs_recopiees_par_mysql' )]

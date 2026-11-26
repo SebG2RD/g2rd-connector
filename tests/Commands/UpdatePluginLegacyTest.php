@@ -452,6 +452,28 @@ final class UpdatePluginLegacyTest extends TestCase {
 	}
 
 	/**
+	 * Erreur de base affichée par wpdb::print_error() (WP_DEBUG_DISPLAY) pendant la commande : en
+	 * HTML, ses apostrophes sont des entités (« &#039; »). Elles ouvrent la valeur recopiée par
+	 * MySQL comme une apostrophe : rien d'elle ne reste dans `stray_output`.
+	 */
+	public function test_the_html_error_printed_by_wpdb_loses_its_value_in_stray_output(): void {
+		Plugin_Upgrader::$on_complete = static function (): void {
+			echo '<div id="error"><p class="wpdberror"><strong>WordPress database error:</strong> [Duplicate entry &#039;Jean Dupont 0612345678&#039; for key &#039;email&#039;]<br /><code>INSERT INTO wp_x (a) VALUES (&#039;Jean Dupont 0612345678&#039;)</code></p></div>';
+		};
+
+		$level = ob_get_level();
+		try {
+			$outcome = CommandExecutor::run( 'update_plugin', [ 'file' => 'akismet/akismet.php' ] );
+		} finally {
+			while ( ob_get_level() > $level ) {
+				ob_end_clean();
+			}
+		}
+
+		self::assertSame( '<div id="error"><p class="wpdberror"><strong>WordPress database error:</strong> [Duplicate entry [sql]', $outcome['stray_output'] ?? null );
+	}
+
+	/**
 	 * Le marqueur « fichiers installés » ne vaut que pour la copie de CETTE extension,
 	 * réussie : une installation d'une autre extension pendant la copie (mise à jour
 	 * imbriquée), ou une copie qu'un filtre `upgrader_post_install` déclare en échec, ne
@@ -535,6 +557,12 @@ final class UpdatePluginLegacyTest extends TestCase {
 				'Query failed: INSERT INTO wp_postmeta (meta_key, meta_value) VALUES (\'tel\', \'Jean Dupont 0612345678\') in /home/u123456789/x.php:3',
 				'Query failed: [sql]',
 				[ 'Jean Dupont', '0612345678', 'u123456789' ],
+			],
+			// throw new Exception( esc_html( $wpdb->last_error ) ) (WPCS 3) : apostrophes en entités HTML.
+			'valeur en double échappée par esc_html()' => [
+				'Duplicate entry &#039;Jean Dupont 0612345678&#039; for key &#039;email&#039;',
+				'Duplicate entry [sql]',
+				[ 'Jean Dupont', '0612345678' ],
 			],
 		];
 	}

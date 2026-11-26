@@ -308,23 +308,38 @@ final class LogTailTest extends TestCase {
 		}
 	}
 
-	/** Un vrai fichier du site reste celui de l'erreur SQL, même masquée. */
-	public function test_le_vrai_fichier_d_une_erreur_sql_reste_lisible(): void {
-		$dir = str_replace( '\\', '/', (string) realpath( ABSPATH ) ) . '/wp-content/plugins/p';
+	/**
+	 * Erreur SQL lue dans le journal, sur un vrai fichier du site : la valeur a pu écrire ce fichier
+	 * et son numéro de ligne (« in <fichier>:612345678 » puis saut de ligne). Un vrai fichier ne
+	 * prouve pas la ligne : le fichier reste, la ligne part à 0.
+	 *
+	 * @return iterable<string, array{string, string}>
+	 */
+	public static function erreurs_sql_sur_un_vrai_fichier(): iterable {
+		yield 'ligne écrite par PHP' => [ "Warning:  mysqli_query(): (23000/1062): Duplicate entry 'Jean Dupont 0612345678' for key 'tel' in {root}wp-content/plugins/p/p.php on line 12\n", 'mysqli_query(): (23000/1062): Duplicate entry [sql]' ];
+		yield 'ligne écrite par la valeur' => [ "Fatal error:  Uncaught PDOException: SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry 'Jean in {root}wp-content/plugins/p/p.php:612345678\n' for key 'tel' in /x/y.php:3\nStack trace:\n#0 {main}\n  thrown in /x/y.php on line 3\n", 'Uncaught PDOException: SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry [sql]' ];
+	}
+
+	#[DataProvider( 'erreurs_sql_sur_un_vrai_fichier' )]
+	public function test_le_vrai_fichier_d_une_erreur_sql_reste_lisible_et_sa_ligne_part( string $entry, string $message ): void {
+		$root = str_replace( '\\', '/', (string) realpath( ABSPATH ) ) . '/';
+		$dir  = $root . 'wp-content/plugins/p';
 		if ( ! is_dir( $dir ) ) {
 			mkdir( $dir, 0777, true );
 		}
 		file_put_contents( $dir . '/p.php', "<?php\n" );
 		try {
-			$this->write( $this->line( 'Warning', "mysqli_query(): (23000/1062): Duplicate entry 'Jean Dupont 0612345678' for key 'tel'", 'wp-content/plugins/p/p.php on line 12' ) );
+			$this->write( '[' . gmdate( 'd-M-Y H:i:s', $this->now - 60 ) . ' UTC] PHP ' . str_replace( '{root}', $root, $entry ) );
 
 			LogTail::run( $this->now, $this->probe() );
 
-			$group = array_values( Buffer::read( $this->now )['groups'] )[0];
-			self::assertSame( 'mysqli_query(): (23000/1062): Duplicate entry [sql]', $group['message'] );
-			self::assertSame( 'wp-content/plugins/p/p.php', $group['file'] );
-			self::assertSame( 'p', $group['slug'] );
-			self::assertSame( 12, $group['line'] );
+			$groups = array_values( Buffer::read( $this->now )['groups'] );
+			self::assertCount( 1, $groups );
+			self::assertSame( $message, $groups[0]['message'] );
+			self::assertSame( 'wp-content/plugins/p/p.php', $groups[0]['file'] );
+			self::assertSame( 'p', $groups[0]['slug'] );
+			self::assertSame( 0, $groups[0]['line'] );
+			self::assertStringNotContainsString( '612345678', (string) json_encode( $groups[0] ) );
 		} finally {
 			unlink( $dir . '/p.php' );
 		}
