@@ -113,9 +113,11 @@ Backups are prepared in wp-content/g2rd-backups, inside a folder whose name is d
   monitoring is on, the piece of the query that MySQL quotes in a syntax error ("near '…' at line N")
   is removed on the site. A value containing `' at line 1` (a badly escaped query, an unbalanced
   quote) made the connector stop too early, so the rest of that piece, for example a phone number,
-  was sent as it was. Now the text after "near … at line N" is only kept when nothing in quotes
-  follows before WordPress' "for query", its "made by" list or the end of the message; otherwise it
-  is removed up to "made by".
+  was sent as it was. Now every part of that piece forged by a value (up to the quote before the
+  real closing `' at line N`) is removed with it, even when the value writes "made by", "for query"
+  or a query of its own. The text after "near … at line N" is then only kept when nothing in quotes
+  follows before WordPress' "for query" or the end of the message; otherwise it is removed up to
+  WordPress' "made by" list.
 
 = 1.18.0-rc.1 =
 

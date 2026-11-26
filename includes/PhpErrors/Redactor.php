@@ -261,7 +261,7 @@ final class Redactor {
 
 	/**
 	 * Motifs, dans l'ordre d'application : fragment d'une erreur de syntaxe SQL (« near '…' at
-	 * line N », 1064), requêtes SQL (elles emportent leurs valeurs), chaînes de connexion, comptes
+	 * line N », 1064, et ses couches forgées par une valeur), requêtes SQL (elles emportent leurs valeurs), chaînes de connexion, comptes
 	 * de base (« 'compte'@'hôte' », entre apostrophes ou accents graves, définisseur compris), noms
 	 * de base des messages MySQL et MariaDB (tables, routines, vues, colonnes en trois parties,
 	 * noms en trois parties entre accents graves, clés étrangères, contraintes, fichiers de
@@ -278,15 +278,20 @@ final class Redactor {
 		// fichier d'une exception (« in wp-includes/… »), ou fin du texte.
 		$value_end = '(?=\s++(?:for\s++(?:column|function|query)|in)\b|\s*+\z)';
 		// Suite gardée de « near [sql] » (erreur de syntaxe, 1064) : « at line N », puis rien de
-		// guillemeté jusqu'à « for query », « made by » ou la fin du texte (200 caractères au plus).
-		// Une valeur qui contient « ' at line N » arrête le premier motif avant la fin du fragment :
-		// le reste du fragment, qui se ferme par une apostrophe, n'est alors pas gardé.
-		$near_line_end = '\s++at\s++line\s++\d++(?:(?!\bfor\s++query\b|\bmade\s++by\b)[^\'"]){0,200}+(?:\bfor\s++query\b|\bmade\s++by\b|\z)';
+		// guillemeté jusqu'à « for query » ou la fin du texte (200 caractères au plus). « made by »
+		// ne compte pas : wpdb::print_error() écrit toujours « for query » avant, une valeur peut l'écrire.
+		$near_line_end = '\s++at\s++line\s++\d++(?:(?!\bfor\s++query\b)[^\'"]){0,200}+(?:\bfor\s++query\b|\z)';
 
 		return [
 			// Erreur de syntaxe SQL (1064) : « near '…' at line N » recopie un morceau de la requête et
 			// ses valeurs (souvent une valeur collée sans préparation). Répétition paresseuse bornée.
 			'/\b(near\s++)\'.{0,1000}?\'(?=\s++at\s++line\s++\d)/u' => '$1' . self::MASK_SQL,
+			// Une valeur qui contient « ' at line N » arrête le motif précédent avant la vraie fin du
+			// fragment : chaque couche forgée (« at line N », puis une suite fermée par un guillemet suivi
+			// d'un autre « at line N ») part avec lui, avant que les motifs de requête n'en mangent la
+			// vraie fermeture. « for query » suivi d'une espace arrête la couche (règle « for query »).
+			// 200 caractères au plus par couche, répétitions possessives : coût linéaire.
+			'/(\bnear\s++' . $sql . ')(?:\s++at\s++line\s++\d++(?:(?!\bfor query )[^\'"]|[\'"](?!\s++at\s++line\s++\d)){0,200}+[\'"](?=\s++at\s++line\s++\d))++/su' => '$1',
 			// Requête SQL, mots-clés en majuscules, avec sa structure, puis en minuscules seulement sur
 			// une table au nom de table (« wp_users ») : une chaîne entre guillemets est prise d'un bloc,
 			// ses « ; » et ses « \' » compris (valeur sérialisée, texte d'un visiteur), cf. SQL_TAIL.
@@ -304,7 +309,7 @@ final class Redactor {
 			// De même après un masque de requête déjà posé, « for query » ou non (seconde barrière du
 			// manager) : une valeur finie par « \ » arrête SQL_TAIL avant la fin de la requête. Sauf le
 			// fragment d'une erreur de syntaxe, « near [sql] » suivi de « at line N » sans rien de
-			// guillemeté avant « for query », « made by » ou la fin ($near_line_end) : la suite est le
+			// guillemeté avant « for query » ou la fin ($near_line_end) : la suite est le
 			// message. Un « near [sql] » sans « at line » (requête collée après « near ») est pris.
 			'/((?<!near )' . $sql . '|' . $sql . '(?!' . $near_line_end . '))(?:.*(?=\s++made\s++by\b)|.*+)/su' => '$1',
 			// Chaînes de connexion (PDO, Redis, Memcached).
