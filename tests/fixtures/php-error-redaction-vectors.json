@@ -87,6 +87,8 @@
     {"name": "message ordinaire avec apostrophes, sans repère SQL", "input": "Undefined index: 'foo' in wp-content/plugins/x/x.php:3", "must_not_contain": [], "must_contain": ["Undefined index: 'foo' in wp-content/plugins/x/x.php:3"]},
     {"name": "apostrophe dans un mot après un repère SQL", "input": "WordPress database error Commands out of sync; you can't run this command now", "must_not_contain": [], "must_contain": ["WordPress database error Commands out of sync; you can't run this command now"]},
     {"name": "erreur d'analyse de MySQL sans « SQL syntax », fragment coupé par la valeur avant sa fermeture (mysqli)", "input": "Uncaught mysqli_sql_exception: memory exhausted near 'Jean Dupont 0612345678", "must_not_contain": ["0612345678", "Dupont"], "must_contain": ["mysqli_sql_exception", "memory exhausted"]},
-    {"name": "erreur de syntaxe de SQLite, repère après la valeur", "input": "near \"Jean Dupont 0612345678\": syntax error", "must_not_contain": ["0612345678", "Dupont"], "must_contain": ["near"]}
+    {"name": "erreur de syntaxe de SQLite, repère après la valeur", "input": "near \"Jean Dupont 0612345678\": syntax error", "must_not_contain": ["0612345678", "Dupont"], "must_contain": ["near"]},
+    {"name": "erreur d'analyse de PHP 8, ce n'est pas une erreur SQL", "input": "syntax error, unexpected token \"}\", expecting \";\"", "must_not_contain": [], "must_contain": ["syntax error, unexpected token \"}\", expecting \";\""]},
+    {"name": "erreur d'analyse de PHP 7, ce n'est pas une erreur SQL", "input": "syntax error, unexpected '}', expecting ';'", "must_not_contain": [], "must_contain": ["syntax error, unexpected '}', expecting ';'"]}
   ]
 }

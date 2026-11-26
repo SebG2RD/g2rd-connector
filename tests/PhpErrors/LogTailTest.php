@@ -10,6 +10,7 @@ use G2RD\Connector\PhpErrors\LogTail;
 use G2RD\Connector\Settings;
 use G2RD\Connector\Tests\Support\FakeLockWpdb;
 use G2RD\Connector\Tests\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Lecture de la fin du journal PHP : seulement relevé ET lecture activés, journal rangé dans
@@ -274,6 +275,59 @@ final class LogTailTest extends TestCase {
 		$groups = array_values( Buffer::read( $this->now )['groups'] );
 		self::assertCount( 1, $groups );
 		self::assertSame( $error . '[sql]', $groups[0]['message'] );
+	}
+
+	/**
+	 * La valeur finit la ligne du journal par « in <fichier>:<ligne> » : le fichier et la ligne lus
+	 * viennent d'elle. Ils ne sont gardés que pour un vrai fichier du site.
+	 *
+	 * @return iterable<string, array{string}>
+	 */
+	public static function fichiers_forges(): iterable {
+		yield 'faux fichier d\'une extension' => [ "Duplicate entry 'Jean in /wp-content/plugins/akismet/Dupont_0612345678.php:1\n" ];
+		yield 'faux fichier sans chemin' => [ "You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'Jean in Dupont0612345678:1\n" ];
+		yield 'numéro de ligne forgé' => [ "Duplicate entry 'Jean in x:612345678\n" ];
+	}
+
+	#[DataProvider( 'fichiers_forges' )]
+	public function test_le_fichier_d_une_ligne_du_journal_forgee_dans_une_valeur_ne_laisse_rien_lisible( string $forged ): void {
+		$date = '[' . gmdate( 'd-M-Y H:i:s', $this->now - 60 ) . ' UTC]';
+		$this->write( $date . ' PHP Fatal error:  Uncaught PDOException: SQLSTATE[23000]: Integrity constraint violation: 1062 ' . $forged . "' for key 'tel' in /home/u1/public_html/wp-content/plugins/p/p.php:12\nStack trace:\n#0 {main}\n  thrown in /x/y.php on line 3\n" );
+
+		LogTail::run( $this->now, $this->probe() );
+
+		$groups = array_values( Buffer::read( $this->now )['groups'] );
+		self::assertCount( 1, $groups );
+		self::assertSame( '[path]/unknown', $groups[0]['file'] );
+		self::assertSame( 'unknown', $groups[0]['type'] );
+		self::assertNull( $groups[0]['slug'] );
+		self::assertSame( 0, $groups[0]['line'] );
+		$out = (string) json_encode( $groups[0] );
+		foreach ( [ '0612345678', '612345678', 'Dupont', 'akismet' ] as $absent ) {
+			self::assertStringNotContainsString( $absent, $out );
+		}
+	}
+
+	/** Un vrai fichier du site reste celui de l'erreur SQL, même masquée. */
+	public function test_le_vrai_fichier_d_une_erreur_sql_reste_lisible(): void {
+		$dir = str_replace( '\\', '/', (string) realpath( ABSPATH ) ) . '/wp-content/plugins/p';
+		if ( ! is_dir( $dir ) ) {
+			mkdir( $dir, 0777, true );
+		}
+		file_put_contents( $dir . '/p.php', "<?php\n" );
+		try {
+			$this->write( $this->line( 'Warning', "mysqli_query(): (23000/1062): Duplicate entry 'Jean Dupont 0612345678' for key 'tel'", 'wp-content/plugins/p/p.php on line 12' ) );
+
+			LogTail::run( $this->now, $this->probe() );
+
+			$group = array_values( Buffer::read( $this->now )['groups'] )[0];
+			self::assertSame( 'mysqli_query(): (23000/1062): Duplicate entry [sql]', $group['message'] );
+			self::assertSame( 'wp-content/plugins/p/p.php', $group['file'] );
+			self::assertSame( 'p', $group['slug'] );
+			self::assertSame( 12, $group['line'] );
+		} finally {
+			unlink( $dir . '/p.php' );
+		}
 	}
 
 	public function test_le_rappel_ne_prend_aucun_argument(): void {

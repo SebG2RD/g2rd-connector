@@ -644,6 +644,9 @@ final class RedactorTest extends PHPUnitTestCase {
 		yield 'commandes désynchronisées' => [ "Commands out of sync; you can't run this command now" ];
 		yield 'commandes désynchronisées (wpdb)' => [ "WordPress database error Commands out of sync; you can't run this command now" ];
 		yield 'apostrophes dans les mots après un repère' => [ "SQLSTATE[HY000]: General error: 2006 MySQL server has gone away, can't reconnect d'abord" ];
+		// Une erreur d'analyse de PHP (« syntax error, unexpected … ») n'est pas une erreur SQL : son jeton est du code.
+		yield 'erreur d\'analyse de PHP 8' => [ 'syntax error, unexpected token "}", expecting ";"' ];
+		yield 'erreur d\'analyse de PHP 7' => [ "syntax error, unexpected '}', expecting ';'" ];
 	}
 
 	public function test_un_texte_hostile_visant_les_regles_mysql_ne_bloque_pas(): void {
