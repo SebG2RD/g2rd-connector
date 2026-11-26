@@ -277,14 +277,14 @@ final class Redactor {
 		// Suite d'une valeur incorrecte recopiée par MySQL : colonne, fonction, requête de WordPress,
 		// fichier d'une exception (« in wp-includes/… »), ou fin du texte.
 		$value_end = '(?=\s++(?:for\s++(?:column|function|query)|in)\b|\s*+\z)';
-		// Suite gardée de « near [sql] » (erreur de syntaxe, 1064) : « at line N », puis « for query »
-		// juste après (wpdb::print_error() l'écrit sans rien entre les deux) ou la fin du texte. MySQL
-		// et MariaDB n'écrivent rien après « at line N » : tout autre texte vient de la valeur, qui
+		// Seule suite gardée de « near [sql] » (erreur de syntaxe, 1064) : « at line N » à la fin du
+		// texte. MySQL et MariaDB n'écrivent rien après : tout autre texte vient de la valeur, qui
 		// choisit aussi où le message est coupé (saut de ligne et « Stack trace: », STACK_TRACE du
-		// Normalizer ; « in x:1 » puis saut de ligne, ligne du journal de LogTail). « made by » ne
-		// compte pas ; « for query » suivi d'une espace seulement, comme les deux règles voisines.
+		// Normalizer ; « in x:1 » puis saut de ligne, ligne du journal de LogTail). Le « for query … made
+		// by … » de wpdb::print_error() part lui aussi : la valeur peut écrire sa propre fermeture, puis
+		// « for query » et « made by », et couper le message avant les vrais.
 		// Numéro de ligne en chiffres ASCII, 4 au plus : \d++ (drapeau u) prendrait un téléphone écrit par la valeur.
-		$near_line_end = '\s++at\s++line\s++[1-9][0-9]{0,3}+(?:\s++for query |\s*+\z)';
+		$near_line_end = '\s++at\s++line\s++[1-9][0-9]{0,3}+\s*+\z';
 		// Fin de la requête avant la pile d'appels de WordPress : un « made by » suivi, dans les 300
 		// caractères, d'un guillemet collé à « at line N » est écrit par une valeur (le vrai fragment
 		// est coupé à 80 caractères par MySQL et MariaDB). Répétition possessive bornée : coût linéaire.
@@ -323,10 +323,9 @@ final class Redactor {
 			// De même après un masque de requête déjà posé, « for query » ou non (seconde barrière du
 			// manager) : une valeur finie par « \ » arrête SQL_TAIL avant la fin de la requête.
 			'/((?<!near )' . $sql . ')(?:.*' . $made_by . '|.*+)/su' => '$1',
-			// Le fragment d'une erreur de syntaxe, « near [sql] at line N » suivi aussitôt de « for query »
-			// ou de la fin du texte ($near_line_end) : la suite est le message. Sinon elle est écrite par
-			// la valeur, son « made by » compris : tout part. Un « near [sql] » sans « at line » (requête
-			// collée après « near ») est pris.
+			// Le fragment d'une erreur de syntaxe, « near [sql] at line N » à la fin du texte
+			// ($near_line_end), reste lisible. Toute autre suite part, « for query » et « made by »
+			// compris. Un « near [sql] » sans « at line » (requête collée après « near ») est pris.
 			'/(near ' . $sql . ')(?!' . $near_line_end . ').*+/su' => '$1',
 			// Chaînes de connexion (PDO, Redis, Memcached).
 			'/\b(?:mysqli?|pgsql|sqlite|sqlsrv|rediss?|memcached?):(?:\/\/)?[^\s"\'<>]{1,500}+/i' => self::MASK_DSN,

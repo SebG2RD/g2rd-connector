@@ -115,11 +115,12 @@ Backups are prepared in wp-content/g2rd-backups, inside a folder whose name is d
   quote) made the connector stop too early, so the rest of that piece, for example a phone number,
   was sent as it was. Now every part of that piece forged by a value (up to the quote before the
   real closing `' at line N`) is removed with it, even when the value writes "made by", "for query"
-  or a query of its own. The text after "near … at line N" is then only kept when WordPress'
-  "for query " (followed by a space) comes right after "at line N", as WordPress writes it; MySQL
-  and MariaDB write nothing after "at line N", so any other text comes from the value (which can
-  also choose where the message is cut, with a line break before "Stack trace:" or before a new
-  log line) and all of it is removed, a "made by" written by the value included. A "made by"
+  or a query of its own. Only "near … at line N" at the very end of the message is then kept:
+  MySQL and MariaDB write nothing after "at line N", so any other text comes from the value (which
+  can also choose where the message is cut, with a line break before "Stack trace:" or before a new
+  log line) and all of it is removed, a "made by" written by the value included. WordPress' own
+  "for query … made by …" after "at line N" is removed too: a value can write its own closing,
+  then "for query" and "made by", and cut the message before the real ones. A "made by"
   followed by a quote and "at line N" is written by a value, not by WordPress: the query is removed
   past it. The line number is only kept when it has four plain digits at most: a value could write
   "at line 10612345678" to pass a phone number off as the line number, or use digits of another
