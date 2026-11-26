@@ -256,6 +256,12 @@ final class RedactorTest extends PHPUnitTestCase {
 		self::assertFalse( Redactor::is_sql_error( "Duplicate entry d'un" ) );
 		self::assertFalse( Redactor::is_sql_error( 'syntax error, unexpected token "}"' ) );
 		self::assertFalse( Redactor::is_sql_error( 'Undefined array key "near"' ) );
+		// Valeur échappée deux fois (esc_html( esc_html( $wpdb->last_error ) )).
+		self::assertTrue( Redactor::is_sql_error( 'SQLSTATE[23000]: Duplicate entry &amp;#039;Jean' ) );
+		// Repères répétés sans valeur : faux, et en une seule lecture.
+		$started = hrtime( true );
+		self::assertFalse( Redactor::is_sql_error( str_repeat( 'syntax error duplicate entry ', 550 ) ) );
+		self::assertLessThan( 10, ( hrtime( true ) - $started ) / 1e6 );
 	}
 
 	public function test_un_texte_hostile_ne_bloque_pas(): void {

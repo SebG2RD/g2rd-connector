@@ -157,9 +157,11 @@ final class Redactor {
 	 * redact() (une ligne du journal en fait 8 Ko au plus).
 	 */
 	public static function is_sql_error( string $text ): bool {
-		$normalized = self::normalize( $text, self::INPUT_MAX_BYTES );
+		// Second décodage : une valeur échappée deux fois (« &amp;#039; ») garde son apostrophe ; ancré,
+		// premier repère gardé (groupe atomique) comme patterns() : une seule lecture du texte.
+		$normalized = html_entity_decode( self::normalize( $text, self::INPUT_MAX_BYTES ), ENT_QUOTES | ENT_HTML5, 'UTF-8' );
 
-		return 1 === preg_match( '/(?:' . self::SQL_MARKERS . ').*?(?:(?<![\p{L}\p{N}])[\'"`]|' . preg_quote( self::MASK_SQL, '/' ) . ')/isu', $normalized );
+		return 1 === preg_match( '/\A(?>.*?(?:' . self::SQL_MARKERS . ')).*?(?:(?<![\p{L}\p{N}])[\'"`]|' . preg_quote( self::MASK_SQL, '/' ) . ')/isu', $normalized );
 	}
 
 	/**
