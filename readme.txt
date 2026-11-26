@@ -110,20 +110,21 @@ Backups are prepared in wp-content/g2rd-backups, inside a folder whose name is d
 = Unreleased =
 
 * **Fix: a visitor's value can no longer keep part of an SQL error readable.** When PHP error
-  monitoring is on, MySQL copies between quotes the values it quotes or rejects (the piece of the
-  query in a syntax error, "near '…' at line N", a duplicate entry, an incorrect value). Such a
+  monitoring is on, MySQL copies between quotes the piece of the query or the value it rejects (a
+  syntax error's "near '…' at line N", a duplicate entry, an incorrect value). Such a
   value chooses its own quotes, its own closing, the keywords it writes and where the message is
   cut (a line break before "Stack trace:" or before a new log line), so the earlier rules, built
   around "near '…' at line N", "for query" and "made by", each left a variant readable, for
   example a phone number. One rule now replaces them: once a message contains an SQL error marker
   ("SQL syntax", "SQLSTATE[", "database error", "syntax error", "Duplicate entry", "Incorrect …
-  value", "Truncated incorrect", "Data too long", or "near '…' at line N" itself), everything from
+  value", "Truncated incorrect", "Data too long", or "near" followed by a quote), everything from
   the first quote, double quote or backtick after the first marker that is not inside a word
-  ("can't" does not count) is removed, up to the end of the message. The text before the marker
-  and MySQL's own text up to that quote stay readable, for example "You have an error in your SQL
+  ("can't" does not count) is removed, up to the end of the message. These errors write a marker
+  before the value, so no cut chosen by the value can remove it. The text before the marker and
+  MySQL's own text up to that quote stay readable, for example "You have an error in your SQL
   syntax; … near [sql]" or "Duplicate entry [sql]". Lost on purpose: "at line N", "for key '…'",
-  "for column '…'", "at row N", the table or column named after the quote, and WordPress' "for
-  query … made by …".
+  "for column '…'", "at row N", the table or column named after the quote, WordPress' "for query
+  … made by …", and the quoted text after "near" in a message that is not an SQL error.
 
 = 1.18.0-rc.1 =
 

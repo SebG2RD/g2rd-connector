@@ -99,10 +99,12 @@ final class Redactor {
 	 * Repères d'un message d'erreur SQL (MySQL, MariaDB, PDO, mysqli, wpdb), comparés sans casse sur
 	 * le texte normalisé (une espace entre les mots) : erreur de syntaxe (1064), SQLSTATE de PDO,
 	 * préfixe de wpdb::print_error(), valeurs recopiées par MySQL (en double, incorrectes,
-	 * tronquées), valeur trop longue, et « near '…' at line N » d'une erreur d'analyse sans « SQL
-	 * syntax » (« memory exhausted near … »). Même liste que PhpErrorText::SQL_MARKERS du manager.
+	 * tronquées), valeur trop longue, et « near » suivi d'un guillemet (erreur d'analyse sans « SQL
+	 * syntax », « memory exhausted near '… », ou de SQLite, « near "…": syntax error »). Chacun est
+	 * écrit avant la valeur : aucune coupe choisie par elle ne le retire. Même liste que
+	 * PhpErrorText::SQL_MARKERS du manager.
 	 */
-	private const SQL_MARKERS = 'sql syntax|sqlstate\[|database error|syntax error|duplicate entry|incorrect (?:[^\s:\']{1,32}+ ){1,3}value|truncated incorrect|data too long|\bnear(?= [\'"`].{0,1000}?[\'"`] at line \d)';
+	private const SQL_MARKERS = 'sql syntax|sqlstate\[|database error|syntax error|duplicate entry|incorrect (?:[^\s:\']{1,32}+ ){1,3}value|truncated incorrect|data too long|\bnear(?= [\'"`])';
 
 	/**
 	 * Texte filtré, `$max_chars` caractères au plus.
