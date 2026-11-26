@@ -4,7 +4,7 @@ Tags: management, monitoring, multisite, dashboard, agency
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.18.0
+Stable tag: 1.18.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -107,7 +107,7 @@ Backups are prepared in wp-content/g2rd-backups, inside a folder whose name is d
 
 == Changelog ==
 
-= Unreleased =
+= 1.18.1 =
 
 * **Fix: a visitor's value can no longer keep part of an SQL error readable.** This applies to every
   error text that leaves the site: PHP error monitoring, and the details of failed updates,
