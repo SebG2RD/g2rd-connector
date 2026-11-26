@@ -313,11 +313,13 @@ final class Redactor {
 			// ligne à une espace.
 			'/(\bfor query )(?:.*' . $made_by . '|.*+)/su' => '$1' . self::MASK_SQL,
 			// De même après un masque de requête déjà posé, « for query » ou non (seconde barrière du
-			// manager) : une valeur finie par « \ » arrête SQL_TAIL avant la fin de la requête. Sauf le
-			// fragment d'une erreur de syntaxe, « near [sql] at line N » suivi aussitôt de « for query »,
+			// manager) : une valeur finie par « \ » arrête SQL_TAIL avant la fin de la requête.
+			'/((?<!near )' . $sql . ')(?:.*' . $made_by . '|.*+)/su' => '$1',
+			// Le fragment d'une erreur de syntaxe, « near [sql] at line N » suivi aussitôt de « for query »,
 			// ou d'un texte sans guillemet, sans « for query » ni masque jusqu'à la fin ($near_line_end) :
-			// la suite est le message. Un « near [sql] » sans « at line » (requête collée après « near ») est pris.
-			'/((?<!near )' . $sql . '|' . $sql . '(?!' . $near_line_end . '))(?:.*' . $made_by . '|.*+)/su' => '$1',
+			// la suite est le message. Sinon elle est écrite par la valeur, son « made by » compris : tout
+			// part. Un « near [sql] » sans « at line » (requête collée après « near ») est pris.
+			'/(near ' . $sql . ')(?!' . $near_line_end . ').*+/su' => '$1',
 			// Chaînes de connexion (PDO, Redis, Memcached).
 			'/\b(?:mysqli?|pgsql|sqlite|sqlsrv|rediss?|memcached?):(?:\/\/)?[^\s"\'<>]{1,500}+/i' => self::MASK_DSN,
 			// Compte de base de données : sur Hostinger, il commence par l'identifiant du compte.
