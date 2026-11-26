@@ -11,6 +11,8 @@ use G2RD\Connector\Settings;
 use G2RD\Connector\Tests\Support\FakeLockWpdb;
 use G2RD\Connector\Tests\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 
 /**
  * Lecture de la fin du journal PHP : seulement relevé ET lecture activés, journal rangé dans
@@ -347,6 +349,51 @@ final class LogTailTest extends TestCase {
 		} finally {
 			unlink( $dir . '/p.php' );
 		}
+	}
+
+	/**
+	 * Fichier écrit par la valeur que PHP refuserait de vérifier sous open_basedir : il n'est pas
+	 * passé à is_file(). Sinon PHP écrit dans le journal « is_file(): open_basedir restriction in
+	 * effect. File(<chemin>) … » ou « File name is longer than … : <chemin> », relu au passage
+	 * suivant comme un avertissement sans repère SQL : la valeur ressortirait.
+	 *
+	 * @return iterable<string, array{string}>
+	 */
+	public static function fichiers_hors_open_basedir(): iterable {
+		yield 'chemin qui remonte avec « .. »' => [ '../../Jean_Dupont_0612345678' ];
+		yield 'chemin plus long que PHP_MAXPATHLEN' => [ 'Jean_Dupont_0612345678' . str_repeat( 'a', 4100 ) ];
+	}
+
+	#[DataProvider( 'fichiers_hors_open_basedir' )]
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_un_fichier_forge_hors_open_basedir_n_ecrit_aucun_avertissement( string $forged ): void {
+		$root = str_replace( '\\', '/', (string) realpath( ABSPATH ) ) . '/';
+		$this->write( '[' . gmdate( 'd-M-Y H:i:s', $this->now - 60 ) . " UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry 'Jean in " . $root . $forged . ":1\n' for key 'tel' in /x/y.php:3\n" );
+		ini_set( 'open_basedir', sys_get_temp_dir() . PATH_SEPARATOR . dirname( __DIR__, 2 ) );
+		// Le flux « file » de Patchwork (Brain Monkey) tait les avertissements de is_file() : flux natif,
+		// comme sur un site, pour la fin de ce processus.
+		stream_wrapper_restore( 'file' );
+		$warnings = [];
+		set_error_handler(
+			static function ( int $errno, string $errstr ) use ( &$warnings ): bool {
+				$warnings[] = $errstr;
+				return true;
+			},
+			E_WARNING
+		);
+		try {
+			LogTail::run( $this->now, $this->probe() );
+		} finally {
+			restore_error_handler();
+		}
+
+		self::assertSame( [], $warnings );
+		$groups = array_values( Buffer::read( $this->now )['groups'] );
+		self::assertCount( 1, $groups );
+		self::assertSame( '[path]/unknown', $groups[0]['file'] );
+		self::assertSame( 0, $groups[0]['line'] );
+		self::assertStringNotContainsString( 'Dupont', (string) json_encode( $groups[0] ) );
 	}
 
 	public function test_le_rappel_ne_prend_aucun_argument(): void {
