@@ -7,7 +7,9 @@
  * commun à tous les sites du même compte et au manager), des identifiants de base, des
  * e-mails, des adresses IP, des jetons, des mots de passe, une requête SQL avec ses valeurs ou
  * la valeur saisie par un visiteur que MySQL recopie (valeur en double, valeur incorrecte).
- * Rien de cela ne sort du site. Le manager applique ensuite son propre filtre (seconde
+ * Rien de cela ne sort du site. Dans un message d'erreur SQL, tout ce qui suit la première
+ * apostrophe hors d'un mot placée après le premier repère part (règle unique, la même que la
+ * seconde barrière). Le manager applique ensuite son propre filtre (seconde
  * barrière) ; les deux suivent les mêmes vecteurs (tests/fixtures/php-error-redaction-vectors.json,
  * partagé à l'octet).
  *
@@ -92,6 +94,15 @@ final class Redactor {
 	 * PhpErrorText::SQL_TAIL du manager (seconde barrière).
 	 */
 	private const SQL_TAIL = '(?:\'[^\'\\\\]*+(?:\\\\.[^\'\\\\]*+)*+\'?+|"[^"\\\\]*+(?:\\\\.[^"\\\\]*+)*+"?+|[^;\'"])*+;?';
+
+	/**
+	 * Repères d'un message d'erreur SQL (MySQL, MariaDB, PDO, mysqli, wpdb), comparés sans casse sur
+	 * le texte normalisé (une espace entre les mots) : erreur de syntaxe (1064), SQLSTATE de PDO,
+	 * préfixe de wpdb::print_error(), valeurs recopiées par MySQL (en double, incorrectes,
+	 * tronquées), valeur trop longue, et « near '…' at line N » d'une erreur d'analyse sans « SQL
+	 * syntax » (« memory exhausted near … »). Même liste que PhpErrorText::SQL_MARKERS du manager.
+	 */
+	private const SQL_MARKERS = 'sql syntax|sqlstate\[|database error|syntax error|duplicate entry|incorrect (?:[^\s:\']{1,32}+ ){1,3}value|truncated incorrect|data too long|\bnear(?= [\'"`].{0,1000}?[\'"`] at line \d)';
 
 	/**
 	 * Texte filtré, `$max_chars` caractères au plus.
@@ -260,75 +271,46 @@ final class Redactor {
 	}
 
 	/**
-	 * Motifs, dans l'ordre d'application : fragment d'une erreur de syntaxe SQL (« near '…' at
-	 * line N », 1064, resté ouvert ou avec ses couches forgées par une valeur), requêtes SQL (elles emportent leurs valeurs), chaînes de connexion, comptes
-	 * de base (« 'compte'@'hôte' », entre apostrophes ou accents graves, définisseur compris), noms
-	 * de base des messages MySQL et MariaDB (tables, routines, vues, colonnes en trois parties,
-	 * noms en trois parties entre accents graves, clés étrangères, contraintes, fichiers de
-	 * données, routines inconnues), valeurs recopiées par MySQL (en double, incorrectes),
-	 * constantes de wp-config, en-têtes, champs secrets, requêtes d'adresses, e-mails, adresses IP,
-	 * chemins du serveur, jetons.
+	 * Motifs, dans l'ordre d'application : message d'erreur SQL coupé à sa première apostrophe,
+	 * requêtes SQL (elles emportent leurs valeurs), chaînes de connexion, comptes de base
+	 * (« 'compte'@'hôte' », entre apostrophes ou accents graves, définisseur compris), noms de base
+	 * des messages MySQL et MariaDB (tables, routines, vues, colonnes en trois parties, noms en trois
+	 * parties entre accents graves, clés étrangères, contraintes, fichiers de données, routines
+	 * inconnues), constantes de wp-config, en-têtes, champs secrets, requêtes d'adresses, e-mails,
+	 * adresses IP, chemins du serveur, jetons.
 	 *
 	 * @return array<string, string>
 	 */
 	private static function patterns(): array {
 		$names = self::SECRET_NAMES;
 		$sql   = preg_quote( self::MASK_SQL, '/' );
-		// Suite d'une valeur incorrecte recopiée par MySQL : colonne, fonction, requête de WordPress,
-		// fichier d'une exception (« in wp-includes/… »), ou fin du texte.
-		$value_end = '(?=\s++(?:for\s++(?:column|function|query)|in)\b|\s*+\z)';
-		// Seule suite gardée de « near [sql] » (erreur de syntaxe, 1064) : « at line N » à la fin du
-		// texte. MySQL et MariaDB n'écrivent rien après : tout autre texte vient de la valeur, qui
-		// choisit aussi où le message est coupé (saut de ligne et « Stack trace: », STACK_TRACE du
-		// Normalizer ; « in x:1 » puis saut de ligne, ligne du journal de LogTail). Le « for query … made
-		// by … » de wpdb::print_error() part lui aussi : la valeur peut écrire sa propre fermeture, puis
-		// « for query » et « made by », et couper le message avant les vrais.
-		// Numéro de ligne en chiffres ASCII, 4 au plus : \d++ (drapeau u) prendrait un téléphone écrit par la valeur.
-		$near_line_end = '\s++at\s++line\s++[1-9][0-9]{0,3}+\s*+\z';
-		// Fin de la requête avant la pile d'appels de WordPress : un « made by » suivi, dans les 300
-		// caractères, d'un guillemet collé à « at line N » est écrit par une valeur (le vrai fragment
-		// est coupé à 80 caractères par MySQL et MariaDB). Répétition possessive bornée : coût linéaire.
-		$made_by = '(?=\s++made\s++by\b(?!(?:[^\'"]|[\'"](?!\s++at\s++line\s++\d)){0,300}+[\'"]\s++at\s++line\s++\d))';
 
 		return [
-			// Erreur de syntaxe SQL (1064) : « near '…' at line N » recopie un morceau de la requête et
-			// ses valeurs (souvent une valeur collée sans préparation). Répétition paresseuse bornée.
-			'/\b(near\s++)\'.{0,1000}?\'(?=\s++at\s++line\s++\d)/u' => '$1' . self::MASK_SQL,
-			// Un « near ' » que le motif précédent n'a pas refermé, dans un message d'erreur SQL (« SQL
-			// syntax », SQLSTATE, « database error » ou « syntax error » avant lui) : la valeur a placé la
-			// coupe du message (saut de ligne et « Stack trace: », ligne du journal finie par « in x:1 »)
-			// avant la fermeture « ' at line N ». Tout part jusqu'à la fin du texte. Ancré, premier
-			// repère gardé (groupe atomique) : une seule lecture du texte.
-			// Aucune apostrophe avant « near » : le début d'une vraie erreur 1064 (MySQL, wpdb, PDO, mysqli)
-			// n'en a jamais, une valeur recopiée par MySQL (« Duplicate entry '… », repère compris) en ouvre une.
-			'/\A((?>[^\']*?(?i:sql syntax|sqlstate\[|database error|syntax error))[^\']*?\bnear\s++)\'.*+/su' => '$1' . self::MASK_SQL,
-			// Une valeur qui contient « ' at line N » arrête le motif précédent avant la vraie fin du
-			// fragment : chaque couche forgée (« at line N », puis une suite fermée par un guillemet suivi
-			// d'un autre « at line N ») part avec lui, avant que les motifs de requête n'en mangent la
-			// vraie fermeture. « for query » suivi d'une espace arrête la couche (règle « for query »).
-			// 200 caractères au plus par couche, répétitions possessives : coût linéaire.
-			'/(\bnear\s++' . $sql . ')(?:\s++at\s++line\s++\d++(?:(?!\bfor query )[^\'"]|[\'"](?!\s++at\s++line\s++\d)){0,200}+[\'"](?=\s++at\s++line\s++\d))++/su' => '$1',
+			// Message d'erreur SQL (SQL_MARKERS) : tout ce qui suit la première apostrophe, le premier
+			// guillemet ou le premier accent grave hors d'un mot (« can't », « d'un » ne comptent pas) placé
+			// après le premier repère part jusqu'à la fin du texte. MySQL ouvre ainsi toute valeur qu'il
+			// recopie (« near '… », « Duplicate entry '… », « Incorrect … value: '… »), et la valeur choisit
+			// ses guillemets, ses repères, sa propre fermeture et l'endroit où le message est coupé (saut de
+			// ligne et « Stack trace: », ligne du journal finie par « in x:1 ») : rien de ce qu'elle écrit
+			// ne reste. « at line N », « for key », « for query » et « made by » partent avec elle. Le texte
+			// avant le repère suit les autres motifs. Ancré, premier repère gardé (groupe atomique) : une
+			// seule lecture du texte.
+			'/\A((?>.*?(?:' . self::SQL_MARKERS . ')).*?)(?<![\p{L}\p{N}])[\'"`].*+/isu' => '$1' . self::MASK_SQL,
 			// Requête SQL, mots-clés en majuscules, avec sa structure, puis en minuscules seulement sur
 			// une table au nom de table (« wp_users ») : une chaîne entre guillemets est prise d'un bloc,
 			// ses « ; » et ses « \' » compris (valeur sérialisée, texte d'un visiteur), cf. SQL_TAIL.
 			'/\b(?:SELECT\b[^;]{0,300}?\bFROM\b|INSERT\s++(?:IGNORE\s++)?INTO\b|REPLACE\s++INTO\b|UPDATE\s++`?[\w.]++`?\s++SET\b|DELETE\s++FROM\b|(?:ALTER|DROP|CREATE|TRUNCATE)\s++TABLE\b)' . self::SQL_TAIL . '/u' => self::MASK_SQL,
 			'/\b(?:select\b[^;]{0,300}?\bfrom\s++`?\w*_\w*|insert\s++(?:ignore\s++)?into\s++`?\w*_\w*|update\s++`?\w*_\w*`?\s++set\b|delete\s++from\s++`?\w*_\w*)' . self::SQL_TAIL . '/iu' => self::MASK_SQL,
 			// Après « for query » (wpdb::print_error(), « for query %s made by %s ») : tout ce qui suit
-			// est la requête jusqu'au dernier « made by » (pile d'appels de WordPress, $made_by), sinon jusqu'à la
-			// fin, que son en-tête soit reconnu ou non par les deux motifs précédents (SHOW, CALL,
-			// CREATE TRIGGER, « ; » ou plus de 300 caractères entre SELECT et FROM) et quelle que soit la
-			// lecture des guillemets (une valeur finie par « \ » sous NO_BACKSLASH_ESCAPES décale
-			// SQL_TAIL). Le manager ne l'applique qu'après un masque déjà posé. Drapeau s : une requête
-			// sur plusieurs lignes est prise entière, même si normalize() ne ramenait plus les sauts de
-			// ligne à une espace.
-			'/(\bfor query )(?:.*' . $made_by . '|.*+)/su' => '$1' . self::MASK_SQL,
-			// De même après un masque de requête déjà posé, « for query » ou non (seconde barrière du
-			// manager) : une valeur finie par « \ » arrête SQL_TAIL avant la fin de la requête.
-			'/((?<!near )' . $sql . ')(?:.*' . $made_by . '|.*+)/su' => '$1',
-			// Le fragment d'une erreur de syntaxe, « near [sql] at line N » à la fin du texte
-			// ($near_line_end), reste lisible. Toute autre suite part, « for query » et « made by »
-			// compris. Un « near [sql] » sans « at line » (requête collée après « near ») est pris.
-			'/(near ' . $sql . ')(?!' . $near_line_end . ').*+/su' => '$1',
+			// part jusqu'à la fin, « made by » compris (une valeur peut écrire le sien), que l'en-tête de la
+			// requête soit reconnu ou non par les deux motifs précédents (SHOW, CALL, CREATE TRIGGER, « ; »
+			// ou plus de 300 caractères entre SELECT et FROM). Drapeau s : une requête sur plusieurs lignes
+			// est prise entière, même si normalize() ne ramenait plus les sauts de ligne à une espace.
+			'/(\bfor query ).*+/su' => '$1' . self::MASK_SQL,
+			// De même après un masque de requête déjà posé, ici ou par un connecteur plus ancien (« near
+			// [sql] at line 1 0612345678 ») : une valeur finie par « \ » sous NO_BACKSLASH_ESCAPES arrête
+			// SQL_TAIL avant la fin de la requête.
+			'/(' . $sql . ').*+/su' => '$1',
 			// Chaînes de connexion (PDO, Redis, Memcached).
 			'/\b(?:mysqli?|pgsql|sqlite|sqlsrv|rediss?|memcached?):(?:\/\/)?[^\s"\'<>]{1,500}+/i' => self::MASK_DSN,
 			// Compte de base de données : sur Hostinger, il commence par l'identifiant du compte.
@@ -371,15 +353,6 @@ final class Redactor {
 			'/\'\.\/(?!wp-content\/|wp-admin\/|wp-includes\/)(?![^\'\s]{0,300}?\.php\')[^\'\/\s]{1,100}+\//u' => '\'./' . self::MASK_SECRET . '/',
 			// Routine stockée inconnue : « FUNCTION [secret].calcul does not exist ».
 			'/\b((?:FUNCTION|PROCEDURE)\s++)(`?)[^\s.\'`]{1,100}+\2\.(?=\S{1,200}+\s++does\s++not\s++exist\b)/u' => '$1$2' . self::MASK_SECRET . '$2.',
-			// Valeur en double (souvent un identifiant de connexion ou une adresse) : la clé reste.
-			'/\b(Duplicate entry\s++)\'(?:.{0,300}?\'(?=\s++for\s++key\b)|[^\']{0,300}+\'?)/iu' => '$1\'' . self::MASK_SECRET . '\'',
-			// Valeur incorrecte recopiée par MySQL et MariaDB (1366, 1292, 1411, 1525), souvent saisie
-			// par un visiteur (téléphone, date de naissance, nom) : « Incorrect integer value: '[secret]'
-			// for column 'tel' », « Truncated incorrect DOUBLE value: '[secret]' », « … for function
-			// str_to_date ». Le type (« CHAR(10) » compris), la colonne et la fonction restent lisibles.
-			// Une apostrophe dans la valeur (« O'Brien ») est prise jusqu'à la suite connue du message.
-			// Une valeur vide reste lisible : elle ne dit rien du visiteur, et c'est elle qu'il faut voir.
-			'/\b((?:Truncated\s++)?Incorrect\s++(?:[^\s:\']{1,32}+\s++){1,3}value:\s*+)\'(?!\'' . $value_end . ')(?:.{0,300}?\'' . $value_end . '|[^\']{0,300}+\'?)/iu' => '$1\'' . self::MASK_SECRET . '\'',
 			// Valeur d'une constante (wp-config.php : base, clés, sels).
 			'/\bdefine\s*+\(\s*+([\'"])(\w++)\1\s*+,\s*+(?:\'[^\']{0,500}+\'|"[^"]{0,500}+"|[^\s,)]{1,500}+)/u' => 'define( $1$2$1, \'' . self::MASK_SECRET . '\'',
 			// En-têtes d'autorisation, puis Bearer ou Basic seul.

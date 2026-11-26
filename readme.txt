@@ -109,27 +109,21 @@ Backups are prepared in wp-content/g2rd-backups, inside a folder whose name is d
 
 = Unreleased =
 
-* **Fix: a visitor's value can no longer keep part of an SQL syntax error readable.** When PHP error
-  monitoring is on, the piece of the query that MySQL quotes in a syntax error ("near '…' at line N")
-  is removed on the site. A value containing `' at line 1` (a badly escaped query, an unbalanced
-  quote) made the connector stop too early, so the rest of that piece, for example a phone number,
-  was sent as it was. Now every part of that piece forged by a value (up to the quote before the
-  real closing `' at line N`) is removed with it, even when the value writes "made by", "for query"
-  or a query of its own. Only "near … at line N" at the very end of the message is then kept:
-  MySQL and MariaDB write nothing after "at line N", so any other text comes from the value (which
-  can also choose where the message is cut, with a line break before "Stack trace:" or before a new
-  log line) and all of it is removed, a "made by" written by the value included. WordPress' own
-  "for query … made by …" after "at line N" is removed too: a value can write its own closing,
-  then "for query" and "made by", and cut the message before the real ones. A "made by"
-  followed by a quote and "at line N" is written by a value, not by WordPress: the query is removed
-  past it. The line number is only kept when it has four plain digits at most: a value could write
-  "at line 10612345678" to pass a phone number off as the line number, or use digits of another
-  script. When a value places that cut before the closing `' at line N`, the piece is left open: in
-  an SQL error message ("SQL syntax", "SQLSTATE", "database error" or "syntax error" before it),
-  everything after "near '" is now removed up to the end of the message. This only applies when no
-  quote comes before "near", as in every real syntax error: a value that MySQL copies between
-  quotes ("Duplicate entry '…' for key", "Incorrect integer value: '…' for column") and that writes
-  "near '" itself is still removed whole, and "for key" or "for column" stays readable.
+* **Fix: a visitor's value can no longer keep part of an SQL error readable.** When PHP error
+  monitoring is on, MySQL copies between quotes the values it quotes or rejects (the piece of the
+  query in a syntax error, "near '…' at line N", a duplicate entry, an incorrect value). Such a
+  value chooses its own quotes, its own closing, the keywords it writes and where the message is
+  cut (a line break before "Stack trace:" or before a new log line), so the earlier rules, built
+  around "near '…' at line N", "for query" and "made by", each left a variant readable, for
+  example a phone number. One rule now replaces them: once a message contains an SQL error marker
+  ("SQL syntax", "SQLSTATE[", "database error", "syntax error", "Duplicate entry", "Incorrect …
+  value", "Truncated incorrect", "Data too long", or "near '…' at line N" itself), everything from
+  the first quote, double quote or backtick after the first marker that is not inside a word
+  ("can't" does not count) is removed, up to the end of the message. The text before the marker
+  and MySQL's own text up to that quote stay readable, for example "You have an error in your SQL
+  syntax; … near [sql]" or "Duplicate entry [sql]". Lost on purpose: "at line N", "for key '…'",
+  "for column '…'", "at row N", the table or column named after the quote, and WordPress' "for
+  query … made by …".
 
 = 1.18.0-rc.1 =
 
