@@ -136,7 +136,10 @@ Backups are prepared in wp-content/g2rd-backups, inside a folder whose name is d
   log a warning that copies that path, read back on the next pass. The marker is looked for in the
   whole message of the log line, not only in the 500 characters that are sent: a long message, for
   example one wrapped by a plugin, is covered too. The line of an SQL error caught as a fatal error
-  by PHP itself is kept.
+  by PHP itself is kept. A marker alone is not enough to read a log line as an SQL error: it must
+  be followed by a quote (or by the [sql] mask), so "Uncaught JsonException: Syntax error" keeps its
+  file and line. Known limit: a value that writes a whole new log line (a line break, then a date
+  and "PHP Warning:  …") has that line read as a separate, non-SQL error, so it is not removed.
 
 = 1.18.0-rc.1 =
 
