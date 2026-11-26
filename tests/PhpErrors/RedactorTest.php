@@ -541,6 +541,11 @@ final class RedactorTest extends PHPUnitTestCase {
 		yield 'valeur incorrecte sans suite (1525)' => [ "Incorrect DATE value: '31/02/1980'", "Incorrect DATE value: '[secret]'" ];
 		yield 'octets d\'un texte (1366)' => [ "Incorrect string value: '\\xF0\\x9F\\x98\\x80 J...' for column 'comment_content' at row 1", "Incorrect string value: '[secret]' for column 'comment_content' at row 1" ];
 		yield 'exception PDO (1292)' => [ "SQLSTATE[22007]: Invalid datetime format: 1292 Truncated incorrect DOUBLE value: 'Jean Dupont'", "SQLSTATE[22007]: Invalid datetime format: 1292 Truncated incorrect DOUBLE value: '[secret]'" ];
+		// Une valeur qui écrit « near ' », même après un repère d'erreur SQL qu'elle écrit aussi, n'ouvre
+		// pas de fragment d'erreur de syntaxe : la suite connue (« for key », « for column ») reste.
+		yield 'valeur en double qui écrit near (wpdb)' => [ "WordPress database error Duplicate entry 'O'Dupont 0612345678 near 'x' for key 'email'", "WordPress database error Duplicate entry '[secret]' for key 'email'" ];
+		yield 'valeur incorrecte qui écrit near (PDO)' => [ "SQLSTATE[HY000]: General error: 1366 Incorrect integer value: 'O'Dupont 0612345678 near 'x' for column 'tel' at row 1", "SQLSTATE[HY000]: General error: 1366 Incorrect integer value: '[secret]' for column 'tel' at row 1" ];
+		yield 'valeur en double qui écrit un repère SQL puis near (mysqli)' => [ "Uncaught mysqli_sql_exception: Duplicate entry 'O'Dupont 0612345678 sql syntax near 'x' for key 'email'", "Uncaught mysqli_sql_exception: Duplicate entry '[secret]' for key 'email'" ];
 	}
 
 	#[DataProvider( 'valeurs_recopiees_par_mysql' )]
