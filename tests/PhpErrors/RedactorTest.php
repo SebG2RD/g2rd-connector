@@ -243,6 +243,18 @@ final class RedactorTest extends PHPUnitTestCase {
 		self::assertSame( Redactor::UNREADABLE, Redactor::redact( "\u{200B}\u{0007}", [] ) );
 	}
 
+	/**
+	 * Repère d'erreur SQL lu sur le texte entier (LogTail) : au-delà des 4 000 caractères lus par
+	 * redact(), entités HTML décodées et blancs ramenés à une espace comme dans redact().
+	 */
+	public function test_le_repere_sql_est_lu_sur_le_texte_entier(): void {
+		self::assertTrue( Redactor::is_sql_error( str_repeat( 'Lorem ipsum ', 400 ) . 'Duplicate entry ' ) );
+		self::assertTrue( Redactor::is_sql_error( 'Erreur : the right syntax to use near &#039;x' ) );
+		self::assertTrue( Redactor::is_sql_error( "Duplicate\n\tentry" ) );
+		self::assertFalse( Redactor::is_sql_error( 'syntax error, unexpected token "}"' ) );
+		self::assertFalse( Redactor::is_sql_error( 'Undefined array key "near"' ) );
+	}
+
 	public function test_un_texte_hostile_ne_bloque_pas(): void {
 		$input = str_repeat( '"\'', 1500 ) . ' ' . str_repeat( 'a.', 400 ) . 'x@' . str_repeat( 'b.', 300 );
 

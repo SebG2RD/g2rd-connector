@@ -279,20 +279,24 @@ final class LogTailTest extends TestCase {
 
 	/**
 	 * La valeur finit la ligne du journal par « in <fichier>:<ligne> » : le fichier et la ligne lus
-	 * viennent d'elle. Ils ne sont gardés que pour un vrai fichier du site.
+	 * viennent d'elle. Ils ne sont gardés que pour un vrai fichier du site. Le repère SQL est lu dans
+	 * le message entier de la ligne, pas dans le message filtré (coupé à 500 caractères, lu sur
+	 * 4 000) : un message long enveloppé par une extension ne fait pas tomber la règle.
 	 *
-	 * @return iterable<string, array{string}>
+	 * @return iterable<string, array{0: string, 1?: string}>
 	 */
 	public static function fichiers_forges(): iterable {
 		yield 'faux fichier d\'une extension' => [ "Duplicate entry 'Jean in /wp-content/plugins/akismet/Dupont_0612345678.php:1\n" ];
 		yield 'faux fichier sans chemin' => [ "You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'Jean in Dupont0612345678:1\n" ];
 		yield 'numéro de ligne forgé' => [ "Duplicate entry 'Jean in x:612345678\n" ];
+		yield '600 caractères avant le repère, masque après la coupe à 500' => [ "Duplicate entry 'Jean in /home/u1/public_html/wp-content/plugins/p/Dupont_0612345678.php:612345678\n", str_repeat( 'Lorem ipsum ', 50 ) ];
+		yield 'plus de 4 000 caractères avant le repère' => [ "Duplicate entry 'Jean in /home/u1/public_html/wp-content/plugins/p/Dupont_0612345678.php:612345678\n", str_repeat( 'Lorem ipsum ', 342 ) ];
 	}
 
 	#[DataProvider( 'fichiers_forges' )]
-	public function test_le_fichier_d_une_ligne_du_journal_forgee_dans_une_valeur_ne_laisse_rien_lisible( string $forged ): void {
+	public function test_le_fichier_d_une_ligne_du_journal_forgee_dans_une_valeur_ne_laisse_rien_lisible( string $forged, string $before = '' ): void {
 		$date = '[' . gmdate( 'd-M-Y H:i:s', $this->now - 60 ) . ' UTC]';
-		$this->write( $date . ' PHP Fatal error:  Uncaught PDOException: SQLSTATE[23000]: Integrity constraint violation: 1062 ' . $forged . "' for key 'tel' in /home/u1/public_html/wp-content/plugins/p/p.php:12\nStack trace:\n#0 {main}\n  thrown in /x/y.php on line 3\n" );
+		$this->write( $date . ' PHP Fatal error:  Uncaught PDOException: ' . $before . 'SQLSTATE[23000]: Integrity constraint violation: 1062 ' . $forged . "' for key 'tel' in /home/u1/public_html/wp-content/plugins/p/p.php:12\nStack trace:\n#0 {main}\n  thrown in /x/y.php on line 3\n" );
 
 		LogTail::run( $this->now, $this->probe() );
 
