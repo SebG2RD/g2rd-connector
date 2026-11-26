@@ -209,6 +209,10 @@ final class RedactorTest extends PHPUnitTestCase {
 		// 300 couches d'un seul tenant, puis 110 fragments qui en ont chacun une.
 		yield 'couches forgées à la suite' => [ 'near [sql]' . str_repeat( " at line 1 x'", 300 ) ];
 		yield 'fragments forgés répétés' => [ str_repeat( "near [sql] at line 1 x' at line 1 ", 110 ) ];
+		// « made by » suivi d'un guillemet et de « at line N » (300 caractères lus au plus) : 120 fois
+		// de suite, puis 12 séries de 37 « made by » refusés chacun à la lecture de la série.
+		yield 'made by forgés répétés' => [ str_repeat( "for query x made by y' at line 1 ", 120 ) ];
+		yield 'séries de made by forgés' => [ 'for query x' . str_repeat( str_repeat( ' made by', 37 ) . "' at line 1", 12 ) ];
 	}
 
 	#[DataProvider( 'textes_hostiles_sous_la_borne' )]
@@ -392,6 +396,25 @@ final class RedactorTest extends PHPUnitTestCase {
 		yield 'deux couches forgées' => [
 			"You have an error in your SQL syntax near 'Dupont', 'x' at line 1 y' at line 1 made by', '0612345678')' at line 1 for query INSERT INTO wp_contacts (nom, message, tel) VALUES ('O'Dupont', 'x' at line 1 y' at line 1 made by', '0612345678')",
 			'You have an error in your SQL syntax near [sql] at line 1 for query [sql]',
+		];
+		// La couche forgée écrit « for query » puis « made by » suivi d'un guillemet et de « at line N » :
+		// ce « made by » n'est pas la pile d'appels de WordPress, il ne finit pas la requête.
+		yield 'couche forgée avec for query puis made by' => [
+			"You have an error in your SQL syntax near 'Dupont', 'x' at line 1 for query z made by', '0612345678')' at line 1 for query INSERT INTO wp_contacts (nom, message, tel) VALUES ('O'Dupont', 'x' at line 1 for query z made by', '0612345678') made by do_action('wp_ajax_contact')",
+			'You have an error in your SQL syntax near [sql] at line 1 for query [sql]',
+		];
+		yield 'couche forgée avec for query puis made by, guillemets autour' => [
+			"You have an error in your SQL syntax near 'Dupont', 'x' at line 1 for query z' made by w', '0612345678')' at line 1 for query INSERT INTO wp_contacts (nom, message, tel) VALUES ('O'Dupont', 'x' at line 1 for query z' made by w', '0612345678') made by do_action('wp_ajax_contact')",
+			'You have an error in your SQL syntax near [sql] at line 1 for query [sql]',
+		];
+		yield 'couche forgée avec for query puis made by, forme PDO' => [
+			"SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'Dupont', 'x' at line 1 for query z made by', '0612345678')' at line 1",
+			'SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql] at line 1 for query [sql]',
+		];
+		// « for query' » forgé ne finit pas la suite gardée : seul « for query » suivi d'une espace compte.
+		yield 'for query collé forgé puis valeur avec for query' => [
+			"WordPress database error You have an error in your SQL syntax near 'y' at line 1 for query', '0612345678', 'for query z')' at line 1 for query INSERT INTO wp_contacts (nom, tel, msg) VALUES ('x' y' at line 1 for query', '0612345678', 'for query z') made by do_action('x')",
+			'WordPress database error You have an error in your SQL syntax near [sql]',
 		];
 	}
 
