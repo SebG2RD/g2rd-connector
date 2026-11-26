@@ -261,7 +261,7 @@ final class Redactor {
 
 	/**
 	 * Motifs, dans l'ordre d'application : fragment d'une erreur de syntaxe SQL (« near '…' at
-	 * line N », 1064, et ses couches forgées par une valeur), requêtes SQL (elles emportent leurs valeurs), chaînes de connexion, comptes
+	 * line N », 1064, resté ouvert ou avec ses couches forgées par une valeur), requêtes SQL (elles emportent leurs valeurs), chaînes de connexion, comptes
 	 * de base (« 'compte'@'hôte' », entre apostrophes ou accents graves, définisseur compris), noms
 	 * de base des messages MySQL et MariaDB (tables, routines, vues, colonnes en trois parties,
 	 * noms en trois parties entre accents graves, clés étrangères, contraintes, fichiers de
@@ -283,7 +283,8 @@ final class Redactor {
 		// choisit aussi où le message est coupé (saut de ligne et « Stack trace: », STACK_TRACE du
 		// Normalizer ; « in x:1 » puis saut de ligne, ligne du journal de LogTail). « made by » ne
 		// compte pas ; « for query » suivi d'une espace seulement, comme les deux règles voisines.
-		$near_line_end = '\s++at\s++line\s++\d++(?:\s++for query |\s*+\z)';
+		// Numéro de ligne en chiffres ASCII, 4 au plus : \d++ (drapeau u) prendrait un téléphone écrit par la valeur.
+		$near_line_end = '\s++at\s++line\s++[1-9][0-9]{0,3}+(?:\s++for query |\s*+\z)';
 		// Fin de la requête avant la pile d'appels de WordPress : un « made by » suivi, dans les 300
 		// caractères, d'un guillemet collé à « at line N » est écrit par une valeur (le vrai fragment
 		// est coupé à 80 caractères par MySQL et MariaDB). Répétition possessive bornée : coût linéaire.
@@ -293,6 +294,12 @@ final class Redactor {
 			// Erreur de syntaxe SQL (1064) : « near '…' at line N » recopie un morceau de la requête et
 			// ses valeurs (souvent une valeur collée sans préparation). Répétition paresseuse bornée.
 			'/\b(near\s++)\'.{0,1000}?\'(?=\s++at\s++line\s++\d)/u' => '$1' . self::MASK_SQL,
+			// Un « near ' » que le motif précédent n'a pas refermé, dans un message d'erreur SQL (« SQL
+			// syntax », SQLSTATE, « database error » ou « syntax error » avant lui) : la valeur a placé la
+			// coupe du message (saut de ligne et « Stack trace: », ligne du journal finie par « in x:1 »)
+			// avant la fermeture « ' at line N ». Tout part jusqu'à la fin du texte. Ancré, premier
+			// repère gardé (groupe atomique) : une seule lecture du texte.
+			'/\A((?>.*?(?i:sql syntax|sqlstate\[|database error|syntax error)).*?\bnear\s++)\'.*+/su' => '$1' . self::MASK_SQL,
 			// Une valeur qui contient « ' at line N » arrête le motif précédent avant la vraie fin du
 			// fragment : chaque couche forgée (« at line N », puis une suite fermée par un guillemet suivi
 			// d'un autre « at line N ») part avec lui, avant que les motifs de requête n'en mangent la

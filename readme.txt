@@ -121,7 +121,11 @@ Backups are prepared in wp-content/g2rd-backups, inside a folder whose name is d
   also choose where the message is cut, with a line break before "Stack trace:" or before a new
   log line) and all of it is removed, a "made by" written by the value included. A "made by"
   followed by a quote and "at line N" is written by a value, not by WordPress: the query is removed
-  past it.
+  past it. The line number is only kept when it has four plain digits at most: a value could write
+  "at line 10612345678" to pass a phone number off as the line number, or use digits of another
+  script. When a value places that cut before the closing `' at line N`, the piece is left open: in
+  an SQL error message ("SQL syntax", "SQLSTATE", "database error" or "syntax error" before it),
+  everything after "near '" is now removed up to the end of the message.
 
 = 1.18.0-rc.1 =
 

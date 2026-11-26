@@ -552,6 +552,8 @@ final class RedactorTest extends PHPUnitTestCase {
 		yield 'colonne en deux parties entre accents graves' => [ 'Champ `wp_posts`.`post_title` vide' ];
 		yield 'vue d\'un gabarit' => [ "View 'admin.settings' not found" ];
 		yield 'near sans numéro de ligne' => [ "Unexpected character near 'é' in template" ];
+		// Un « near ' » resté ouvert n'est masqué que dans un message d'erreur SQL.
+		yield 'near ouvert hors message SQL' => [ "Unexpected character near 'é" ];
 		yield 'version à trois nombres' => [ "Requires version '6.4.0' of WordPress" ];
 		// La règle de la valeur incorrecte ne vise que « Incorrect <type> value: '…' ».
 		yield 'valeur incorrecte hors de MySQL' => [ "Incorrect value for field 'email' in form 'contact'" ];
@@ -574,6 +576,7 @@ final class RedactorTest extends PHPUnitTestCase {
 			str_repeat( 'FUNCTION `' . str_repeat( 'a', 99 ) . '`.', 40 ),
 			str_repeat( "near '", 650 ),
 			str_repeat( "near '" . str_repeat( 'a', 300 ) . "' ", 12 ),
+			str_repeat( 'syntax error near ', 220 ),
 			str_repeat( "column '" . str_repeat( 'a', 99 ) . '.', 40 ),
 			str_repeat( "'a.b.", 800 ),
 			str_repeat( '`a`.', 1000 ),
