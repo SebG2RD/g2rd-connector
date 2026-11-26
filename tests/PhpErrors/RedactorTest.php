@@ -202,6 +202,8 @@ final class RedactorTest extends PHPUnitTestCase {
 		yield 'masque répété sans made by' => [ str_repeat( '[sql] made b', 330 ) ];
 		yield 'near et masque répétés' => [ str_repeat( 'near [sql] at ', 280 ) ];
 		yield 'fragment de syntaxe répété' => [ str_repeat( 'near [sql] at line 1 ', 190 ) ];
+		// Chaque fragment est gardé (« made by » sans guillemet avant) : 18 lectures de 200 caractères.
+		yield 'fragment de syntaxe suivi de made by' => [ str_repeat( 'near [sql] at line 1 ' . str_repeat( 'fm', 95 ) . ' made by ', 18 ) ];
 	}
 
 	#[DataProvider( 'textes_hostiles_sous_la_borne' )]
@@ -362,6 +364,12 @@ final class RedactorTest extends PHPUnitTestCase {
 		yield 'fragment vide' => [
 			"You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '' at line 1",
 			'You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql] at line 1',
+		];
+		// Une valeur qui contient « ' at line 1 » arrête le fragment trop tôt : la suite, guillemetée,
+		// appartient encore au fragment et part avec lui.
+		yield 'fin de fragment forgée par une valeur' => [
+			"You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'Dupont', 'x' at line 1 c', '0612345678')' at line 1 for query INSERT INTO wp_contacts (nom, message, tel) VALUES ('O'Dupont', 'x' at line 1 c', '0612345678')",
+			'You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near [sql]',
 		];
 	}
 
