@@ -287,6 +287,27 @@ final class NormalizerTest extends TestCase {
 		self::assertSame( $error . '[sql]', $occurrence['message'] );
 	}
 
+	/**
+	 * La même coupe écrite par une valeur que MySQL recopie (en double) avant sa fermeture : tout ce
+	 * qui suit l'apostrophe qui l'ouvre part, « for key » compris.
+	 */
+	public function test_une_pile_d_appels_forgee_dans_une_valeur_en_double_ne_laisse_rien_lisible(): void {
+		$file  = WP_CONTENT_DIR . '/plugins/exemple/x.php';
+		$error = 'Uncaught mysqli_sql_exception: Duplicate entry ';
+
+		$occurrence = Normalizer::occurrence_from_error(
+			[
+				'type'    => E_ERROR,
+				'message' => $error . "'O'Dupont 0612345678\nStack trace: x' for key 'email' in {$file}:3\nStack trace:\n#0 {main}\n  thrown in {$file} on line 3",
+				'file'    => $file,
+				'line'    => 3,
+			]
+		);
+
+		self::assertNotNull( $occurrence );
+		self::assertSame( $error . '[sql]', $occurrence['message'] );
+	}
+
 	public function test_une_erreur_sans_gravite_n_est_pas_une_occurrence(): void {
 		self::assertNull(
 			Normalizer::occurrence_from_error(

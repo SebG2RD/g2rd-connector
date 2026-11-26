@@ -260,6 +260,22 @@ final class LogTailTest extends TestCase {
 		self::assertSame( $error . '[sql]', $groups[0]['message'] );
 	}
 
+	/**
+	 * La même fin de ligne écrite par une valeur incorrecte que MySQL recopie, avant sa fermeture :
+	 * tout ce qui suit l'apostrophe qui l'ouvre part, « for column » compris.
+	 */
+	public function test_une_ligne_du_journal_forgee_dans_une_valeur_incorrecte_ne_laisse_rien_lisible(): void {
+		$date  = '[' . gmdate( 'd-M-Y H:i:s', $this->now - 60 ) . ' UTC]';
+		$error = 'Uncaught PDOException: SQLSTATE[HY000]: General error: 1366 Incorrect integer value: ';
+		$this->write( $date . ' PHP Fatal error:  ' . $error . "'O'Dupont 0612345678 in x:1\nx' for column 'tel' at row 1 in /x/y.php:3\nStack trace:\n#0 {main}\n  thrown in /x/y.php on line 3\n" );
+
+		LogTail::run( $this->now, $this->probe() );
+
+		$groups = array_values( Buffer::read( $this->now )['groups'] );
+		self::assertCount( 1, $groups );
+		self::assertSame( $error . '[sql]', $groups[0]['message'] );
+	}
+
 	public function test_le_rappel_ne_prend_aucun_argument(): void {
 		self::assertSame( 0, ( new \ReflectionMethod( LogTail::class, 'run_now' ) )->getNumberOfParameters() );
 	}

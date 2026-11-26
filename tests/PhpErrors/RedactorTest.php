@@ -108,8 +108,8 @@ final class RedactorTest extends PHPUnitTestCase {
 	/**
 	 * Requête de wpdb::print_error() (« … for query %s made by %s ») dont une valeur porte un « ; »,
 	 * une apostrophe échappée par mysqli_real_escape_string (« \' »), un guillemet échappé, une barre
-	 * finale (NO_BACKSLASH_ESCAPES), ou dépasse 1 000 caractères : masquée entière, jusqu'au
-	 * « made by ». Mêmes cas que PhpErrorTextTest du manager (seconde barrière), plus la longueur.
+	 * finale (NO_BACKSLASH_ESCAPES), ou dépasse 1 000 caractères : masquée entière, « made by »
+	 * compris. Mêmes cas que PhpErrorTextTest du manager (seconde barrière), plus la longueur.
 	 *
 	 * @return iterable<string, array{string}>
 	 */
@@ -143,13 +143,19 @@ final class RedactorTest extends PHPUnitTestCase {
 	}
 
 	/**
-	 * Requête arrêtée à un « ; » hors chaîne : ce qui suit appartient encore à la requête jusqu'au
-	 * « made by » ; la pile d'appels de WordPress, après lui, reste lisible.
+	 * Après « for query », tout part jusqu'à la fin, « made by » et la pile d'appels de WordPress
+	 * compris : une valeur peut écrire son propre « made by ». Requête sans guillemet (règle « for
+	 * query » seule) ou avec (première apostrophe d'un message d'erreur SQL).
 	 */
-	public function test_apres_for_query_la_requete_va_jusqu_au_made_by(): void {
-		$out = Redactor::redact( 'WordPress database error Duplicate column for query INSERT INTO wp_x VALUES (\'a;b\'); Jean Dupont made by do_action(\'init\')', [], Redactor::MAX_CHARS, [] );
-
-		self::assertSame( 'WordPress database error Duplicate column for query [sql] made by do_action(\'init\')', $out );
+	public function test_apres_for_query_la_requete_et_le_made_by_partent(): void {
+		self::assertSame(
+			'WordPress database error Duplicate column for query [sql]',
+			Redactor::redact( 'WordPress database error Duplicate column for query INSERT INTO wp_x VALUES (\'a;b\'); Jean Dupont made by do_action(\'init\')', [], Redactor::MAX_CHARS, [] )
+		);
+		self::assertSame(
+			'WordPress database error Lock wait timeout exceeded; try restarting transaction for query [sql]',
+			Redactor::redact( 'WordPress database error Lock wait timeout exceeded; try restarting transaction for query CALL wp_x(0612345678) made by do_action(\'init\')', [], Redactor::MAX_CHARS, [] )
+		);
 	}
 
 	/**
@@ -169,7 +175,7 @@ final class RedactorTest extends PHPUnitTestCase {
 		yield 'apostrophe échappée puis « ; », en minuscules' => [ $error . 'update wp_options set option_value = \'Rue de l\\\'Eglise; Jean Dupont, tel 0612345678\' where option_name = \'contact\'' ];
 		yield 'guillemet échappé puis « ; »' => [ $error . 'INSERT INTO wp_postmeta (post_id, meta_key, meta_value) VALUES (7, "note", "Il a dit \\"oui; rappelez Jean Dupont au 0612345678\\"")' ];
 		yield 'valeur finie par une barre, sans échappement par barre' => [ $error . 'INSERT INTO wp_postmeta (meta_key, meta_value) VALUES (\'C:\\\', \'Jean Dupont; 0612345678\')' ];
-		// Seul « near [sql] at line N » (erreur de syntaxe, 1064) garde sa suite : ici, pas de « at line ».
+		// Repère d'erreur SQL (« Syntax error ») : tout part dès la première apostrophe, la requête suit.
 		yield 'requête après « near », valeur finie par une barre' => [ 'Uncaught Exception: Syntax error near INSERT INTO wp_postmeta (meta_key, meta_value) VALUES (\'C:\\\', \'Jean Dupont; 0612345678\')', 'Uncaught Exception: Syntax error near [sql]' ];
 	}
 
@@ -213,6 +219,10 @@ final class RedactorTest extends PHPUnitTestCase {
 		// de suite, puis 12 séries de 37 « made by » refusés chacun à la lecture de la série.
 		yield 'made by forgés répétés' => [ str_repeat( "for query x made by y' at line 1 ", 120 ) ];
 		yield 'séries de made by forgés' => [ 'for query x' . str_repeat( str_repeat( ' made by', 37 ) . "' at line 1", 12 ) ];
+		// Repère « near '…' at line N » : 1 000 caractères lus au plus après chaque « near ' ».
+		yield 'near ouvert répété' => [ str_repeat( "near 'x ", 450 ) ];
+		// Premier repère gardé, puis aucune apostrophe hors d'un mot : une seule lecture.
+		yield 'repère SQL puis apostrophes dans les mots' => [ 'syntax error ' . str_repeat( "d'x ", 990 ) ];
 	}
 
 	#[DataProvider( 'textes_hostiles_sous_la_borne' )]
@@ -319,7 +329,8 @@ final class RedactorTest extends PHPUnitTestCase {
 		];
 		yield 'colonne inconnue en trois parties (1054)' => [ "Unknown column 'u123456789_wp.wp_posts.foo' in 'field list'", "Unknown column '[secret].wp_posts.foo' in 'field list'" ];
 		// Nom en trois parties entre accents graves (MariaDB : 1366, 1265, 1690).
-		yield 'valeur incorrecte sous MariaDB (1366)' => [ "Incorrect integer value: '' for column `u123456789_wp`.`wp_wc_order_stats`.`num_items_sold` at row 1", "Incorrect integer value: '' for column `[secret]`.`wp_wc_order_stats`.`num_items_sold` at row 1" ];
+		// Repère d'erreur SQL (valeur incorrecte) : tout part dès la première apostrophe.
+		yield 'valeur incorrecte sous MariaDB (1366)' => [ "Incorrect integer value: '' for column `u123456789_wp`.`wp_wc_order_stats`.`num_items_sold` at row 1", 'Incorrect integer value: [sql]' ];
 		yield 'valeur hors limites (1690)' => [ "BIGINT UNSIGNED value is out of range in '(`u123456789_wp`.`wp_wc_product_meta_lookup`.`stock_quantity` - 1)'", "BIGINT UNSIGNED value is out of range in '(`[secret]`.`wp_wc_product_meta_lookup`.`stock_quantity` - 1)'" ];
 		// Clés étrangères (1451, 1452) et contrainte de MariaDB (4025).
 		yield 'clé étrangère, ligne enfant (1452)' => [
@@ -336,9 +347,10 @@ final class RedactorTest extends PHPUnitTestCase {
 			"View 'u123456789_wp.wp_vue_commandes' references invalid table(s) or column(s) or function(s) or definer/invoker of view lack rights to use them",
 			"View '[secret].wp_vue_commandes' references invalid table(s) or column(s) or function(s) or definer/invoker of view lack rights to use them",
 		];
+		// Repère d'erreur SQL (SQLSTATE) : tout part dès le premier accent grave hors d'un mot.
 		yield 'définisseur entre accents graves' => [
 			'SQLSTATE[42000]: Access denied; you need (at least one of) the SUPER privilege(s) for this operation: CREATE DEFINER=`u123456789_wp`@`localhost` TRIGGER `wp_x_ai` AFTER INSERT ON `wp_x` FOR EACH ROW BEGIN END',
-			'SQLSTATE[42000]: Access denied; you need (at least one of) the SUPER privilege(s) for this operation: CREATE DEFINER=[secret] TRIGGER `wp_x_ai` AFTER INSERT ON `wp_x` FOR EACH ROW BEGIN END',
+			'SQLSTATE[42000]: Access denied; you need (at least one of) the SUPER privilege(s) for this operation: CREATE DEFINER=[sql]',
 		];
 		// Après « for query », la requête entière part, définisseur compris.
 		yield 'définisseur entre accents graves après « for query »' => [
@@ -357,10 +369,13 @@ final class RedactorTest extends PHPUnitTestCase {
 
 	/**
 	 * Erreur de syntaxe SQL (1064) : le fragment « near '…' at line N » recopie un morceau de la
-	 * requête avec ses valeurs (souvent une valeur collée sans préparation). Seul « near [sql] at
-	 * line N » à la fin du texte garde sa suite : une valeur peut écrire sa propre fermeture, puis
-	 * « for query » et « made by », et couper le message avant les vrais, ce que wpdb::print_error()
-	 * écrit après « at line N » part donc aussi.
+	 * requête avec ses valeurs (souvent une valeur collée sans préparation). Dans un message d'erreur
+	 * SQL, tout part dès la première apostrophe (ou guillemet, ou accent grave) hors d'un mot qui
+	 * suit le premier repère : une valeur choisit ses guillemets, sa propre fermeture « ' at line N »,
+	 * « for query » et « made by », et l'endroit où le message est coupé (saut de ligne et « Stack
+	 * trace: », ligne du journal finie par « in x:1 ») ; rien de ce qu'elle écrit ne reste. « at line
+	 * N », « for query » et « made by » partent avec elle. Formes MySQL, MariaDB, wpdb, PDO, mysqli,
+	 * message enveloppé (apostrophe avant le repère), sortie d'un connecteur plus ancien.
 	 *
 	 * @return iterable<string, array{string, string}>
 	 */
@@ -371,11 +386,11 @@ final class RedactorTest extends PHPUnitTestCase {
 		];
 		yield 'PDO, fragment seul' => [
 			"SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'Jean Dupont' WHERE ID = 5' at line 3",
-			'SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql] at line 3',
+			'SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql]',
 		];
 		yield 'fragment vide' => [
 			"You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '' at line 1",
-			'You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql] at line 1',
+			'You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql]',
 		];
 		// Une valeur qui contient « ' at line 1 » arrête le fragment trop tôt : chaque couche forgée,
 		// jusqu'au guillemet qui précède la vraie fin « ' at line N », part avec le fragment, même si
@@ -472,8 +487,8 @@ final class RedactorTest extends PHPUnitTestCase {
 			'You have an error in your SQL syntax near [sql] at line 1 for query [sql] made by Jean Dupont 0612345678',
 			'You have an error in your SQL syntax near [sql]',
 		];
-		// Le numéro de ligne gardé a quatre chiffres ASCII au plus : un numéro plus long (un téléphone
-		// écrit par la valeur), ou en chiffres d'une autre écriture, n'est pas celui de MySQL.
+		// Le numéro de ligne part avec le fragment, vrai ou forgé par la valeur (un téléphone, des
+		// chiffres d'une autre écriture).
 		yield 'numéro de ligne forgé, wpdb' => [
 			"WordPress database error You have an error in your SQL syntax near 'a' at line 10612345678 for query b', 'x')' at line 1 for query INSERT INTO wp_contacts (nom, tel) VALUES ('a' at line 10612345678 for query b', 'x') made by do_action('wp_ajax_contact')",
 			'WordPress database error You have an error in your SQL syntax near [sql]',
@@ -492,7 +507,7 @@ final class RedactorTest extends PHPUnitTestCase {
 		];
 		yield 'numéro de ligne à quatre chiffres' => [
 			"You have an error in your SQL syntax near 'Dupont' at line 9999",
-			'You have an error in your SQL syntax near [sql] at line 9999',
+			'You have an error in your SQL syntax near [sql]',
 		];
 		// Une valeur qui écrit la coupe du message (saut de ligne et « Stack trace: », ligne du journal
 		// finie par « in x:1 ») avant la fermeture « ' at line N » laisse un « near ' » ouvert : tout
@@ -505,6 +520,28 @@ final class RedactorTest extends PHPUnitTestCase {
 			"SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'Jean Dupont 0612345678",
 			'SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql]',
 		];
+		yield 'fragment coupé avant sa fermeture, forme mysqli' => [
+			"Uncaught mysqli_sql_exception: You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'Jean Dupont 0612345678",
+			'Uncaught mysqli_sql_exception: You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near [sql]',
+		];
+		// Message enveloppé par une extension : une apostrophe AVANT le repère (« Couldn't ») ne
+		// compte pas, le texte qui précède le repère reste lisible.
+		yield 'message enveloppé, apostrophe avant le repère, fragment coupé' => [
+			"Uncaught Exception: Couldn't insert row: SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'Jean Dupont 0612345678",
+			"Uncaught Exception: Couldn't insert row: SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near [sql]",
+		];
+		yield 'message enveloppé, apostrophe avant le repère, fragment fermé' => [
+			"Uncaught Exception: Couldn't insert row: You have an error in your SQL syntax near 'a' at line 1 Jean Dupont 0612345678",
+			"Uncaught Exception: Couldn't insert row: You have an error in your SQL syntax near [sql]",
+		];
+		// Erreur d'analyse de MySQL sans « SQL syntax » (« %s near '%-.80s' at line %d ») : le repère
+		// est alors « near '…' at line N » lui-même.
+		yield 'erreur d\'analyse sans SQL syntax, forme mysqli' => [
+			"Uncaught mysqli_sql_exception: memory exhausted near 'Jean Dupont 0612345678' at line 1",
+			'Uncaught mysqli_sql_exception: memory exhausted near [sql]',
+		];
+		// Sortie d'un connecteur plus ancien sans repère : ce qui suit un masque [sql] part.
+		yield 'sortie d\'un connecteur plus ancien sans repère' => [ 'Erreur near [sql] at line 1 0612345678 [sql]', 'Erreur near [sql]' ];
 	}
 
 	#[DataProvider( 'erreurs_de_syntaxe_sql' )]
@@ -516,36 +553,50 @@ final class RedactorTest extends PHPUnitTestCase {
 	}
 
 	/**
-	 * Valeur incorrecte (1366, 1292, 1411, 1525) : MySQL et MariaDB recopient la valeur refusée,
-	 * souvent saisie par un visiteur (téléphone, date de naissance, nom). Elle est masquée comme
-	 * la valeur en double ; le type, la colonne et la fonction restent lisibles.
+	 * Valeur recopiée par MySQL et MariaDB (en double, 1062 ; incorrecte, 1366, 1292, 1411, 1525),
+	 * souvent saisie par un visiteur (téléphone, date de naissance, nom). Le message garde son
+	 * texte jusqu'à l'apostrophe qui ouvre la valeur ; tout ce qui suit part, la colonne, la clé, la
+	 * fonction et « at row N » compris : une valeur peut écrire sa propre fermeture, « for key »,
+	 * « near » ou un repère, puis couper le message avant sa fermeture. Une valeur vide part aussi :
+	 * la garder lisible laisserait une valeur écrire « '' » puis son texte. Sortie d'un connecteur
+	 * plus ancien (« '[secret]'Dupont ») comprise.
 	 *
 	 * @return iterable<string, array{string, string}>
 	 */
 	public static function valeurs_recopiees_par_mysql(): iterable {
-		yield 'valeur incorrecte sous MySQL (1366)' => [ "Incorrect integer value: '06 12 34 56 78' for column 'tel' at row 1", "Incorrect integer value: '[secret]' for column 'tel' at row 1" ];
+		yield 'valeur incorrecte sous MySQL (1366)' => [ "Incorrect integer value: '06 12 34 56 78' for column 'tel' at row 1", 'Incorrect integer value: [sql]' ];
 		yield 'valeur incorrecte sous MariaDB (1366), requête comprise' => [
 			"Incorrect integer value: '06 12 34 56 78' for column `u123456789_wp`.`wp_contacts`.`tel` at row 1 for query INSERT INTO wp_contacts (nom, tel) VALUES ('Dupont', '06 12 34 56 78')",
-			"Incorrect integer value: '[secret]' for column `[secret]`.`wp_contacts`.`tel` at row 1 for query [sql]",
+			'Incorrect integer value: [sql]',
 		];
-		yield 'valeur avec une apostrophe (1366)' => [ "Incorrect integer value: 'O'Brien' for column 'tel' at row 1", "Incorrect integer value: '[secret]' for column 'tel' at row 1" ];
-		yield 'valeur tronquée (1292)' => [ "Truncated incorrect DOUBLE value: 'Jean Dupont'", "Truncated incorrect DOUBLE value: '[secret]'" ];
+		yield 'valeur avec une apostrophe (1366)' => [ "Incorrect integer value: 'O'Brien' for column 'tel' at row 1", 'Incorrect integer value: [sql]' ];
+		yield 'valeur tronquée (1292)' => [ "Truncated incorrect DOUBLE value: 'Jean Dupont'", 'Truncated incorrect DOUBLE value: [sql]' ];
 		yield 'valeur tronquée avec une apostrophe, requête de WordPress (1292)' => [
 			"Truncated incorrect DOUBLE value: 'l'école Jean Moulin' for query SELECT * FROM wp_g2rd_inscriptions WHERE classe = 'l'école Jean Moulin'",
-			"Truncated incorrect DOUBLE value: '[secret]' for query [sql]",
+			'Truncated incorrect DOUBLE value: [sql]',
 		];
-		yield 'valeur tronquée d\'un type à taille (1292)' => [ "Truncated incorrect CHAR(10) value: 'Jean Dupont de la Fontaine'", "Truncated incorrect CHAR(10) value: '[secret]'" ];
-		yield 'date et heure incorrectes (1292)' => [ "Incorrect datetime value: '12/05/1980 10:00' for column 'date_naissance' at row 1", "Incorrect datetime value: '[secret]' for column 'date_naissance' at row 1" ];
-		yield 'date incorrecte (1292)' => [ "Incorrect date value: '12/05/1980' for column 'naissance' at row 1", "Incorrect date value: '[secret]' for column 'naissance' at row 1" ];
-		yield 'valeur refusée par une fonction (1411)' => [ "Incorrect datetime value: '12/05/1980' for function str_to_date", "Incorrect datetime value: '[secret]' for function str_to_date" ];
-		yield 'valeur incorrecte sans suite (1525)' => [ "Incorrect DATE value: '31/02/1980'", "Incorrect DATE value: '[secret]'" ];
-		yield 'octets d\'un texte (1366)' => [ "Incorrect string value: '\\xF0\\x9F\\x98\\x80 J...' for column 'comment_content' at row 1", "Incorrect string value: '[secret]' for column 'comment_content' at row 1" ];
-		yield 'exception PDO (1292)' => [ "SQLSTATE[22007]: Invalid datetime format: 1292 Truncated incorrect DOUBLE value: 'Jean Dupont'", "SQLSTATE[22007]: Invalid datetime format: 1292 Truncated incorrect DOUBLE value: '[secret]'" ];
-		// Une valeur qui écrit « near ' », même après un repère d'erreur SQL qu'elle écrit aussi, n'ouvre
-		// pas de fragment d'erreur de syntaxe : la suite connue (« for key », « for column ») reste.
-		yield 'valeur en double qui écrit near (wpdb)' => [ "WordPress database error Duplicate entry 'O'Dupont 0612345678 near 'x' for key 'email'", "WordPress database error Duplicate entry '[secret]' for key 'email'" ];
-		yield 'valeur incorrecte qui écrit near (PDO)' => [ "SQLSTATE[HY000]: General error: 1366 Incorrect integer value: 'O'Dupont 0612345678 near 'x' for column 'tel' at row 1", "SQLSTATE[HY000]: General error: 1366 Incorrect integer value: '[secret]' for column 'tel' at row 1" ];
-		yield 'valeur en double qui écrit un repère SQL puis near (mysqli)' => [ "Uncaught mysqli_sql_exception: Duplicate entry 'O'Dupont 0612345678 sql syntax near 'x' for key 'email'", "Uncaught mysqli_sql_exception: Duplicate entry '[secret]' for key 'email'" ];
+		yield 'valeur tronquée d\'un type à taille (1292)' => [ "Truncated incorrect CHAR(10) value: 'Jean Dupont de la Fontaine'", 'Truncated incorrect CHAR(10) value: [sql]' ];
+		yield 'date et heure incorrectes (1292)' => [ "Incorrect datetime value: '12/05/1980 10:00' for column 'date_naissance' at row 1", 'Incorrect datetime value: [sql]' ];
+		yield 'date incorrecte (1292)' => [ "Incorrect date value: '12/05/1980' for column 'naissance' at row 1", 'Incorrect date value: [sql]' ];
+		yield 'valeur refusée par une fonction (1411)' => [ "Incorrect datetime value: '12/05/1980' for function str_to_date", 'Incorrect datetime value: [sql]' ];
+		yield 'valeur incorrecte sans suite (1525)' => [ "Incorrect DATE value: '31/02/1980'", 'Incorrect DATE value: [sql]' ];
+		yield 'octets d\'un texte (1366)' => [ "Incorrect string value: '\xF0\x9F\x98\x80 J...' for column 'comment_content' at row 1", 'Incorrect string value: [sql]' ];
+		yield 'exception PDO (1292)' => [ "SQLSTATE[22007]: Invalid datetime format: 1292 Truncated incorrect DOUBLE value: 'Jean Dupont'", 'SQLSTATE[22007]: Invalid datetime format: 1292 Truncated incorrect DOUBLE value: [sql]' ];
+		yield 'valeur incorrecte vide' => [ "Incorrect integer value: '' for column 'num_items_sold' at row 1", 'Incorrect integer value: [sql]' ];
+		yield 'valeur tronquée vide' => [ "Truncated incorrect DOUBLE value: ''", 'Truncated incorrect DOUBLE value: [sql]' ];
+		yield 'valeur trop longue (1406)' => [ "WordPress database error Data too long for column 'meta_value' at row 1", 'WordPress database error Data too long for column [sql]' ];
+		yield 'valeur en double qui écrit near (wpdb)' => [ "WordPress database error Duplicate entry 'O'Dupont 0612345678 near 'x' for key 'email'", 'WordPress database error Duplicate entry [sql]' ];
+		yield 'valeur incorrecte qui écrit near (PDO)' => [ "SQLSTATE[HY000]: General error: 1366 Incorrect integer value: 'O'Dupont 0612345678 near 'x' for column 'tel' at row 1", 'SQLSTATE[HY000]: General error: 1366 Incorrect integer value: [sql]' ];
+		yield 'valeur en double qui écrit un repère SQL puis near (mysqli)' => [ "Uncaught mysqli_sql_exception: Duplicate entry 'O'Dupont 0612345678 sql syntax near 'x' for key 'email'", 'Uncaught mysqli_sql_exception: Duplicate entry [sql]' ];
+		// La valeur coupe le message avant sa fermeture (saut de ligne et « Stack trace: », ligne du journal).
+		yield 'valeur en double coupée avant sa fermeture (wpdb)' => [ "WordPress database error Duplicate entry 'O'Dupont 0612345678", 'WordPress database error Duplicate entry [sql]' ];
+		yield 'valeur en double coupée avant sa fermeture (mysqli)' => [ "Uncaught mysqli_sql_exception: Duplicate entry 'O'Dupont 0612345678", 'Uncaught mysqli_sql_exception: Duplicate entry [sql]' ];
+		yield 'valeur incorrecte coupée avant sa fermeture' => [ "Incorrect integer value: 'O'Dupont 0612345678", 'Incorrect integer value: [sql]' ];
+		yield 'valeur incorrecte coupée avant sa fermeture (PDO)' => [ "SQLSTATE[HY000]: General error: 1366 Incorrect integer value: 'O'Dupont 0612345678", 'SQLSTATE[HY000]: General error: 1366 Incorrect integer value: [sql]' ];
+		yield 'message enveloppé avec apostrophes avant le repère, valeur en double coupée' => [ "Uncaught Exception: Couldn't save 'contact': WordPress database error Duplicate entry 'O'Dupont 0612345678", "Uncaught Exception: Couldn't save 'contact': WordPress database error Duplicate entry [sql]" ];
+		// Sortie d'un connecteur plus ancien : la valeur coupée avant sa fermeture suit « '[secret]' ».
+		yield 'valeur en double, sortie d\'un connecteur plus ancien' => [ "WordPress database error Duplicate entry '[secret]'Dupont 0612345678", 'WordPress database error Duplicate entry [sql]' ];
+		yield 'valeur incorrecte, sortie d\'un connecteur plus ancien' => [ "Incorrect integer value: '[secret]'Dupont 0612345678", 'Incorrect integer value: [sql]' ];
 	}
 
 	#[DataProvider( 'valeurs_recopiees_par_mysql' )]
@@ -580,10 +631,13 @@ final class RedactorTest extends PHPUnitTestCase {
 		yield 'valeur incorrecte hors de MySQL' => [ "Incorrect value for field 'email' in form 'contact'" ];
 		yield 'nombre de paramètres incorrect' => [ "Incorrect parameter count in the call to native function 'concat'" ];
 		yield 'valeur incorrecte sans apostrophe' => [ 'Incorrect integer value: 42 given' ];
-		// Une valeur vide ne dit rien du visiteur, et c'est elle qu'il faut voir (chaîne vide
-		// envoyée à une colonne de nombres) : la masquer laisserait croire à une valeur secrète.
-		yield 'valeur incorrecte vide' => [ "Incorrect integer value: '' for column 'num_items_sold' at row 1" ];
-		yield 'valeur tronquée vide' => [ "Truncated incorrect DOUBLE value: ''" ];
+		// Sans repère d'erreur SQL, les apostrophes d'un message ordinaire ne comptent pas.
+		yield 'clé de tableau inconnue' => [ "Undefined index: 'foo' in wp-content/plugins/x/x.php:3" ];
+		yield 'clé de tableau inconnue entre guillemets' => [ 'Warning: Undefined array key "foo" in wp-content/plugins/x/x.php on line 3' ];
+		// Une apostrophe dans un mot (« can't », « d'un ») ne compte pas, même après un repère.
+		yield 'commandes désynchronisées' => [ "Commands out of sync; you can't run this command now" ];
+		yield 'commandes désynchronisées (wpdb)' => [ "WordPress database error Commands out of sync; you can't run this command now" ];
+		yield 'apostrophes dans les mots après un repère' => [ "SQLSTATE[HY000]: General error: 2006 MySQL server has gone away, can't reconnect d'abord" ];
 	}
 
 	public function test_un_texte_hostile_visant_les_regles_mysql_ne_bloque_pas(): void {

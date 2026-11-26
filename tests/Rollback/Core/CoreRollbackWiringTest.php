@@ -95,7 +95,7 @@ final class CoreRollbackWiringTest extends CoreRollbackTestCase {
 	public static function erreurs_du_coeur(): iterable {
 		yield 'doublon, chemin du serveur' => [
 			new \WP_Error( 'copy_failed', "Duplicate entry '0612345678' for key 'tel' in /home/u123456789/domains/exemple.fr/public_html/wp-content/upgrade/x.php " . str_repeat( 'détail ', 2000 ) ),
-			'Duplicate entry \'[secret]\' for key \'tel\' in wp-content/upgrade/x.php détail',
+			'Duplicate entry [sql]',
 			[ '0612345678', '/home/', 'u123456789' ],
 		];
 		yield 'sans message' => [ new \WP_Error( 'download_failed', '' ), 'download_failed', [ '[unreadable]' ] ];
